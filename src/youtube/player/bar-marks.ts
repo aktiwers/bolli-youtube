@@ -48,7 +48,8 @@ export class BarMarks {
     /** The name shown after the time at t: the SponsorBlock segment's there, else the chapter's ('' none) */
     nameAt(t: number): string {
         var at = segmentAt(this.segments, t, {});
-        return at >= 0 ? segmentName(this.segments[at]) : chapterAt(this.chapters, t);
+        var chapter = chapterIndex(this.chapters, t);
+        return at >= 0 ? segmentName(this.segments[at]) : chapter >= 0 ? this.chapters[chapter].title : '';
     }
 
     /** Adds a mark at start (s) in a video of duration */
@@ -59,13 +60,13 @@ export class BarMarks {
     }
 }
 
-/** The name of the chapter playing at t ('' none) */
-function chapterAt(chapters: Chapter[], t: number): string {
-    var name = '';
+/** The chapter playing at t: the last one begun by then (-1: none yet) */
+export function chapterIndex(chapters: Chapter[], t: number): number {
+    var at = -1;
     for (var i = 0; i < chapters.length && chapters[i].start <= t; i++) {
-        name = chapters[i].title;
+        at = i;
     }
-    return name;
+    return at;
 }
 
 /** Where a chapter jump from t lands: the next chapter's start (way 1), or (way -1) the start of the chapter t is in,

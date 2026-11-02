@@ -2,14 +2,16 @@
 // (YouTube's picture of each with its start time over it, its name under it), the selected one ringed. The row
 // scrolls to keep the selected card in the middle; pictures load only for the cards in view and one on either side.
 
-import { h, toggleClass, translate } from '../../core/dom.js';
+import { h, setSrc, toggleClass, translate } from '../../core/dom.js';
 import { clock } from '../../core/time.js';
 import { Chapter } from '../api/watch.js';
+import { chapterIndex } from './bar-marks.js';
 
-/** A card's width and the gap after it (layout px, as app.css .by-chapter), and how many show at once: seven fill the
- * info bar's 1168 px exactly */
+/** A card's width, the gap after it and its picture's height (layout px), and how many cards show at once: seven fill
+ * the info bar's 1168 px exactly */
 var CARD = 154;
 var GAP = 15;
+var PICTURE = 87;
 var SHOWN = 7;
 
 export class ChapterRow {
@@ -22,11 +24,11 @@ export class ChapterRow {
     /** The selected chapter (-1: closed) */
     private at = -1;
 
-    /** In parent, before before */
-    constructor(parent: HTMLElement, before: Node | null) {
+    /** Before before (the info bar's time line) */
+    constructor(before: Node) {
         this.el = h('div', 'by-chapters');
         this.strip = this.el.appendChild(h('div', 'by-chapters-strip')) as HTMLElement;
-        parent.insertBefore(this.el, before);
+        before.parentNode!.insertBefore(this.el, before);
     }
 
     /** The video has chapters */
@@ -45,20 +47,21 @@ export class ChapterRow {
 
     /** The video's chapters (other ones close the row) */
     set(chapters: Chapter[]): void {
-        if (chapters !== this.chapters) {
-            this.close();
-            this.chapters = chapters;
-            this.cards = [];
-            this.pictures = [];
-            this.strip.innerHTML = '';
+        if (chapters === this.chapters || !chapters.length && !this.chapters.length) {
+            return;
         }
+        this.close();
+        this.chapters = chapters;
+        this.cards = [];
+        this.pictures = [];
+        this.strip.innerHTML = '';
     }
 
     /** Opens with the chapter playing at t (s) selected */
     openAt(t: number): void {
         this.make();
         toggleClass(this.el, 'by-chapters--open', true);
-        this.select(indexAt(this.chapters, t));
+        this.select(Math.max(0, chapterIndex(this.chapters, t)));
     }
 
     /** Selects the chapter before (way -1) or after (1), if any */
@@ -67,9 +70,7 @@ export class ChapterRow {
     }
 
     close(): void {
-        if (this.at >= 0) {
-            toggleClass(this.cards[this.at], 'by-chapter--selected', false);
-        }
+        this.mark(false);
         this.at = -1;
         toggleClass(this.el, 'by-chapters--open', false);
     }
@@ -78,27 +79,30 @@ export class ChapterRow {
     prefetch(t: number): void {
         if (this.has) {
             this.make();
-            this.load(first(indexAt(this.chapters, t), this.chapters.length));
+            this.load(first(Math.max(0, chapterIndex(this.chapters, t)), this.chapters.length));
         }
     }
 
     private select(at: number): void {
-        if (this.at >= 0) {
-            toggleClass(this.cards[this.at], 'by-chapter--selected', false);
-        }
+        this.mark(false);
         this.at = at;
-        toggleClass(this.cards[at], 'by-chapter--selected', true);
+        this.mark(true);
         var from = first(at, this.chapters.length);
         translate(this.strip, -from * (CARD + GAP), 0);
         this.load(from);
     }
 
+    /** The selected card's ring on or off */
+    private mark(on: boolean): void {
+        if (this.at >= 0) {
+            toggleClass(this.cards[this.at], 'by-chapter--selected', on);
+        }
+    }
+
     /** The pictures of the cards shown from card from on, and of one on either side */
     private load(from: number): void {
         for (var i = Math.max(0, from - 1); i < Math.min(this.chapters.length, from + SHOWN + 1); i++) {
-            if (this.chapters[i].picture && !this.pictures[i].getAttribute('src')) {
-                this.pictures[i].src = this.chapters[i].picture;
-            }
+            setSrc(this.pictures[i], this.chapters[i].picture);
         }
     }
 
@@ -109,7 +113,10 @@ export class ChapterRow {
         }
         for (var i = 0; i < this.chapters.length; i++) {
             var card = h('div', 'by-chapter');
-            var frame = card.appendChild(h('div', 'by-chapter-frame'));
+            card.style.width = CARD + 'px';
+            card.style.marginRight = GAP + 'px';
+            var frame = card.appendChild(h('div', 'by-chapter-frame')) as HTMLElement;
+            frame.style.height = PICTURE + 'px';
             this.pictures.push(frame.appendChild(h('img', 'by-chapter-img')) as HTMLImageElement);
             frame.appendChild(h('div', 'by-chapter-time', clock(this.chapters[i].start)));
             card.appendChild(h('div', 'by-chapter-title', this.chapters[i].title));
@@ -121,13 +128,4 @@ export class ChapterRow {
 /** The first card shown while card at is selected: at in the middle, else as near it as the row's ends allow */
 function first(at: number, count: number): number {
     return Math.max(0, Math.min(at - (SHOWN - 1) / 2, count - SHOWN));
-}
-
-/** The chapter playing at t (s): the last one begun by then (the first before it begins) */
-function indexAt(chapters: Chapter[], t: number): number {
-    var at = 0;
-    for (var i = 1; i < chapters.length && chapters[i].start <= t; i++) {
-        at = i;
-    }
-    return at;
 }

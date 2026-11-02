@@ -225,13 +225,12 @@
 .by-seek-preview-frame { position: relative; background-color: #000; background-repeat: no-repeat; }
 .by-seek-preview-time { text-align: center; }
 
-/* The chapter row on the info bar, over its time line (player/chapter-row.ts): seven 154 px cards filling the bar's
-   width, the strip sliding under it (the padding keeps the selected card's ring in view, the margin the cards in line
-   with the bar) */
+/* The chapter row on the info bar, over its time line (player/chapter-row.ts, which sizes the cards): the strip sliding
+   under it (the padding keeps the selected card's ring in view, the margin the cards in line with the bar) */
 .by-chapters { display: none; margin: 18px -6px 0; padding: 6px; overflow: hidden; }
 .by-chapters.by-chapters--open { display: block; }
 .by-chapters-strip { white-space: nowrap; -webkit-transition: -webkit-transform .2s ease; }
-.by-chapter { display: inline-block; width: 154px; margin-right: 15px; vertical-align: top; white-space: normal; }
-.by-chapter-frame { position: relative; height: 87px; }
-.by-chapter-img { display: block; width: 154px; height: 87px; object-fit: cover; }
+.by-chapter { display: inline-block; vertical-align: top; white-space: normal; }
+.by-chapter-frame { position: relative; }
+.by-chapter-img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .by-chapter-time { position: absolute; right: 5px; bottom: 5px; }

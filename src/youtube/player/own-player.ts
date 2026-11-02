@@ -23,7 +23,7 @@ import { Segment, segmentAt, segments, skippedText } from '../api/sponsorblock.j
 import { WatchReport } from '../api/stats.js';
 import { noAnswer } from '../api/youtube.js';
 import { AudioTrack, base, Caption, captionList, forgetStreams, Format, kindOf, MAX_LINES, NoStreams, pickFormat, playableStreams, sabrStreams, streams, Streams } from '../api/streams.js';
-import { Chapter, channelPicture, watchInfo, WatchInfo } from '../api/watch.js';
+import { channelPicture, watchInfo, WatchInfo } from '../api/watch.js';
 import { FillLoader } from '../ui/fill-loader.js';
 import { PanelLine } from '../ui/side-panel.js';
 import { CAPTION_STYLES, Captions, loadCaptions, translationsRefused } from './captions.js';
@@ -81,12 +81,12 @@ var FILLS: { [step: string]: number } = { start: 0.2, streams: 0.45, loadedmetad
  * and is full FULL_S before they are all in (fill pace: themes, .by-loader--round). */
 var WARM_S = 3;
 var FULL_S = 0.4;
-var KEYS_LINE = 'OK pause  ·  Left / Right jump 10 s (twice: chapter)  ·  Up the description  ·  Down related videos, subtitles and more';
-/** The same with chapters, and while the chapter row is open */
-var KEYS_LINE_CHAPTERS = 'OK pause  ·  Left / Right jump 10 s (twice: chapter)  ·  Up chapters and the description  ·  Down related videos, subtitles and more';
-var KEYS_LINE_ROW = 'Left / Right chapter  ·  OK play from there  ·  Up or Back close  ·  Down related videos, subtitles and more';
-/** No chapters (one list, so the chapter row keeps its cards while a video has none) */
-var NO_CHAPTERS: Chapter[] = [];
+function keysLine(chapters: boolean): string {
+    return 'OK pause  ·  Left / Right jump 10 s (twice: chapter)  ·  Up ' + (chapters ? 'chapters and ' : '') + 'the description  ·  ' +
+        'Down related videos, subtitles and more';
+}
+/** The keys line while the chapter row is open */
+var KEYS_LINE_ROW = 'Left / Right chapter  ·  OK play from there  ·  Up, Down or Back close';
 
 /** A video handed to the player while it plays (nothing reloaded): its streams, the format playing, the target format
  * (switched to in place), the audio and the engine */
@@ -281,8 +281,7 @@ export class OwnPlayer {
         var bar = this.el.querySelector('.osd-bar') as HTMLElement;
         this.osdMarks = new BarMarks(bar, bar.querySelector('.osd-marker'));
         this.osdSeek = new SeekPreview(bar);
-        var timeLine = bar.parentNode as HTMLElement;
-        this.chapterRow = new ChapterRow(timeLine.parentNode as HTMLElement, timeLine);
+        this.chapterRow = new ChapterRow(bar.parentNode as Node);
         this.paidChip = this.el.appendChild(paidChip()) as HTMLElement;
         toggleClass(this.paidChip, 'by-paid--start', true);
         this.stats = new StatsBox(this.el, this.video, function () {
@@ -632,8 +631,8 @@ export class OwnPlayer {
         return true;
     }
 
-    /** The chapter row's keys: Left/Right the chapter before or after, OK plays from the selected one; Up and Back close
-     * the row and the description, Down opens the watch page */
+    /** The chapter row's keys: Left/Right the chapter before or after, OK plays from the selected one; Up, Down and Back
+     * close the row and the description (the next Down opens the watch page) */
     private chapterKey(code: number): void {
         switch (code) {
             case KEY.LEFT:
@@ -642,23 +641,17 @@ export class OwnPlayer {
                 this.showChapter();
                 break;
             case KEY.OK:
+                // A jump there that plays (hiding the info bar closes the row)
                 var to = this.chapterRow.selected!.start;
-                this.closeChapters(false);
                 this.osd.hide();
                 this.target = to;
-                this.jumpNow();
-                if (this.held) {
-                    this.resume();
-                }
+                this.toggle();
                 break;
             case KEY.UP:
+            case KEY.DOWN:
             case KEY.BACK:
                 this.closeChapters(true);
                 this.osd.hide();
-                break;
-            case KEY.DOWN:
-                this.closeChapters(true);
-                this.openWatch();
                 break;
         }
     }
@@ -673,7 +666,7 @@ export class OwnPlayer {
             this.pause();
         }
         this.chapterRow.openAt(this.video.currentTime);
-        this.osd.setLine(KEYS_LINE_ROW);
+        this.showKeys();
         this.showChapter();
     }
 
@@ -691,12 +684,17 @@ export class OwnPlayer {
         }
         this.chapterRow.close();
         this.osd.setMarker(-1);
-        this.osd.setLine(KEYS_LINE_CHAPTERS);
+        this.showKeys();
         if (resume && this.chapterPaused) {
             this.resume();
         }
         this.chapterPaused = false;
         this.tick();
+    }
+
+    /** The keys line: the chapter row's while it is open, else the player's (Up names the chapters if there are some) */
+    private showKeys(): void {
+        this.osd.setLine(this.chapterRow.open ? KEYS_LINE_ROW : keysLine(this.chapterRow.has));
     }
 
     /** OK: pause or play. During a jump (pending, or its seek) it jumps now and plays rather than pausing. */
@@ -923,8 +921,8 @@ export class OwnPlayer {
         this.osd.setDescription('');
         this.osd.setQuality(0, 0);
         this.closeChapters(false);
-        this.chapterRow.set(NO_CHAPTERS);
-        this.osd.setLine(KEYS_LINE);
+        this.chapterRow.set([]);
+        this.showKeys();
         this.osd.setTime('', 0);
         this.osd.setMessage('');
         this.watch.setVideo(want.id, want.title, want.channel);
@@ -1341,9 +1339,12 @@ export class OwnPlayer {
     private showOsd(withText: boolean): void {
         this.tick();
         this.osd.show(withText);
-        // A jump's frames and the chapter row's pictures ready before they show
+        // A jump's frames and the chapter row's pictures ready before they show (the pictures not while a jump starts:
+        // its video comes first)
         this.osdSeek.prefetch(this.video.currentTime);
-        this.chapterRow.prefetch(this.video.currentTime);
+        if (this.target < 0 && !this.jumping) {
+            this.chapterRow.prefetch(this.video.currentTime);
+        }
         toggleClass(this.subtitleBox, 'vod-subtitles--up', true);
     }
 
@@ -1523,13 +1524,11 @@ export class OwnPlayer {
      * a kept pipeline reports the previous video's until the new one sets its own, which drew the marks out of place */
     private drawParts(): void {
         var d = this.length();
-        var chapters = this.watch.details ? this.watch.details.chapters : NO_CHAPTERS;
+        var chapters = this.watch.details ? this.watch.details.chapters : [];
         this.osdMarks.draw(this.segments, chapters, d);
         this.watch.setMarks(this.segments, d);
         this.chapterRow.set(chapters);
-        if (!this.chapterRow.open) {
-            this.osd.setLine(this.chapterRow.has ? KEYS_LINE_CHAPTERS : KEYS_LINE);
-        }
+        this.showKeys();
     }
 
     /** The video's length (s; 0 unknown): its format's, as a kept pipeline reports the previous video's until the new
@@ -1720,10 +1719,10 @@ export class OwnPlayer {
             }
         }
         if (this.osd.shown) {
-            // The time and the name where a pending jump lands, else the chapter row's selected chapter, else where it
+            // The time and the name of the chapter row's selected chapter, else where a pending jump lands, else where it
             // plays
-            var chosen = this.target >= 0 ? null : this.chapterRow.selected;
-            var at = this.target >= 0 ? this.target : chosen ? chosen.start : v.currentTime;
+            var chosen = this.chapterRow.selected;
+            var at = chosen ? chosen.start : this.target >= 0 ? this.target : v.currentTime;
             this.osd.setTime(dots([clock(at) + (length ? ' / ' + clock(length) : ''), chosen ? chosen.title : this.osdMarks.nameAt(at)]),
                 length ? v.currentTime / length : 0);
         }
