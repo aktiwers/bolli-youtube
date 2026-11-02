@@ -14,6 +14,8 @@ Bolli YouTube is not made by or connected to YouTube or Google. You sign in with
   <a href="https://github.com/aktiwers/bolli-youtube/releases/latest/download/bolli-youtube.ipk"><img src="assets/webos.png" alt="Download for LG webOS (IPK)" width="240"></a>
 </p>
 
+<p align="center">Google TV and Android TV: enter the code <b>3023199</b> in the Downloader app, or open <a href="https://aftv.news/3023199">aftv.news/3023199</a> in a browser.</p>
+
 ## What it does
 
 - Home, Subscriptions, Library, Gaming, Podcasts, Music, Movies and Sports, like YouTube's TV app
@@ -30,7 +32,8 @@ Bolli YouTube is not made by or connected to YouTube or Google. You sign in with
 
 1. Install **Downloader** (by AFTVnews) from Google Play.
 2. Let Downloader install apps: Settings › Apps › Security & restrictions › Unknown sources › Downloader.
-3. Open Downloader and enter `https://github.com/aktiwers/bolli-youtube/releases/latest/download/bolli-youtube.apk`
+3. Open Downloader and enter the code **3023199**. The short link [aftv.news/3023199](https://aftv.news/3023199) or the full address
+   `https://github.com/aktiwers/bolli-youtube/releases/latest/download/bolli-youtube.apk` does the same.
 4. Install, and open **Bolli YouTube** under Your apps.
 
 A new version installs the same way, over the old one. You stay signed in.
