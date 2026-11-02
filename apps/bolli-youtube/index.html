@@ -1,0 +1,20 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Bolli YouTube</title>
+<script>
+  // Layout is written in 1280x720 units; draw it at the real viewport (1920x1080)
+  document.documentElement.style.zoom = Math.max(1, window.innerWidth / 1280);
+</script>
+<link rel="stylesheet" href="themes/base.css">
+<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" id="theme-css" href="themes/youtube.css">
+</head>
+<body>
+<div id="app"></div>
+<!-- A youtube.com page that API requests are sent from (src/youtube/api/youtube.ts); it loads alongside the app's script -->
+<iframe id="youtube" class="by-hidden" sandbox="allow-scripts allow-same-origin" src="https://www.youtube.com/robots.txt" onload="this.setAttribute('data-loaded', '1')"></iframe>
+<script src="app.js"></script>
+</body>
+</html>

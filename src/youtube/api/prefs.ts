@@ -1,0 +1,79 @@
+// The app's settings, stored on the device (core/store).
+// skip: SponsorBlock categories to skip (api/sponsorblock.ts PARTS; empty: off).
+// quality: start height (0: Auto, HIGHEST: the most a video has).
+// preload: prepare the focused tile's video (player/preload.ts).
+// player: 'bolli' (own-player.ts, default) or 'youtube' (player/tv-app.ts).
+// history: report watched videos to YouTube (api/stats.ts).
+// captions: subtitle language turned on by default ('' none).
+// startSign: show the loading sign on start.
+
+import { load, save } from '../../core/store.js';
+
+export interface Prefs {
+    skip: string[];
+    theme: string;
+    startPage: string;
+    quality: number;
+    preload: boolean;
+    player: string;
+    history: boolean;
+    autoplay: boolean;
+    /** Seconds "Up next" counts down before autoplay (0: at once) */
+    autoplayWait: number;
+    stableVolume: boolean;
+    /** Preview of the focused tile: 'off', 'muted' or 'sound' */
+    previews: string;
+    captions: string;
+    /** Auto-generated subtitles: 'words' (word by word, as YouTube shows them) or 'lines' (two lines at a time) */
+    captionStyle: string;
+    /** Languages added under Settings › Subtitles › More languages (Danish and English are always listed) */
+    captionLanguages: string[];
+    startSign: boolean;
+    /** Fetch streams by SABR first (api/streams.ts playableStreams) */
+    sabr: boolean;
+    /** Tile thumbnail size: 'standard' (320 px wide), 'sharp' (480) or 'sharpest' (640) */
+    pictures: string;
+}
+
+/** The quality "Highest available": 8K's height, so a player picks the most the video and the device allow */
+export var HIGHEST = 4320;
+
+var KEY = 'youtube.prefs';
+var DEFAULTS: Prefs = { skip: ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'music_offtopic'], theme: 'youtube', startPage: 'home', quality: 0, preload: true, player: 'bolli', history: true, autoplay: true, autoplayWait: 10, stableVolume: false, previews: 'sound', captions: '', captionStyle: 'words', captionLanguages: [], startSign: true, sabr: false, pictures: 'sharpest' };
+
+/** Read once (they are read on every key) and updated by setPref. Only changed settings are stored, so a new
+ * default still applies to the rest. */
+var kept: Prefs | null = null;
+var stored: { [name: string]: unknown } = {};
+
+export function prefs(): Prefs {
+    if (kept) {
+        return kept;
+    }
+    stored = load<{ [name: string]: unknown }>(KEY) || {};
+    // Migrate the old on/off SponsorBlock setting
+    if (stored.sponsorBlock === false && !stored.skip) {
+        stored.skip = [];
+    }
+    delete stored.sponsorBlock;
+    var read: { [name: string]: unknown } = {};
+    for (var name in DEFAULTS) {
+        // The stored value, else the default (e.g. a setting added since)
+        var value = stored[name];
+        read[name] = value !== undefined && value !== null && value !== '' ? value : (DEFAULTS as unknown as { [name: string]: unknown })[name];
+    }
+    kept = read as unknown as Prefs;
+    return kept;
+}
+
+/** Read again from storage on the next prefs() (after a test restores the stored settings, so stale values are not
+ * written back by the next setPref) */
+export function reloadPrefs(): void {
+    kept = null;
+}
+
+export function setPref<K extends keyof Prefs>(name: K, value: Prefs[K]): void {
+    prefs()[name] = value;
+    stored[name] = value;
+    save(KEY, stored);
+}

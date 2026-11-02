@@ -1,0 +1,217 @@
+/* The app's structure, the same under every theme (src/youtube/ui/theme.ts);
+   themes/<id>.css draws the look over it and over the base themes/base.css. */
+
+/* The hidden youtube.com page that API requests are sent from (api/youtube.ts) */
+.by-hidden { position: absolute; left: -9999px; top: 0; width: 10px; height: 10px; border: 0; }
+
+/* YouTube's TV app (player/tv-app.ts): over everything while a video plays.
+   Its page is drawn at the TV's size (1920x1080), so it undoes the app's zoom. */
+.by-tv { position: fixed; left: 0; top: 0; width: 1920px; height: 1080px; border: 0; z-index: 50; background: #000; zoom: .6667; }
+
+/* The own player (player/own-player.ts): over everything while a video plays, its info bar (base.css .osd) over the video */
+.by-tv-wait { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; z-index: 45; background: #000; }
+.by-player { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; z-index: 40; background: #000; }
+.by-player video { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+/* The ended video's thumbnail while Up next's video loads hidden; cover crops the black bars of YouTube's 4:3
+   thumbnails */
+.by-player-poster { position: absolute; left: 0; top: 0; width: 100%; height: 100%; object-fit: cover; }
+
+/* Toasts (ui/toast.ts), over everything (YouTube's TV app too): they fade in and out */
+.by-toast { position: absolute; z-index: 60; white-space: nowrap; visibility: hidden; opacity: 0;
+            -webkit-transition: opacity .5s ease, visibility 0s linear .5s; }
+.by-toast--shown { visibility: visible; opacity: 1; -webkit-transition: opacity .4s ease-in-out; }
+.by-toast-icon, .by-toast-text { display: inline-block; vertical-align: middle; }
+
+/* The left rail (views/rail.ts): its items are placed by the theme's metrics; the clock is in it. Open, it pushes
+   the screens right (main.ts by-app--rail); Search has none (by-app--search: its back arrow instead) */
+.by-rail { position: absolute; left: 0; top: 0; width: 1280px; height: 0; z-index: 10; }
+.bd-stage { -webkit-transition: -webkit-transform .2s ease; }
+.by-rail-divider { position: absolute; }
+.by-app--search .by-rail-item, .by-app--search .by-rail-logo, .by-app--search .by-rail-divider { display: none; }
+/* A page over a section (views/videos.ts page: History, a playlist) has no rail either (main.ts by-app--page): its back
+   arrow at the left, its buttons at the top right */
+.by-app--page .by-rail-item, .by-app--page .by-rail-logo, .by-app--page .by-rail-divider { display: none; }
+.by-page-buttons { position: absolute; white-space: nowrap; }
+.by-page-button { display: inline-block; position: relative; }
+.by-page-button-icon { display: inline-block; vertical-align: middle; }
+.by-page-byline { position: absolute; white-space: nowrap; }
+.by-page-byline-icon { display: inline-block; vertical-align: middle; line-height: 0; }
+.by-page-back { position: absolute; line-height: 0; }
+.by-rail-shade { position: absolute; left: 0; top: 0; height: 720px; }
+.by-rail-logo { position: absolute; background: url(logo.webp) center / contain no-repeat; }
+.by-rail-item { position: absolute; overflow: hidden; }
+.by-rail-icon { position: absolute; }
+.by-rail-icon svg { display: block; }
+.by-rail-label { position: absolute; white-space: nowrap; }
+.by-rail-drop { position: absolute; }
+.by-clock { position: absolute; white-space: nowrap; }
+
+/* A screen's status line ("Loading …", nothing there), a page's name over its grid */
+.by-status { position: absolute; }
+.by-empty, .by-empty-tile, .by-empty-text { position: absolute; }
+.by-heading { position: absolute; left: 0; top: 0; }
+
+/* Settings (views/settings.ts), as YouTube's: the list on the left (it scrolls), a line, the focused setting on the
+   right (its column moves up when taller than the screen), YouTube's confirmation over everything (the rail too) */
+.by-settings { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; }
+.by-settings-title, .by-settings-line { position: absolute; }
+.by-settings-menu { position: absolute; bottom: 0; overflow: hidden; }
+.by-settings-list { position: relative; }
+.by-settings-panel { position: absolute; top: 0; right: 0; height: 720px; overflow: hidden; }
+.by-settings-body { position: relative; text-align: center; }
+/* The right side shows the parts of the focused setting's kind: a picture, the steps to link a phone and the TV code
+   beside YouTube's picture of a phone; empty texts take no room */
+.by-settings-picture, .by-settings-link, .by-settings-code, .by-settings-phone,
+.by-settings-summary:empty, .by-settings-note:empty { display: none; }
+.by-settings-body--picture .by-settings-picture, .by-question .by-settings-picture { display: block; }
+.by-settings-body--steps .by-settings-link, .by-settings-body--code .by-settings-link,
+.by-settings-body--code .by-settings-phone { display: inline-block; vertical-align: top; }
+.by-settings-body--code .by-settings-code { display: block; }
+.by-settings-link, .by-settings-button { text-align: left; }
+.by-settings-button { position: relative; }
+.by-question { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; z-index: 20; text-align: center; }
+
+/* "Who's watching?" (views/accounts.ts): its title, and the accounts in a row that moves along; a picture in each
+   circle (or its name's first letter), the handle only under the focused one */
+.by-who { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; overflow: hidden; }
+.by-who-title { position: absolute; left: 0; right: 0; text-align: center; }
+.by-who-row { position: absolute; white-space: nowrap; -webkit-transition: -webkit-transform .2s ease; }
+.by-who-item { display: inline-block; vertical-align: top; text-align: center; white-space: normal; }
+.by-who-picture { position: relative; overflow: hidden; }
+.by-who-img { display: block; width: 100%; height: 100%; }
+.by-who-plus { position: absolute; left: 50%; top: 50%; line-height: 0; }
+.by-who-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.by-who-handle { visibility: hidden; }
+.by-who-item--focused .by-who-handle { visibility: visible; }
+
+/* "Add your Google Account" (views/signin.ts): YouTube's background over the whole screen (the rail too), the left
+   column, the QR code's column on the right */
+.by-signin { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; overflow: hidden; z-index: 20; }
+.by-signin-bg { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; }
+.by-signin-left, .by-signin-right { position: absolute; }
+.by-signin-right { text-align: center; }
+.by-signin-wordmark, .by-signin-qr { display: block; }
+.by-signin-qr { margin: 0 auto; }
+
+/* YouTube's message in place of a screen's rows (views/videos.ts by-nudge): centred, its buttons in a line */
+.by-nudge { position: absolute; right: 0; text-align: center; }
+.by-nudge-button, .by-nudge-or { display: inline-block; }
+/* A confirmation's longer text (YouTube's, in paragraphs) */
+.by-question .by-settings-summary { white-space: pre-line; }
+
+/* The watch page (player/watch-page.ts) over its video: the theme places and draws its parts */
+.by-watch { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; overflow: hidden; }
+.by-watch-shade, .by-watch-dim, .by-watch-body { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; }
+.by-watch-top, .by-watch-controls, .by-watch-status { position: absolute; }
+.by-watch-times { position: relative; }
+.by-watch-time { float: left; }
+.by-watch-length { float: right; }
+.by-watch-bar { position: relative; clear: both; }
+/* The bar's fills are scaled (no layout as the video plays), the knob is its own */
+.by-watch-loaded, .by-watch-played { position: absolute; left: 0; top: 0; width: 100%; height: 100%; -webkit-transform-origin: 0 0; -webkit-transform: scaleX(0); }
+.by-watch-knob { position: absolute; display: none; }
+.by-watch--bar .by-watch-knob { display: block; }
+.by-watch-marker { position: absolute; }
+/* The subtitles go under the watch page (player/own-player.ts) */
+.by-player--watch .vod-subtitles { display: none; }
+.by-watch-buttons { position: relative; }
+.by-watch-left, .by-watch-right { position: absolute; top: 0; white-space: nowrap; }
+.by-watch-left { left: 0; }
+.by-watch-right { right: 0; }
+.by-watch-center { position: absolute; left: 0; right: 0; top: 0; text-align: center; white-space: nowrap; }
+.by-watch-button, .by-watch-group { position: relative; display: inline-block; vertical-align: top; box-sizing: border-box; }
+.by-watch-button svg { display: block; }
+.by-watch-avatar { overflow: hidden; }
+.by-watch-avatar-img { display: block; width: 100%; height: 100%; }
+.by-watch-related { position: absolute; left: 0; width: 1280px; }
+
+/* The panel on the right of the watch page and a channel's page (ui/side-panel.ts) */
+/* A column: the title as tall as its lines, the list in the rest */
+.by-panel { position: absolute; top: 0; right: 0; height: 720px; overflow: hidden; z-index: 30;
+    display: -webkit-flex; display: flex; -webkit-flex-direction: column; flex-direction: column; }
+.by-panel-title { -webkit-flex: none; flex: none; }
+.by-panel-view { position: relative; -webkit-flex: 1; flex: 1; overflow: hidden; }
+.by-line { position: relative; }
+.by-check { position: absolute; }
+
+/* SponsorBlock segments and chapters on a bar (player/bar-marks.ts): stripes and gaps over the bar's track */
+.by-bar-marks { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+.by-sb { position: absolute; top: 0; height: 100%; }
+.by-chapter-gap { position: absolute; top: 0; height: 100%; }
+.by-paid { position: relative; white-space: nowrap; }
+.by-paid--start { position: absolute; z-index: 3; }
+.by-paid-icon { display: inline-block; vertical-align: middle; line-height: 0; }
+
+/* "Up next" at a video's end (player/up-next.ts) and stats for nerds (player/stats-box.ts) */
+.by-upnext { position: absolute; }
+.by-upnext-img { display: block; }
+.by-stats { position: absolute; white-space: pre; }
+
+/* Settings › Subtitles' "More languages" (ui/language-picker.ts): over Settings, the typed text, the languages that
+   match left of the keyboard */
+.by-langs { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; z-index: 5; }
+.by-langs-title, .by-langs-field, .by-langs-list, .by-langs-keys { position: absolute; }
+.by-langs-item { position: relative; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.by-langs-none { position: absolute; left: 0; top: 0; }
+.by-langs .bd-keyboard { margin: 0; }
+
+/* A channel's page (views/channel.ts): its banner behind, its header, its rows under it */
+.by-channel { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; overflow: hidden; }
+.by-channel-banner { position: absolute; }
+.by-channel-shade, .by-channel-rows { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; }
+.by-channel-head { position: absolute; }
+.by-channel-avatar { display: block; }
+.by-channel-buttons { white-space: nowrap; }
+
+/* A row's pills (ui/pills.ts): a channel's buttons, "Up next"'s */
+.by-pill { display: inline-block; }
+
+/* A page's tabs beside its name (views/videos.ts) */
+.by-tab { display: inline-block; }
+
+/* The loading sign (ui/fill-loader.ts): in the middle of the screen, a dimmed picture and a bright copy filling it */
+.by-loader { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; z-index: 5; }
+.by-loader-pulse { position: absolute; left: 50%; top: 50%; }
+.by-loader-box { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: hidden; }
+.by-loader-inner { width: 100%; height: 100%; }
+.by-loader-image { display: block; }
+.by-loader.by-loader--snap .by-loader-box, .by-loader.by-loader--snap .by-loader-inner { -webkit-transition: none; }
+
+/* A tile's preview (player/preview.ts) in the player's own video (by-player--peek): the player clipped to the tile,
+   its video filling it (wider videos cropped), the rest of the player hidden and transparent, a ring over the
+   video's corners beside the player (themes: by-peek-ring) */
+.by-player--peek { background: transparent; overflow: hidden; }
+.by-player--peek > * { display: none; }
+.by-player--peek > video { display: block; }
+.by-peek-ring { position: absolute; display: none; z-index: 41; }
+.by-peek-ring.by-peek-ring--on { display: block; }
+
+/* Search's suggestions beside the keyboard (views/search.ts), Home's search bar over its first row (views/videos.ts) */
+.by-suggestions { position: absolute; }
+.by-suggestion { position: relative; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.by-suggestion-icon, .by-suggestion-picture { position: absolute; line-height: 0; }
+.by-search--rows .bd-keyboard, .by-search--rows .by-suggestions { visibility: hidden; }
+.by-search-bar, .by-search-mic { position: absolute; }
+.by-feed-top { position: absolute; left: 0; top: 0; width: 1280px; }
+.by-search-top { position: absolute; left: 0; top: 0; width: 1280px; }
+.bd-search-query { position: absolute; }
+.by-search-back { position: absolute; line-height: 0; }
+
+/* Subscriptions (views/subscriptions.ts): the channels and the pills over its rows (they slide away in the rows) */
+.by-subs { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; overflow: hidden; }
+.by-subs-rows { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; -webkit-transition: -webkit-transform .3s ease; }
+.by-subs-head { position: absolute; overflow: hidden; -webkit-transition: -webkit-transform .3s ease, opacity .3s ease; }
+.by-subs-strip { position: relative; white-space: nowrap; -webkit-transition: -webkit-transform .2s ease; }
+.by-subs-channel { position: relative; display: inline-block; vertical-align: top; }
+.by-subs-picture { display: block; }
+.by-subs-dot { position: absolute; }
+.by-subs-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.by-subs-pills { white-space: nowrap; }
+.by-subs-pill { display: inline-block; }
+
+/* Library (views/library.ts): its cards over its rows (they slide away in the rows) */
+.by-library { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; overflow: hidden; }
+.by-library-rows { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; -webkit-transition: -webkit-transform .3s ease; }
+.by-library-head { position: absolute; overflow: hidden; -webkit-transition: -webkit-transform .3s ease, opacity .3s ease; }
+.by-library-strip { position: relative; white-space: nowrap; -webkit-transition: -webkit-transform .2s ease; }
+.by-library-card { display: inline-block; position: relative; vertical-align: top; overflow: hidden; }

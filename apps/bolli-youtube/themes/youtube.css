@@ -1,0 +1,508 @@
+/* "YouTube": YouTube's dark TV look, as YouTube's TV app draws it
+   (measured at 1920x1080; here two thirds of that, the 1280x720 layout).
+   Layout sizes are the theme's metrics (src/youtube/ui/themes/youtube.ts). */
+/* YouTube's font, as its TV app uses it (Roboto 400, 500, 700; Apache 2.0: fonts/LICENSE-Roboto.txt): Latin,
+   extended Latin and Cyrillic subsets, each loaded when a text needs it (WOFF: the TV's browser does not support
+   WOFF2); Inter as the fallback */
+@font-face { font-family: 'Roboto'; font-weight: 400; src: url(../fonts/roboto-latin-400-normal.woff) format('woff'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: 'Roboto'; font-weight: 400; src: url(../fonts/roboto-latin-ext-400-normal.woff) format('woff'); unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+@font-face { font-family: 'Roboto'; font-weight: 400; src: url(../fonts/roboto-cyrillic-400-normal.woff) format('woff'); unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116; }
+@font-face { font-family: 'Roboto'; font-weight: 500; src: url(../fonts/roboto-latin-500-normal.woff) format('woff'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: 'Roboto'; font-weight: 500; src: url(../fonts/roboto-latin-ext-500-normal.woff) format('woff'); unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+@font-face { font-family: 'Roboto'; font-weight: 500; src: url(../fonts/roboto-cyrillic-500-normal.woff) format('woff'); unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116; }
+@font-face { font-family: 'Roboto'; font-weight: 700; src: url(../fonts/roboto-latin-700-normal.woff) format('woff'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: 'Roboto'; font-weight: 700; src: url(../fonts/roboto-latin-ext-700-normal.woff) format('woff'); unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+@font-face { font-family: 'Roboto'; font-weight: 700; src: url(../fonts/roboto-cyrillic-700-normal.woff) format('woff'); unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116; }
+body { font-family: 'Roboto', 'Inter', sans-serif; }
+
+html, body { background: #0f0f0f; }
+
+/* The rail, as YouTube's: the logo, the sections' icons (grey; the current one white), Settings at the foot; with
+   focus their names, a line under Library (the entries above move up for it), the screen pushed right */
+.by-rail-shade { width: 104px; -webkit-transition: width .2s ease; }
+.by-rail--open .by-rail-shade { width: 270px; background-color: #0f0f0f; }
+.by-app--rail .bd-stage { -webkit-transform: translateX(188px); }
+.by-rail-logo { left: 16px; top: 30px; width: 72px; height: 60px; border-radius: 10px; }
+.by-rail-logo--focused { box-shadow: 0 0 0 4px #f1f1f1; }
+.by-rail-item { left: 22px; width: 60px; height: 52px; border-radius: 12px; color: #b7b7b7;
+                -webkit-transition: width .2s ease, background-color .15s ease, color .15s ease, -webkit-transform .2s ease; }
+.by-rail-item--selected { color: #f1f1f1; }
+.by-rail--open .by-rail-item { width: 226px; color: #f1f1f1; }
+.by-rail--open .by-rail-item--top { -webkit-transform: translateY(-27px); }
+.by-rail-item--focused { background-color: #f1f1f1; color: #0f0f0f; }
+.by-rail--open .by-rail-item--focused { color: #0f0f0f; }
+.by-rail-icon { left: 18px; top: 14px; width: 24px; height: 24px; }
+.by-rail-label { left: 56px; top: 0; line-height: 52px; font-size: 18px; font-weight: 500; opacity: 0; -webkit-transition: opacity .15s ease; }
+.by-rail--open .by-rail-label { opacity: 1; }
+.by-rail-divider { left: 22px; width: 226px; height: 2px; background: #3f3f3f; opacity: 0; -webkit-transition: opacity .15s ease; }
+.by-rail--open .by-rail-divider { opacity: 1; }
+.by-rail-drop { left: 100px; top: 30px; }
+
+/* The clock: top right, in a dim pill */
+.by-clock { right: 32px; top: 16px; padding: 4px 8px; border-radius: 8px; background: rgba(0, 0, 0, .3); font-size: 19px; color: #fff; }
+
+/* Rows: the shelf's name, then the tiles: picture with rounded corners, the length on it,
+   the title (two lines at most), the channel and "views • age" under it; focus: a light ring. As YouTube's: only the
+   focused row's name and the focused tile's title are white, the others grey */
+/* Row names as YouTube's on every screen (30 px, medium, #b7b7b7, 42 px lines at 1920; Inter has no 500, so 600) */
+.bd-row-title { position: relative; top: 8px; padding-left: 104px; line-height: 28px; font-size: 20px; font-weight: 500; color: #b7b7b7; }
+/* Home's rows: names lower (metrics.lineRows) */
+.bd-page--big .bd-row-title { top: 18px; }
+.bd-row--active .bd-row-title { color: #f1f1f1; }
+/* A row's line under its name ("Based on your Subscriptions and History") and the round icon before it (a game's) */
+.bd-row-title.bd-row-title--sub { top: 0; line-height: 24px; font-size: 20px; }
+/* Home's big focused row: its heading 28 px over its tiles (YouTube's) */
+.bd-row--big .bd-row-title { top: 24px; }
+.bd-row-subtitle { margin-top: 4px; max-width: 780px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; line-height: 18px;
+                   font-weight: 500; color: #aaa; }
+.bd-row-icon { width: 32px; height: 32px; margin: -4px 10px 0 0; border-radius: 16px; vertical-align: middle; background: #272727; }
+/* A playlist's or a mix's tile: the edges of the stack over its picture (their colours YouTube's) */
+.bd-tile-stack { position: absolute; top: -5px; left: 10px; right: 10px; height: 5px; border-radius: 6px 6px 0 0; }
+.bd-tile-stack--1 { top: -10px; left: 20px; right: 20px; }
+.bd-tile-under:before { display: none; }
+.bd-tile-frame { background: #212121; border-radius: 12px; }
+/* Sharper pictures are 4:3 with the 16:9 picture in the middle: cropped to it. The background keeps the crop
+   while a picture fades in: the TV's browser draws a bare picture on its own layer (as during the fade) whole and
+   squeezed, then snaps it to the crop */
+/* Scaled without the smooth filter: with it the TV takes ~700 ms to draw a screen's pictures, ~250 ms without (640 px
+   pictures shrink a little; the difference shows only in fine text) */
+.bd-tile-img { object-fit: cover; background: #212121; image-rendering: -webkit-optimize-contrast; }
+.bd-tile--focused .bd-tile-frame, .bd-tile--focused .bd-tile-under { -webkit-transform: none; }
+.bd-tile--focused .bd-tile-frame { box-shadow: 0 0 0 6px #f1f1f1; }
+/* A tile's preview: the focus ring over the video's corners (the TV's video layer draws them square) */
+.by-peek-ring { border-radius: 12px; box-shadow: 0 0 0 6px #f1f1f1; }
+.bd-tile-title { margin-top: 16px; font-size: 24px; font-weight: 700; line-height: 32px; color: #ababab; opacity: 1;
+                 white-space: normal; text-overflow: clip; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; max-height: 64px; }
+.bd-tile--focused .bd-tile-title { -webkit-transform: none; color: #f3f3f3; }
+.bd-tile-line { font-size: 16px; line-height: 24px; color: #aaa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* YouTube's chips before the views ("4K", "New") */
+.bd-tile-chip { display: inline-block; margin-right: 6px; padding: 0 5px; border-radius: 4px; background: #303030; font-size: 14px;
+                line-height: 20px; color: #f1f1f1; }
+/* A paid film's offer ("Buy or rent"), in YouTube's green */
+.bd-tile-chip--offer { background: rgba(43, 166, 64, .2); color: #3ccf5a; }
+/* A channel's tile (in results): its picture round (the tile row makes it as wide as tall), the ring round it, its
+   name and lines centred, the lines smaller (as YouTube draws it) */
+.bd-tile--round .bd-tile-frame, .bd-tile--round .bd-tile-under, .bd-tile--round .bd-tile-img { border-radius: 999px; }
+.bd-tile--round .bd-tile-title, .bd-tile--round .bd-tile-line { text-align: center; }
+.bd-tile--round .bd-tile-line { font-size: 15px; }
+.bd-tile-label { left: auto; top: auto; right: 8px; bottom: 8px; padding: 0 4px; height: 22px; line-height: 22px; border-radius: 4px;
+                 background: rgba(6, 6, 6, .85); background-image: none; font-size: 16px; font-weight: 700; color: #f1f1f1; }
+/* YouTube's icons before the word on a tile's picture (as in its overlay): a live stream's broadcast icon on
+   YouTube's red, a playlist's lines, a mix's */
+.bd-tile-label--live, .bd-tile-label--playlist, .bd-tile-label--mix { padding-left: 24px; }
+.bd-tile-label--live { background: #e0002c; }
+.bd-tile-label--live:before, .bd-tile-label--playlist:before, .bd-tile-label--mix:before { content: ''; position: absolute; left: 5px; top: 3px;
+    width: 16px; height: 16px; background-repeat: no-repeat; background-position: center; background-size: 16px 16px; }
+.bd-tile-label--live:before { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='2.2' fill='white' stroke='none'/%3E%3Cpath d='M8.6 8.6a4.8 4.8 0 0 0 0 6.8M15.4 8.6a4.8 4.8 0 0 1 0 6.8M5.5 5.5a9.2 9.2 0 0 0 0 13M18.5 5.5a9.2 9.2 0 0 1 0 13'/%3E%3C/svg%3E"); }
+.bd-tile-label--playlist:before { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpath d='M3 5h15v2.2H3zM3 10.4h15v2.2H3zM3 15.8h9v2.2H3zM15 14.6v6.8l5.6-3.4z'/%3E%3C/svg%3E"); }
+.bd-tile-label--mix:before { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpath d='M4 5h2.6v14H4zM9.5 5v14l10.5-7z'/%3E%3C/svg%3E"); }
+.bd-tile-progress { left: 0; right: 0; bottom: 0; height: 4px; border-radius: 0; background: rgba(255, 255, 255, .3); }
+.bd-tile-progress-fill { height: 4px; background: #f00; }
+
+/* Movies (bd-row--wide): posters without words; the focused one wide, its title, line and chips over its picture's foot
+   on a shade (20 px in, as YouTube's), its length at the right */
+.bd-row--wide .bd-tile-title, .bd-row--wide .bd-tile-line, .bd-row--wide .bd-tile-label { display: none; }
+.bd-row--wide .bd-tile--focused .bd-tile-title, .bd-row--wide .bd-tile--focused .bd-tile-line { display: block; position: absolute;
+    left: 20px; right: 120px; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bd-row--wide .bd-tile--focused .bd-tile-title { top: 215px; max-height: none; color: #f1f1f1; }
+.bd-row--wide .bd-tile--focused .bd-tile-line { top: 251px; color: #d0d0d0; }
+.bd-row--wide .bd-tile--focused .bd-tile-line + .bd-tile-line { top: 275px; }
+.bd-row--wide .bd-tile--focused .bd-tile-label { display: block; z-index: 1; }
+.bd-row--wide .bd-tile--focused .bd-tile-frame:after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 55%;
+    background-image: -webkit-linear-gradient(top, rgba(0, 0, 0, 0), rgba(0, 0, 0, .75)); }
+
+/* A grid's lines (no heading) start a little higher, so the focus ring is not cut off */
+.bd-row--bare { margin-top: -8px; padding-top: 8px; }
+
+/* A page without a picture (Library's History, Watch later, …; a row's "More"): its name on a grey tile */
+.bd-tile-more { background: #272727; }
+.bd-tile-more-title { font-size: 24px; font-weight: 700; color: #f1f1f1; }
+
+/* Status lines; a page's name over its grid */
+.by-status { left: 104px; top: 320px; width: 1100px; font-size: 21px; color: #aaa; }
+/* An empty page as YouTube's (Library's Movies & TV): faint tiles where its rows would be, fading into the page,
+   its words in the middle over them */
+.by-empty { left: 0; top: 0; width: 1280px; height: 720px; }
+.by-empty-tile { top: 125px; width: 352px; height: 208px; border-radius: 12px; background: -webkit-linear-gradient(top, #1f1f1f, rgba(31, 31, 31, 0)); }
+.by-empty-tile--0 { left: 104px; }
+.by-empty-tile--1 { left: 480px; }
+.by-empty-tile--2 { left: 856px; }
+.by-empty-tile--3 { left: 1232px; }
+.by-empty-text { left: 104px; right: 0; top: 270px; line-height: 26px; text-align: center; font-size: 20px; color: #a9a9a9; }
+.by-heading { padding-left: 104px; line-height: 38px; font-size: 32px; font-weight: 700; color: #f1f1f1; white-space: nowrap; }
+/* A page over everything, as YouTube's History: its name smaller at the top, its buttons at the top
+   right as pills with an icon, the round back arrow at the left (as Search's) */
+.bd-page--page .by-heading { line-height: 48px; font-size: 24px; font-weight: 500; }
+/* A page with chips (Library's Music): its name bigger and lower, the chips beside it (as YouTube's) */
+.bd-page--tabs .by-heading { padding-top: 12px; font-size: 28px; }
+/* Moves up with the grid, at its pace */
+.bd-page--page .by-heading, .bd-page--page .by-page-buttons { -webkit-transition: -webkit-transform .3s ease; }
+.by-page-buttons { right: 72px; top: 45px; }
+.by-page-button { margin-left: 17px; height: 44px; line-height: 44px; padding: 0 20px; border-radius: 22px; background: #303030;
+                  font-size: 16px; font-weight: 500; color: #f1f1f1; }
+.by-page-button--focused { background: #f1f1f1; color: #0f0f0f; }
+.by-page-button-icon { width: 24px; height: 24px; margin: -3px 10px 0 -4px; }
+/* A playlist's page (bd-page--list) as YouTube's (its Watch later): its name, line and round buttons
+   in a column at the left, its videos one to a line at the right, each one's words beside its picture */
+.bd-page--list .by-heading { padding-left: 96px; font-size: 32px; line-height: 44px; }
+.by-page-byline { left: 96px; top: 150px; font-size: 15px; line-height: 22px; color: #aaa; }
+.by-page-byline-icon { width: 16px; height: 16px; margin: -3px 6px 0 0; }
+.bd-page--list .by-page-buttons { left: 79px; right: auto; top: 192px; }
+.bd-page--list .by-page-button { width: 48px; height: 48px; padding: 0; border-radius: 24px; }
+.bd-page--list .by-page-button span { display: none; }
+.bd-page--list .by-page-button-icon { margin: 12px; }
+.bd-page--list .bd-tile { width: 560px !important; }
+.bd-page--list .bd-tile-frame { float: left; margin-right: 16px; }
+.bd-page--list .bd-tile-title { margin-top: 0; font-size: 22px; line-height: 30px; max-height: 60px; color: #f1f1f1; }
+.bd-page--list .by-page-back { display: none; }
+.bd-page--list .bd-tile-line { font-size: 15px; line-height: 22px; }
+.by-page-back, .by-search-back { left: 28px; top: 336px; width: 24px; height: 24px; padding: 12px; border-radius: 24px; background: #303030; color: #f1f1f1; }
+.by-page-back--focused, .by-search-back--focused { background: #f1f1f1; color: #0f0f0f; }
+
+/* Search, as YouTube's TV app draws it: the field as a pill at the top (no microphone: there is no voice
+   search), YouTube's keyboard under it (plain letters, the focused one on a light square; Delete as
+   its icon; Space, Clear and Search as grey keys), its suggestions left of it (what is typed plain, the rest bold),
+   the results under them */
+.bd-search-query { left: 104px; top: 44px; margin: 0; width: 676px; height: 48px; line-height: 48px; padding: 0 20px;
+                   border-radius: 24px; background: #303030; font-size: 24px; font-weight: 700; color: #f1f1f1; }
+.bd-search-query--empty { color: #8a8a8a; }
+.by-search-top { height: 112px; background: #0f0f0f; }
+.bd-keyboard { margin: 116px 0 0 480px; }
+.bd-keyboard-line { height: 44px; margin-bottom: 0; }
+.bd-key { width: 44px; height: 44px; line-height: 44px; margin: 0; border-radius: 8px; background: transparent;
+          font-size: 24px; font-weight: 400; color: #f1f1f1; text-transform: uppercase; }
+.bd-key--focused { background: #f1f1f1; color: #0f0f0f; -webkit-transform: none; }
+.bd-key--wide2, .bd-key--wide3 { width: 88px; height: 36px; line-height: 36px; margin: 12px 8px 0 0; background: #303030;
+                                 font-size: 16px; font-weight: 700; }
+.bd-keyboard-line:last-child .bd-key:first-child { margin-left: 10px; }
+.bd-keyboard-line:first-child .bd-key:last-child { width: 64px; color: #f1f1f1; }
+.bd-keyboard-line:first-child .bd-key--focused:last-child { color: #0f0f0f; }
+.bd-key-icon { display: inline-block; width: 28px; height: 28px; vertical-align: middle; }
+.bd-search-status { margin: 24px 0 0 104px; color: #aaa; }
+.by-suggestions { left: 104px; top: 112px; width: 360px; }
+.by-suggestion { height: 44px; line-height: 44px; padding: 0 12px 0 46px; border-radius: 8px; font-size: 20px; color: #f1f1f1; }
+.by-suggestion--focused { background: #f1f1f1; color: #0f0f0f; }
+.by-suggestion-icon, .by-suggestion-picture { left: 12px; top: 10px; width: 24px; height: 24px; }
+.by-suggestion-picture { border-radius: 12px; }
+.by-suggestion-typed { font-weight: 400; }
+.by-suggestion-rest { font-weight: 700; }
+.by-suggestion-line { margin-left: 10px; font-size: 15px; color: #aaa; }
+.by-suggestion--focused .by-suggestion-line { color: #606060; }
+/* Settings › Subtitles' "More languages": as Search (its field, its keyboard, the languages as its suggestions) */
+.by-langs { background: #0f0f0f; }
+.by-langs-title { left: 104px; top: 40px; font-size: 32px; line-height: 42px; font-weight: 700; color: #f1f1f1; }
+.by-langs-field { left: 104px; top: 104px; width: 676px; height: 48px; line-height: 48px; padding: 0 20px;
+                  border-radius: 24px; background: #303030; font-size: 24px; font-weight: 700; color: #f1f1f1; }
+.by-langs-field--empty { color: #8a8a8a; font-weight: 400; }
+.by-langs-list { left: 104px; top: 176px; width: 340px; }
+.by-langs-item { height: 44px; line-height: 44px; padding: 0 48px 0 16px; border-radius: 8px; font-size: 20px; color: #f1f1f1; }
+.by-langs-item--focused { background: #f1f1f1; color: #0f0f0f; }
+.by-langs-none { padding: 0 16px; line-height: 44px; font-size: 20px; color: #aaa; }
+.by-langs-keys { left: 480px; top: 176px; }
+
+/* Home's search bar, as YouTube's over its rows, which go up under it (a magnifier in it, as there is no microphone) */
+.by-feed-top { height: 104px; background: #0f0f0f; }
+/* As YouTube's: its microphone's circle at the left (drawn only: no voice search here), the pill beside it,
+   "Search" in it without a magnifier */
+.by-search-mic { left: 104px; top: 44px; width: 24px; height: 24px; padding: 12px; border-radius: 24px; background: #303030; color: #f1f1f1; }
+.by-search-bar { left: 164px; top: 44px; width: 379px; height: 48px; line-height: 48px; padding: 0 20px 0 21px; border-radius: 24px;
+                 background: #303030; font-size: 22px; font-weight: 500; color: #aaa; }
+.by-search-bar--focused { background: #f1f1f1; color: #0f0f0f; }
+.by-search-mic--focused { background: #f1f1f1; color: #0f0f0f; }
+
+/* Settings, as YouTube's: the title by the logo; the list (a white box on the focused
+   setting, a grey one on it while the focus is elsewhere; the groups' names small, grey, in capitals); a thin line;
+   on the right the focused setting's picture, name, what it does, its choices (round grey buttons, the focused one
+   white, a tick on the one set) and a grey note; linking a phone: the steps (and the code, blue, by YouTube's
+   picture of a phone) */
+.by-settings-title { left: 115px; top: 46px; font-size: 32px; line-height: 42px; font-weight: 700; color: #f1f1f1; }
+.by-settings-menu { left: 98px; top: 128px; width: 282px; }
+.by-settings-list { -webkit-transition: -webkit-transform .2s ease; }
+.by-settings-group { height: 34px; padding: 8px 12px 0; line-height: 34px; font-size: 16px; font-weight: 500; color: #aaa;
+                     text-transform: uppercase; }
+.by-settings-item, .by-settings-button { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.by-settings-item { height: 52px; padding: 0 12px; border-radius: 11px; line-height: 52px; font-size: 20px; color: #f1f1f1; }
+.by-settings-item--at { background: #272727; }
+.by-settings-line { left: 393px; top: 128px; bottom: 0; width: 1px; background: #303030; }
+.by-settings-panel { left: 394px; }
+.by-settings-body { width: 712px; margin: 0 auto; padding: 122px 0 24px; }
+.by-settings-picture { width: 150px; height: 150px; margin: 0 auto 16px; }
+.by-settings-heading { font-size: 40px; line-height: 48px; font-weight: 700; color: #f1f1f1; }
+.by-settings-summary { margin-top: 8px; font-size: 20px; line-height: 28px; color: #aaa; }
+.by-settings-buttons { margin-top: 56px; }
+.by-settings-button { width: 417px; height: 64px; margin: 0 auto 8px; padding: 0 64px 0 40px; box-sizing: border-box;
+                      border-radius: 32px; background: #3f3f3f; line-height: 64px; font-size: 20px; color: #f1f1f1; }
+.by-settings-button .by-check { right: 28px; }
+/* After the item's and button's own colours, which it replaces */
+.by-settings-item--focused, .by-settings-button--focused { background: #f1f1f1; color: #0f0f0f; }
+.by-settings-note { margin-top: 27px; font-size: 17px; line-height: 24px; color: #aaa; }
+.by-settings-body--steps, .by-settings-body--code { padding-top: 126px; }
+.by-settings-link { width: 400px; margin-top: 22px; }
+.by-settings-steps { margin: 0; padding-left: 32px; font-size: 20px; line-height: 28px; color: #aaa; }
+.by-settings-step { margin-bottom: 8px; padding-left: 6px; }
+.by-settings-code { margin-top: 24px; font-size: 32px; line-height: 40px; font-weight: 500; letter-spacing: 1px; color: #3ea6ff;
+                    white-space: nowrap; }
+.by-settings-code--said { font-size: 18px; line-height: 26px; letter-spacing: 0; color: #aaa; white-space: normal; }
+/* The TV code's side: the steps and the code, a line, the phone (YouTube's two columns) */
+.by-settings-body--code { width: auto; }
+.by-settings-body--code .by-settings-link { width: 330px; margin-top: 76px; }
+.by-settings-phone { width: 350px; height: 444px; margin: 46px 0 0 50px; padding-left: 50px; border-left: 1px solid #303030; }
+.by-question { padding-top: 122px; box-sizing: border-box; background: #0f0f0f; }
+
+/* "Who's watching?", as YouTube's: a big plain title, large round pictures, the
+   focused one ringed in white and a little larger, its name white; Add account a grey circle with a plus (white when
+   focused) */
+.by-who-title { top: 108px; font-size: 43px; line-height: 54px; color: #f1f1f1; }
+.by-who-row { left: 120px; top: 200px; }
+.by-who-item { width: 213px; margin-right: 27px; }
+.by-who-picture { width: 197px; height: 197px; margin: 8px; box-sizing: border-box; border-radius: 50%; background: #3f3f3f;
+                  line-height: 197px; font-size: 96px; color: #f1f1f1; -webkit-transition: -webkit-transform .15s ease; }
+.by-who-item--focused .by-who-picture { box-shadow: 0 0 0 5px #f1f1f1; -webkit-transform: scale(1.05); }
+.by-who-name { margin-top: 12px; font-size: 23px; line-height: 30px; color: #aaa; }
+.by-who-item--focused .by-who-name { color: #f1f1f1; }
+.by-who-handle { margin-top: 2px; font-size: 16px; line-height: 22px; color: #aaa; }
+.by-who-add .by-who-picture { background: #272727; }
+.by-who-add.by-who-item--focused .by-who-picture { background: #f1f1f1; color: #0f0f0f; }
+.by-who-plus { width: 64px; height: 64px; margin: -32px 0 0 -32px; }
+/* The account in the logo's list: its round picture before its name */
+.by-rail-drop-picture { width: 28px; height: 28px; margin: -4px 10px 0 0; border-radius: 14px; vertical-align: middle; }
+.by-question-round { border-radius: 50%; }
+
+/* "Add your Google Account", as YouTube's: the wordmark, a big title, grey text, the way
+   as a white pill; on the right the QR code on white with round corners, small grey lines, the address and the code
+   big and white */
+.by-signin-left { left: 96px; top: 84px; width: 440px; }
+.by-signin-wordmark { height: 26px; margin-bottom: 52px; }
+.by-signin-title { font-size: 40px; line-height: 50px; font-weight: 700; color: #f1f1f1; }
+.by-signin-text { margin-top: 18px; font-size: 18px; line-height: 26px; color: #aaa; }
+.by-signin-way { margin-top: 40px; height: 56px; padding: 0 24px; border-radius: 12px; background: #f1f1f1; line-height: 56px;
+                 font-size: 20px; font-weight: 500; color: #0f0f0f; }
+.by-signin-right { left: 728px; top: 112px; width: 352px; }
+.by-signin-qr { width: 330px; height: 330px; border-radius: 18px; }
+.by-signin-small { margin-top: 18px; font-size: 16px; line-height: 22px; color: #ccc; }
+.by-signin-big { margin-top: 4px; font-size: 24px; line-height: 30px; font-weight: 700; color: #f1f1f1; }
+.by-signin-code { margin-top: 4px; font-size: 30px; line-height: 38px; font-weight: 700; letter-spacing: 2px; color: #f1f1f1; }
+
+/* Toasts, as YouTube's: a dark box with round corners at the top right, a white icon
+   before light text */
+.by-toast { top: 48px; right: 48px; max-width: 640px; padding: 22px 16px 22px 24px; border-radius: 12px; background: #181818; }
+.by-toast-icon { width: 24px; height: 24px; margin-right: 22px; color: #fff; }
+.by-toast-text { font-size: 19px; line-height: 24px; font-weight: 500; color: #fff; white-space: normal; }
+/* The kind as a left edge: red for a problem, a SponsorBlock skip in its category's colour (SponsorBlock's own);
+   the text stays in place without one */
+.by-toast--edge { border-left: 6px solid #fff; padding-left: 18px; }
+.by-toast--problem { border-left-color: #ff4e45; }
+.by-toast--sb-sponsor { border-left-color: #00d400; }
+.by-toast--sb-selfpromo { border-left-color: #ffff00; }
+.by-toast--sb-interaction { border-left-color: #cc00ff; }
+.by-toast--sb-intro { border-left-color: #00ffff; }
+.by-toast--sb-outro { border-left-color: #0202ed; }
+.by-toast--sb-preview { border-left-color: #008fd6; }
+.by-toast--sb-filler { border-left-color: #7300ff; }
+.by-toast--sb-music_offtopic { border-left-color: #ff9900; }
+
+/* YouTube's message in place of Home's rows ("Make YouTube your own"): a big title, grey text, round grey buttons (the
+   focused one white) with a grey "or" between them */
+.by-nudge { left: 104px; top: 230px; }
+.by-nudge-title { font-size: 36px; line-height: 44px; font-weight: 700; color: #f1f1f1; }
+.by-nudge-text { width: 640px; margin: 12px auto 0; font-size: 20px; line-height: 28px; color: #aaa; }
+.by-nudge-buttons { margin-top: 40px; }
+.by-nudge-button { height: 48px; padding: 0 28px; border-radius: 24px; background: #3f3f3f; line-height: 48px; font-size: 20px;
+                   font-weight: 500; color: #f1f1f1; }
+.by-nudge-button--focused { background: #f1f1f1; color: #0f0f0f; }
+.by-nudge-or { margin: 0 20px; font-size: 20px; color: #aaa; }
+.by-question .by-settings-summary { width: 760px; margin-left: auto; margin-right: auto; }
+
+/* The own player (player/own-player.ts): the shared info bar (base.css .osd) in YouTube's red */
+.by-player .osd-fill, .by-player .osd-marker { background: #f00; }
+
+/* The watch page (player/watch-page.ts), as YouTube's TV watch page: the title, channel, views and age
+   at the top; the time, the bar and round grey buttons at the bottom (the focused one white, play-pause
+   bigger), the related videos under them; a shade over the video, darker at the bottom. In the related
+   videos the page slides up, the rest fades and the shade darkens. Lists open in a grey panel on the right. */
+.by-watch-shade { background-image: -webkit-linear-gradient(top, rgba(0, 0, 0, .7) 0, rgba(0, 0, 0, .1) 30%, rgba(0, 0, 0, .1) 50%, rgba(12, 17, 15, .92) 80%, rgba(15, 21, 19, .97) 100%); }
+/* In the related videos a flat dark layer fades in over the shade (its opacity: no repaint over the video) */
+.by-watch-dim { background: rgba(15, 15, 15, .85); opacity: 0; -webkit-transition: opacity .3s ease; }
+.by-watch--related .by-watch-dim { opacity: 1; }
+.by-watch-body { -webkit-transition: -webkit-transform .3s ease; }
+.by-watch-top, .by-watch-controls { -webkit-transition: opacity .3s ease; }
+.by-watch--related .by-watch-top, .by-watch--related .by-watch-controls { opacity: 0; }
+.by-watch-related .bd-row { -webkit-transition: opacity .3s ease; }
+.by-watch-above { opacity: 0; }
+.by-watch-top { left: 64px; top: 56px; width: 780px; }
+.by-watch-title { font-size: 28px; font-weight: 700; line-height: 38px; color: #f1f1f1; overflow: hidden; max-height: 76px;
+                  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; text-shadow: 0 1px 6px rgba(0, 0, 0, .5); }
+.by-watch-meta { margin-top: 8px; font-size: 16px; line-height: 22px; color: #f1f1f1; text-shadow: 0 1px 4px rgba(0, 0, 0, .5); }
+.by-watch-controls { left: 64px; top: 438px; width: 1152px; }
+.by-watch-times { height: 22px; font-size: 14px; line-height: 22px; color: #e6e6e6; }
+.by-watch-bar { margin-top: 10px; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .3); }
+.by-watch-loaded { background: rgba(255, 255, 255, .45); }
+.by-watch-played { background: #f1f1f1; }
+.by-watch--bar .by-watch-played { background: #f00; }
+.by-watch-knob { top: -5px; width: 16px; height: 16px; margin-left: -8px; border-radius: 8px; background: #f00; }
+.by-watch-marker { top: -5px; width: 16px; height: 16px; margin-left: -8px; border-radius: 8px; background: rgba(255, 0, 0, .6); }
+.by-watch-buttons { margin-top: 22px; height: 64px; }
+.by-watch-left, .by-watch-right { top: 8px; }
+.by-watch-button { width: 48px; height: 48px; padding: 12px; border-radius: 24px; background: #373737; color: #f1f1f1; }
+.by-watch-left .by-watch-button { margin-right: 10px; }
+.by-watch-right .by-watch-button, .by-watch-group { margin-left: 10px; }
+.by-watch-avatar { padding: 0; }
+.by-watch-pill { width: auto; padding: 0 22px; line-height: 48px; font-size: 16px; font-weight: 500; }
+.by-watch-center .by-watch-button { margin: 8px 8px 0; }
+.by-watch-center .by-watch-play { width: 64px; height: 64px; padding: 16px; margin-top: 0; border-radius: 32px; }
+.by-watch-group { border-radius: 24px; background: #373737; }
+.by-watch-group .by-watch-button { margin: 0; background: transparent; }
+.by-watch-button--focused, .by-watch-group .by-watch-button--focused { background: #f1f1f1; color: #0f0f0f; }
+.by-watch-button--on:after { content: ''; position: absolute; left: 13px; right: 13px; bottom: 8px; height: 3px; border-radius: 2px; background: #f00; }
+.by-watch-status { left: 64px; font-size: 18px; line-height: 26px; color: #aaa; }
+
+/* The panel on the right (ui/side-panel.ts): grey, its lines in a column; a focused choice white, focused text lighter */
+.by-panel { width: 520px; background: #212121; box-shadow: -24px 0 48px rgba(0, 0, 0, .5); }
+/* Its title: two lines at most, the list below it */
+.by-panel-title { margin: 36px 40px 24px; font-size: 24px; font-weight: 700; line-height: 32px; color: #f1f1f1; overflow: hidden; max-height: 64px;
+                  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.by-panel-list { padding: 0 24px 24px; -webkit-transition: -webkit-transform .2s ease; }
+.by-line { margin-bottom: 4px; padding: 12px 16px; border-radius: 12px; color: #f1f1f1; }
+.by-line--choice { padding-right: 56px; }
+.by-line-label { font-size: 18px; font-weight: 500; line-height: 26px; white-space: pre-line; word-wrap: break-word; }
+.by-line--plain .by-line-label { font-size: 16px; font-weight: 400; line-height: 24px; }
+.by-line-over, .by-line-under { font-size: 14px; line-height: 20px; color: #aaa; }
+.by-line-over { margin-bottom: 4px; font-weight: 500; color: #ddd; }
+.by-line-under { margin-top: 4px; }
+.by-check { right: 16px; top: 50%; width: 24px; height: 24px; margin-top: -12px; }
+.by-check svg { display: block; }
+.by-line--focused { background: #f1f1f1; color: #0f0f0f; }
+.by-line--focused .by-line-over, .by-line--focused .by-line-under { color: #555; }
+.by-line--plain.by-line--focused { background: rgba(255, 255, 255, .12); color: #f1f1f1; }
+.by-line--plain.by-line--focused .by-line-over { color: #ddd; }
+.by-line--plain.by-line--focused .by-line-under { color: #aaa; }
+.by-watch-subscribe--on { background: #272727; color: #aaa; }
+.by-watch-subscribe--on.by-watch-button--focused { background: #f1f1f1; color: #0f0f0f; }
+
+/* SponsorBlock segments on both bars, in SponsorBlock's own colours */
+.by-sb { opacity: .9; }
+.by-sb--sponsor { background: #00d400; }
+.by-sb--selfpromo { background: #ffff00; }
+.by-sb--interaction { background: #cc00ff; }
+.by-sb--intro { background: #00ffff; }
+.by-sb--outro { background: #0202ed; }
+.by-sb--music_offtopic { background: #ff9900; }
+.by-player .osd-bar .by-bar-marks { border-radius: 3px; overflow: hidden; }
+/* The bar cut into its chapters (YouTube's: a small gap where each begins) */
+.by-chapter-gap { width: 4px; margin-left: -2px; background: rgba(15, 15, 15, .9); }
+/* YouTube's "Includes paid promotion": its icon and words on a dark box with a blue edge, under the title, and over the
+   picture's top left for its first seconds */
+.by-paid { display: inline-block; margin-top: 12px; padding: 0 14px 0 10px; height: 34px; line-height: 34px; border-left: 3px solid #3ea6ff;
+           background: rgba(15, 15, 15, .85); font-size: 15px; color: #f1f1f1; }
+.by-paid-icon { width: 20px; height: 20px; margin: -3px 10px 0 0; }
+.by-paid--start { left: 64px; top: 56px; margin: 0; }
+
+/* "Up next": a dark card at the bottom right with the next video's picture, its title, the countdown and two pills */
+.by-upnext { right: 64px; bottom: 64px; width: 400px; padding: 20px; border-radius: 16px; background: rgba(15, 15, 15, .92);
+             box-shadow: 0 8px 32px rgba(0, 0, 0, .6); color: #f1f1f1; }
+.by-upnext-label { font-size: 16px; font-weight: 500; color: #aaa; margin-bottom: 12px; }
+.by-upnext-img { width: 400px; height: 225px; border-radius: 12px; background: #212121; object-fit: cover; }
+.by-upnext-title { margin-top: 12px; font-size: 20px; font-weight: 700; line-height: 28px; overflow: hidden; max-height: 56px;
+                   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.by-upnext-channel { margin-top: 4px; font-size: 16px; color: #aaa; }
+.by-upnext-count { margin-top: 8px; font-size: 16px; color: #f1f1f1; }
+.by-upnext-buttons { margin-top: 16px; }
+
+
+/* Stats for nerds: YouTube's dark box at the top left */
+.by-stats { left: 32px; top: 32px; padding: 12px 16px; border-radius: 8px; background: rgba(0, 0, 0, .7);
+            font-family: monospace; font-size: 14px; line-height: 20px; color: #fff; z-index: 2; }
+
+/* A channel's page, as YouTube's TV app: over everything, its banner across the top
+   (to 573), the search bar over it, its picture small beside its name, handle and subscribers, three lines of its
+   description and "...more", Play mix and Subscribe as pills; its rows 64 px from the left. In its rows the header and the
+   banner go, the search bar stays over the rows on the dark. */
+.by-channel-banner { left: 0; top: 0; width: 1280px; height: 573px; object-fit: cover; -webkit-transition: opacity .3s ease; }
+.by-channel-shade { height: 573px; background-image: -webkit-linear-gradient(left, rgba(0, 0, 0, .35), rgba(0, 0, 0, 0) 720px); }
+.by-channel--rows .by-channel-banner, .by-channel--rows .by-channel-shade { opacity: 0; }
+.by-channel-top { left: 0; top: 0; width: 1280px; height: 112px; background: #0f0f0f; opacity: 0; -webkit-transition: opacity .3s ease; }
+.by-channel--rows .by-channel-top { opacity: 1; }
+.by-channel-head { left: 64px; top: 300px; width: 1100px; -webkit-transition: -webkit-transform .3s ease, opacity .3s ease; }
+.by-channel--rows .by-channel-head { opacity: 0; }
+.by-channel-rows { -webkit-transition: -webkit-transform .3s ease; }
+.by-channel-rows .bd-row-title { padding-left: 64px; }
+.by-channel-named { white-space: nowrap; }
+.by-channel-avatar { display: inline-block; vertical-align: middle; width: 48px; height: 48px; border-radius: 24px; background: #272727; }
+.by-channel-lines { display: inline-block; vertical-align: middle; margin-left: 12px; }
+.by-channel-name { font-size: 24px; font-weight: 700; line-height: 30px; color: #f1f1f1; }
+.by-channel-subtitle { min-height: 22px; font-size: 16px; line-height: 22px; color: #ccc; }
+.by-channel-description { margin: 21px 0 0 -8px; padding: 0 8px; width: 600px; border-radius: 8px; font-size: 18px; line-height: 26px; color: #f1f1f1; }
+.by-channel-description--focused { background: rgba(255, 255, 255, .2); }
+.by-channel-buttons { margin-top: 35px; }
+.by-channel-buttons .by-pill { margin-right: 17px; height: 48px; line-height: 48px; padding: 0 24px; font-size: 17px; }
+.by-channel-buttons .by-pill--on { background: rgba(15, 15, 15, .55); color: #f1f1f1; }
+.by-channel-buttons .by-pill--focused { background: #f1f1f1; color: #0f0f0f; }
+.by-pill-icon { display: inline-block; width: 24px; height: 24px; margin: -6px 8px 0 -4px; vertical-align: middle; }
+.by-channel-mic { left: 64px; }
+.by-channel-bar { left: 124px; }
+
+/* Pills (a channel's buttons, "Up next"'s): grey, Subscribed darker, the focused one white */
+.by-pill { margin-right: 10px; padding: 0 22px; height: 44px; line-height: 44px; border-radius: 22px; background: #373737;
+           font-size: 16px; font-weight: 500; color: #f1f1f1; }
+.by-pill--on { background: #272727; color: #aaa; }
+.by-pill--focused { background: #f1f1f1; color: #0f0f0f; }
+
+/* Chips beside a page's name, as YouTube's (its Music library's; a channel's Videos:
+   Latest, Popular, Oldest): grey with YouTube's icon before the name, the chosen one lighter, the focused one white */
+.by-tabs { margin-left: 21px; }
+.by-tab { margin-right: 15px; padding: 0 16px; height: 48px; line-height: 48px; border-radius: 11px; background: #363636;
+          font-size: 17px; font-weight: 500; color: #f1f1f1; vertical-align: middle; }
+.by-tab--chosen { background: #5f5f5f; }
+.by-tab--focused { background: #f1f1f1; color: #0f0f0f; }
+.by-tab-icon { display: inline-block; width: 22px; height: 22px; margin-right: 11px; vertical-align: -5px; }
+
+/* The loading sign: the app's logo (a screen loading) or the channel's round picture (a video
+   starting) dimmed, a bright copy filling in from the left; the logo pulses gently */
+.by-loader-pulse { width: 216px; height: 181px; margin: -90px 0 0 -108px; -webkit-animation: by-pulse 2s ease-in-out infinite; }
+.by-loader-image { width: 216px; height: 181px; }
+.by-loader-pulse > .by-loader-image { opacity: .2; }
+.by-loader-box, .by-loader-inner { -webkit-transition: -webkit-transform 1.2s cubic-bezier(.2, .7, .3, 1); }
+/* A video's start: no pulse; its fill quick and even, as it follows the start's steps and then the frames the TV
+   decodes (player/own-player.ts: full just before the picture); the channel's picture in a light ring (as the focus
+   ring) with a black line round it */
+.by-loader--round .by-loader-pulse { width: 128px; height: 128px; margin: -64px 0 0 -64px; -webkit-animation: none;
+                                     border-radius: 64px; box-shadow: 0 0 0 4px #f1f1f1, 0 0 0 7px #000; }
+.by-loader--round .by-loader-box, .by-loader--round .by-loader-inner { -webkit-transition: -webkit-transform .2s linear; }
+.by-loader--round .by-loader-image { width: 128px; height: 128px; border-radius: 64px; object-fit: cover; }
+@-webkit-keyframes by-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .65; } }
+
+/* Subscriptions, as in YouTube's phone app: round channel pictures in a row at the top (a blue dot on those
+   with new videos, All at its end in blue), the pills under them (the chosen one white, the focused one ringed) */
+.by-subs-head { left: 104px; top: 76px; width: 1176px; padding-top: 6px; }
+.by-subs--rows .by-subs-head { opacity: 0; }
+.by-subs-channel { width: 100px; margin-right: 12px; border-radius: 12px; text-align: center; }
+.by-subs-picture { width: 72px; height: 72px; margin: 4px auto 0; border-radius: 36px; background: #272727; }
+.by-subs-channel--focused .by-subs-picture { box-shadow: 0 0 0 4px #f1f1f1; }
+.by-subs-dot { left: 72px; top: 60px; width: 14px; height: 14px; border-radius: 7px; background: #3ea6ff; box-shadow: 0 0 0 3px #0f0f0f; }
+.by-subs-name { margin-top: 8px; font-size: 15px; line-height: 20px; color: #f1f1f1; }
+.by-subs-all { width: 72px; line-height: 80px; font-size: 20px; font-weight: 700; color: #3ea6ff; }
+.by-subs-all.by-subs-channel--focused { background: #f1f1f1; color: #0f0f0f; }
+.by-subs-pills { margin: 22px 0 6px 6px; }
+.by-subs-pill { height: 40px; line-height: 40px; padding: 0 18px; margin-right: 10px; border-radius: 8px; background: #272727;
+                font-size: 18px; font-weight: 500; color: #f1f1f1; }
+.by-subs-pill--chosen { background: #f1f1f1; color: #0f0f0f; }
+.by-subs-pill--focused { box-shadow: 0 0 0 2px #0f0f0f, 0 0 0 5px #f1f1f1; }
+
+/* Library, as YouTube's: coloured cards at the top (the name at the bottom left), its rows under them */
+.by-library-head { left: 96px; top: 52px; width: 1184px; padding: 8px; }
+.by-library--rows .by-library-head { opacity: 0; }
+/* Its rows' names a little lower in their rows, as YouTube's Library's */
+.by-library .bd-row-title { top: 10px; }
+.by-library .bd-row-title.bd-row-title--sub { top: 0; }
+.by-library-card { width: 154px; height: 38px; margin-right: 24px; padding: 74px 20px 0; border-radius: 12px; line-height: 26px;
+                   font-size: 24px; font-weight: 700; color: #fff; white-space: nowrap; }
+.by-library-card--focused { box-shadow: 0 0 0 4px #0f0f0f, 0 0 0 7px #f1f1f1; }
+.by-library-card--0 { background-image: -webkit-linear-gradient(left, #4a15ad, #7438d8); }
+.by-library-card--1 { background-image: -webkit-linear-gradient(left, #0a5f86, #1290b8); }
+.by-library-card--2 { background-image: -webkit-linear-gradient(left, #0a6b5e, #15937c); }
+.by-library-card--3 { background-image: -webkit-linear-gradient(left, #8f2f0c, #d65219); }
+.by-library-card--4 { background-image: -webkit-linear-gradient(left, #7a5a06, #b08a14); }
+.by-library-card--5 { background-image: -webkit-linear-gradient(left, #8a1538, #c4295a); }
+/* A page fading in as its rows come (no sign while it loads) */
+@-webkit-keyframes by-fade-in { from { opacity: 0; } to { opacity: 1; } }
+.by-fade-in { -webkit-animation: by-fade-in .15s ease-out; }

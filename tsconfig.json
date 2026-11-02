@@ -1,0 +1,16 @@
+{
+    // ES5 for webOS 3.x (Chrome 38), which has Promise, Map and Set natively
+    "compilerOptions": {
+        "target": "ES5",
+        "module": "ES2015",
+        "lib": ["ES5", "DOM", "ES2015.Promise", "ES2015.Collection"],
+        "strict": true,
+        "noImplicitReturns": true,
+        "noFallthroughCasesInSwitch": true,
+        "noUnusedLocals": true,
+        "moduleResolution": "node",
+        "outDir": "build/tsc",
+        "rootDir": "."
+    },
+    "include": ["src/**/*.ts"]
+}

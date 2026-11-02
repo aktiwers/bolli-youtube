@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android TV and Google TV (no touch screen, no Play services); the app's name and id come from
+     app/build.gradle.kts -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-feature android:name="android.software.leanback" android:required="false" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <!-- The remote's voice key: Android's speech recognition must be visible to the app (Android 11+) -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
+        </intent>
+    </queries>
+
+    <application
+        android:label="${label}"
+        android:icon="@drawable/icon"
+        android:banner="@drawable/banner"
+        android:theme="@style/Bolli"
+        android:allowBackup="false"
+        android:usesCleartextTraffic="false"
+        android:enableOnBackInvokedCallback="false">
+
+        <!-- Back must reach dispatchKeyEvent as a key (predictive back, the
+             default from Android 16 for this targetSdk, would take it) -->
+        <!-- One instance, never rebuilt for a screen or input change: the page keeps its state -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="landscape"
+            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|smallestScreenSize|screenLayout|uiMode|density">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
