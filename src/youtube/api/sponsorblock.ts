@@ -19,18 +19,20 @@ export interface PartKind {
     name: string;
     note: string;
     skipped: string;
+    /** Shown after the time while the playhead is in one */
+    label: string;
 }
 
 /** Skippable categories, in Settings order */
 export var PARTS: PartKind[] = [
-    { id: 'sponsor', name: 'Sponsors', note: 'paid promotions', skipped: 'the sponsor' },
-    { id: 'selfpromo', name: 'Self-promotion', note: 'the channel\'s own merchandise, memberships and other channels', skipped: 'self-promotion' },
-    { id: 'interaction', name: 'Reminders to subscribe', note: 'asking you to like, subscribe or follow', skipped: 'a reminder to subscribe' },
-    { id: 'intro', name: 'Intros', note: 'intro animations and pauses', skipped: 'the intro' },
-    { id: 'outro', name: 'End cards', note: 'credits and end screens', skipped: 'the end cards' },
-    { id: 'preview', name: 'Previews and recaps', note: 'what comes later, or what came before', skipped: 'the preview' },
-    { id: 'filler', name: 'Tangents', note: 'filler and jokes off the topic', skipped: 'a tangent' },
-    { id: 'music_offtopic', name: 'Parts without music', note: 'in music videos', skipped: 'a part without music' }
+    { id: 'sponsor', name: 'Sponsors', note: 'paid promotions', skipped: 'the sponsor', label: 'Sponsor' },
+    { id: 'selfpromo', name: 'Self-promotion', note: 'the channel\'s own merchandise, memberships and other channels', skipped: 'self-promotion', label: 'Self-promotion' },
+    { id: 'interaction', name: 'Reminders to subscribe', note: 'asking you to like, subscribe or follow', skipped: 'a reminder to subscribe', label: 'Reminder to subscribe' },
+    { id: 'intro', name: 'Intros', note: 'intro animations and pauses', skipped: 'the intro', label: 'Intro' },
+    { id: 'outro', name: 'End cards', note: 'credits and end screens', skipped: 'the end cards', label: 'End cards' },
+    { id: 'preview', name: 'Previews and recaps', note: 'what comes later, or what came before', skipped: 'the preview', label: 'Preview' },
+    { id: 'filler', name: 'Tangents', note: 'filler and jokes off the topic', skipped: 'a tangent', label: 'Tangent' },
+    { id: 'music_offtopic', name: 'Parts without music', note: 'in music videos', skipped: 'a part without music', label: 'No music' }
 ];
 
 export interface Segment {
@@ -92,6 +94,12 @@ export function segmentAt(list: Segment[], t: number, skipped: { [index: number]
 }
 
 /** "Skipped the sponsor" */
+/** A segment's name as shown after the time ("Sponsor") */
+export function segmentName(s: Segment): string {
+    var kind = PARTS.filter(function (k) { return k.id === s.category; })[0];
+    return kind ? kind.label : s.category;
+}
+
 export function skippedText(s: Segment): string {
     var kind = PARTS.filter(function (k) { return k.id === s.category; })[0];
     return 'Skipped ' + (kind ? kind.skipped : s.category);

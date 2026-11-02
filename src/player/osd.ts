@@ -68,7 +68,7 @@ export class PlayerOsd {
         return this.el.style.display === 'block';
     }
 
-    /** Shown at the user's request (with the description); Up again then opens the menu */
+    /** Shown at the user's request (with the description) */
     get asked(): boolean {
         return this.withText && this.shown;
     }

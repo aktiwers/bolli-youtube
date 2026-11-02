@@ -17,7 +17,7 @@ import { PlayerOsd } from '../../player/osd.js';
 import { SubtitleView } from '../../player/subtitles.js';
 import { PROBLEM, skipEdge, toast } from '../ui/toast.js';
 import { knownAvatar } from '../api/avatars.js';
-import { Page, thumbnail, thumbnailFallback, Video, videoOf } from '../api/feed.js';
+import { dots, Page, thumbnail, thumbnailFallback, Video, videoOf } from '../api/feed.js';
 import { prefs, setPref } from '../api/prefs.js';
 import { Segment, segmentAt, segments, skippedText } from '../api/sponsorblock.js';
 import { WatchReport } from '../api/stats.js';
@@ -30,7 +30,7 @@ import { CAPTION_STYLES, Captions, loadCaptions, translationsRefused } from './c
 import { bufferedEnd, DashEngine, dropAhead, Engine, lengthOf } from './dash.js';
 import { OFF_START_S, pauseVideo, pictureKind, playVideo, releasePipeline } from './pipeline.js';
 import { note, ranges } from './play-log.js';
-import { BarMarks } from './bar-marks.js';
+import { BarMarks, chapterJump, nameAt } from './bar-marks.js';
 import { SabrEngine } from './sabr-engine.js';
 import { StatsBox } from './stats-box.js';
 import { UpNext } from './up-next.js';
@@ -45,6 +45,11 @@ var JUMP_REST_MS = 700;
 var HOLD_GAP_MS = 350;
 /** Presses closer than this are the remote's key repeats */
 var REPEAT_MS = 200;
+/** A second press this soon after a first one jumps to the next or previous chapter instead (and each further press
+ * as quick, another chapter) */
+var DOUBLE_MS = 350;
+/** A press is a first one only this long after the press before: a held key starts repeating after ~0.5 s */
+var FRESH_MS = 700;
 var HOLD_GROW_MS = 1000;
 var HOLD_DOUBLE_MS = 1500;
 var HOLD_MOST = 0.04;
@@ -76,7 +81,7 @@ var FILLS: { [step: string]: number } = { start: 0.2, streams: 0.45, loadedmetad
  * and is full FULL_S before they are all in (fill pace: themes, .by-loader--round). */
 var WARM_S = 3;
 var FULL_S = 0.4;
-var KEYS_LINE = 'OK pause  ·  Left / Right jump 10 s  ·  Up the description  ·  Down related videos, subtitles and more';
+var KEYS_LINE = 'OK pause  ·  Left / Right jump 10 s (twice: chapter)  ·  Up the description  ·  Down related videos, subtitles and more';
 
 /** A video handed to the player while it plays (nothing reloaded): its streams, the format playing, the target format
  * (switched to in place), the audio and the engine */
@@ -191,6 +196,9 @@ export class OwnPlayer {
     private heldSince = 0;
     /** A jump's seek is pending (OK then plays rather than pauses) */
     private jumping = false;
+    /** Presses are jumping chapter by chapter (a double press began it); where the first press of a run jumped from */
+    private chapterRun = false;
+    private firstFrom = 0;
     private startTimer = 0;
     /** Tracks the frames decoded before the first picture (loading sign fill) */
     private warmTimer = 0;
@@ -589,8 +597,9 @@ export class OwnPlayer {
                 this.jump(code === KEY.LEFT ? -JUMP_S : JUMP_S);
                 return true;
             case KEY.UP:
+                // The description, and Up again closes it (back to the picture alone)
                 if (this.osd.asked) {
-                    this.openWatch();
+                    this.osd.hide();
                 } else {
                     this.showOsd(true);
                 }
@@ -627,6 +636,17 @@ export class OwnPlayer {
         }
         var now = Date.now();
         var gap = now - this.pressedAt;
+        var info = this.watch.details;
+        var to = seconds * this.pressedBy > 0 && gap < DOUBLE_MS && (this.chapterRun || this.pressGap >= FRESH_MS) && info ?
+            chapterJump(info.chapters, this.chapterRun ? this.target : this.firstFrom, seconds) : -1;
+        if (to >= 0) {
+            this.chapterRun = true;
+            this.pressedAt = now;
+            this.pressGap = gap;
+            this.aim(Math.min(v.duration - 1, to));
+            return;
+        }
+        this.chapterRun = false;
         if (seconds * this.pressedBy <= 0 || !(gap < REPEAT_MS || gap < HOLD_GAP_MS && this.pressGap < REPEAT_MS)) {
             this.heldSince = now;
         }
@@ -636,8 +656,14 @@ export class OwnPlayer {
         var grow = Math.pow(2, Math.max(0, now - this.heldSince - HOLD_GROW_MS) / HOLD_DOUBLE_MS);
         var step = Math.round(Math.min(Math.abs(seconds) * grow, Math.max(Math.abs(seconds), v.duration * HOLD_MOST)));
         var from = this.target >= 0 ? this.target : v.currentTime;
-        this.target = Math.max(0, Math.min(v.duration - 1, from + (seconds < 0 ? -step : step)));
-        this.setMarker(this.target / v.duration);
+        this.firstFrom = from;
+        this.aim(Math.max(0, Math.min(v.duration - 1, from + (seconds < 0 ? -step : step))));
+    }
+
+    /** The pending jump set to t (s), run once presses stop */
+    private aim(t: number): void {
+        this.target = t;
+        this.setMarker(t / this.video.duration);
         if (!this.watch.shown) {
             this.showOsd(false);
         }
@@ -1390,9 +1416,10 @@ export class OwnPlayer {
         return this.segments[at].end;
     }
 
-    /** Draw SponsorBlock segments and chapters on both bars once the duration is known */
+    /** Draw SponsorBlock segments and chapters on both bars once the duration is known. The length is the format's:
+     * a kept pipeline reports the previous video's until the new one sets its own, which drew the marks out of place */
     private drawParts(): void {
-        var d = lengthOf(this.video);
+        var d = this.format ? this.format.duration || lengthOf(this.video) : 0;
         var info = this.watch.details;
         this.osdMarks.draw(this.segments, info ? info.chapters : [], d);
         this.watch.setMarks(this.segments, d);
@@ -1585,8 +1612,11 @@ export class OwnPlayer {
             }
         }
         if (this.osd.shown) {
-            // Chapter name only on the watch page, as on YouTube: no room next to the bar's time
-            this.osd.setTime(clock(v.currentTime) + (length ? ' / ' + clock(length) : ''), length ? v.currentTime / length : 0);
+            // The time and the name where a pending jump lands, else where it plays
+            var at = this.target >= 0 ? this.target : v.currentTime;
+            var info = this.watch.details;
+            this.osd.setTime(dots([clock(at) + (length ? ' / ' + clock(length) : ''), nameAt(this.segments, info ? info.chapters : [], at)]),
+                length ? v.currentTime / length : 0);
         }
         this.subtitleView.show(this.track ? this.track.textAt(v.currentTime) : null);
         this.stats.tick();

@@ -315,6 +315,10 @@ html, body { background: #0f0f0f; }
 
 /* The own player (player/own-player.ts): the shared info bar (base.css .osd) in YouTube's red */
 .by-player .osd-fill, .by-player .osd-marker { background: #f00; }
+/* The time, with the segment's or chapter's name, on a line above the bar; the bar the full width */
+.by-player .osd-time-line { height: auto; margin-top: 12px; }
+.by-player .osd-time { display: block; width: auto; margin-bottom: 12px; white-space: nowrap; }
+.by-player .osd-bar { display: block; width: 1168px; }
 
 /* The watch page (player/watch-page.ts), as YouTube's TV watch page: the title, channel, views and age
    at the top; the time, the bar and round grey buttons at the bottom (the focused one white, play-pause

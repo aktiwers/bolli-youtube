@@ -4,11 +4,13 @@
 // watch page details (api/watch.ts).
 
 import { h } from '../../core/dom.js';
-import { Segment } from '../api/sponsorblock.js';
+import { Segment, segmentName } from '../api/sponsorblock.js';
 import { Chapter } from '../api/watch.js';
 
 export class BarMarks {
     private el: HTMLElement;
+    /** What is drawn, so an unchanged redraw is skipped (emptying and refilling the bar flickers on the TV) */
+    private drawn = '';
 
     /** Inserted into bar before the given element (null: last) */
     constructor(bar: HTMLElement, before: Node | null) {
@@ -18,8 +20,14 @@ export class BarMarks {
 
     /** Draws the segments and chapters of a video of duration s (nothing when the duration is unknown) */
     draw(segments: Segment[], chapters: Chapter[], duration: number): void {
+        var key = duration > 0 ? duration.toFixed(1) + '|' + segments.map(function (s) { return s.category + s.start + '-' + s.end; }).join() +
+            '|' + chapters.map(function (c) { return c.start; }).join() : '';
+        if (key === this.drawn) {
+            return;
+        }
+        this.drawn = key;
         this.el.innerHTML = '';
-        if (!(duration > 0)) {
+        if (!key) {
             return;
         }
         for (var i = 0; i < segments.length; i++) {
@@ -48,4 +56,33 @@ export function chapterAt(chapters: Chapter[], t: number): string {
         name = chapters[i].title;
     }
     return name;
+}
+
+/** The name shown after the time at t: the SponsorBlock segment's there, else the chapter's ('' none) */
+export function nameAt(segments: Segment[], chapters: Chapter[], t: number): string {
+    for (var i = 0; i < segments.length; i++) {
+        if (t >= segments[i].start && t < segments[i].end) {
+            return segmentName(segments[i]);
+        }
+    }
+    return chapterAt(chapters, t);
+}
+
+/** Where a chapter jump from t lands: the next chapter's start (way 1), or (way -1) the start of the chapter t is in,
+ * or of the one before when t is within 3 s of its start; -1: none that way */
+export function chapterJump(chapters: Chapter[], t: number, way: number): number {
+    if (way > 0) {
+        for (var i = 0; i < chapters.length; i++) {
+            if (chapters[i].start > t + 1) {
+                return chapters[i].start;
+            }
+        }
+        return -1;
+    }
+    for (var k = chapters.length - 1; k >= 0; k--) {
+        if (chapters[k].start < t - 3) {
+            return chapters[k].start;
+        }
+    }
+    return -1;
 }
