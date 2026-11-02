@@ -40,7 +40,20 @@ A new version installs the same way, over the old one. You stay signed in.
 
 ## LG webOS
 
-For LG TVs with the webOS Homebrew Channel (rooted or in developer mode):
+For LG TVs with the webOS Homebrew Channel (rooted or in developer mode).
+
+The easiest way is to add my Homebrew repository. Then Bolli YouTube and Bolli DR are in the Homebrew Channel's list, and new versions show up there as updates:
+
+1. Open the Homebrew Channel and go to Settings (the gear).
+2. Choose **Add repository** and enter:
+
+   ```
+   https://aktiwers.github.io/bolli-homebrew/apps.json
+   ```
+
+3. Go back, and install Bolli YouTube from the list.
+
+Or install the IPK directly:
 
 ```
 https://github.com/aktiwers/bolli-youtube/releases/latest/download/bolli-youtube.ipk
