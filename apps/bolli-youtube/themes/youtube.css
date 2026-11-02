@@ -59,7 +59,6 @@ html, body { background: #0f0f0f; }
 /* A playlist's or a mix's tile: the edges of the stack over its picture (their colours YouTube's) */
 .bd-tile-stack { position: absolute; top: -5px; left: 10px; right: 10px; height: 5px; border-radius: 6px 6px 0 0; }
 .bd-tile-stack--1 { top: -10px; left: 20px; right: 20px; }
-.bd-tile-under:before { display: none; }
 .bd-tile-frame { background: #212121; border-radius: 12px; }
 /* Sharper pictures are 4:3 with the 16:9 picture in the middle: cropped to it. The background keeps the crop
    while a picture fades in: the TV's browser draws a bare picture on its own layer (as during the fade) whole and
@@ -207,8 +206,7 @@ html, body { background: #0f0f0f; }
 .by-search-mic { left: 104px; top: 44px; width: 24px; height: 24px; padding: 12px; border-radius: 24px; background: #303030; color: #f1f1f1; }
 .by-search-bar { left: 164px; top: 44px; width: 379px; height: 48px; line-height: 48px; padding: 0 20px 0 21px; border-radius: 24px;
                  background: #303030; font-size: 22px; font-weight: 500; color: #aaa; }
-.by-search-bar--focused { background: #f1f1f1; color: #0f0f0f; }
-.by-search-mic--focused { background: #f1f1f1; color: #0f0f0f; }
+.by-search-bar--focused, .by-search-mic--focused { background: #f1f1f1; color: #0f0f0f; }
 
 /* Settings, as YouTube's: the title by the logo; the list (a white box on the focused
    setting, a grey one on it while the focus is elsewhere; the groups' names small, grey, in capitals); a thin line;
@@ -513,5 +511,6 @@ html, body { background: #0f0f0f; }
 
 /* The seek preview: the frame with rounded corners, a light edge and a soft dark glow around it (the TV's video layer
    cannot be blurred), its time under it */
-.by-seek-preview-frame { border-radius: 8px; box-shadow: 0 0 0 2px #f1f1f1, 0 0 28px 10px rgba(0, 0, 0, .55); }
+.by-seek-preview-frame { border-radius: 8px; box-shadow: 0 0 0 2px #f1f1f1; }
+.by-seek-preview-glow { border-radius: 8px; box-shadow: 0 0 28px 10px rgba(0, 0, 0, .55); }
 .by-seek-preview-time { margin-top: 8px; font-size: 18px; font-weight: 500; color: #f1f1f1; text-shadow: 0 1px 3px rgba(0, 0, 0, .9); }

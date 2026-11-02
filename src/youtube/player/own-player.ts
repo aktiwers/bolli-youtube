@@ -22,7 +22,7 @@ import { prefs, setPref } from '../api/prefs.js';
 import { Segment, segmentAt, segments, skippedText } from '../api/sponsorblock.js';
 import { WatchReport } from '../api/stats.js';
 import { noAnswer } from '../api/youtube.js';
-import { AudioTrack, base, Caption, captionList, forgetStreams, Format, kindOf, NoStreams, pickFormat, playableStreams, sabrStreams, streams, Streams } from '../api/streams.js';
+import { AudioTrack, base, Caption, captionList, forgetStreams, Format, kindOf, MAX_LINES, NoStreams, pickFormat, playableStreams, sabrStreams, streams, Streams } from '../api/streams.js';
 import { channelPicture, watchInfo, WatchInfo } from '../api/watch.js';
 import { FillLoader } from '../ui/fill-loader.js';
 import { PanelLine } from '../ui/side-panel.js';
@@ -30,7 +30,7 @@ import { CAPTION_STYLES, Captions, loadCaptions, translationsRefused } from './c
 import { bufferedEnd, DashEngine, dropAhead, Engine, lengthOf } from './dash.js';
 import { OFF_START_S, pauseVideo, pictureKind, playVideo, releasePipeline } from './pipeline.js';
 import { note, ranges } from './play-log.js';
-import { BarMarks, chapterJump, nameAt } from './bar-marks.js';
+import { BarMarks, chapterJump } from './bar-marks.js';
 import { SeekPreview } from './seek-preview.js';
 import { SabrEngine } from './sabr-engine.js';
 import { StatsBox } from './stats-box.js';
@@ -56,8 +56,6 @@ var HOLD_DOUBLE_MS = 1500;
 var HOLD_MOST = 0.04;
 /** A video not playing this long after OK goes to YouTube's player */
 var START_GIVE_UP_MS = 15000;
-/** The most the TV shows and decodes (4K): the Auto and "Highest available" cap */
-var MAX_HEIGHT = 2160;
 /** A quality switch takes effect this far ahead (s), beyond what the TV's decoder already holds (removing buffer
  * under the decoder fails) */
 var QUALITY_SWITCH_S = 10;
@@ -643,20 +641,18 @@ export class OwnPlayer {
         var info = this.watch.details;
         var to = seconds * this.pressedBy > 0 && gap < DOUBLE_MS && (this.chapterRun || this.pressGap >= FRESH_MS) && info ?
             chapterJump(info.chapters, this.chapterRun ? this.target : this.firstFrom, seconds) : -1;
+        var fresh = seconds * this.pressedBy <= 0 || !(gap < REPEAT_MS || gap < HOLD_GAP_MS && this.pressGap < REPEAT_MS);
+        this.pressedAt = now;
+        this.pressGap = gap;
+        this.chapterRun = to >= 0;
         if (to >= 0) {
-            this.chapterRun = true;
-            this.pressedAt = now;
-            this.pressGap = gap;
             this.aim(Math.min(v.duration - 1, to));
             return;
         }
-        this.chapterRun = false;
-        if (seconds * this.pressedBy <= 0 || !(gap < REPEAT_MS || gap < HOLD_GAP_MS && this.pressGap < REPEAT_MS)) {
+        if (fresh) {
             this.heldSince = now;
         }
-        this.pressedAt = now;
         this.pressedBy = seconds;
-        this.pressGap = gap;
         var grow = Math.pow(2, Math.max(0, now - this.heldSince - HOLD_GROW_MS) / HOLD_DOUBLE_MS);
         var step = Math.round(Math.min(Math.abs(seconds) * grow, Math.max(Math.abs(seconds), v.duration * HOLD_MOST)));
         var from = this.target >= 0 ? this.target : v.currentTime;
@@ -667,10 +663,11 @@ export class OwnPlayer {
     /** The pending jump set to t (s), run once presses stop */
     private aim(t: number): void {
         this.target = t;
-        this.setMarker(t / this.video.duration);
+        // (The info bar first: the preview over it measures the bar once it shows)
         if (!this.watch.shown) {
             this.showOsd(false);
         }
+        this.setMarker(t / this.video.duration);
         clearTimeout(this.jumpTimer);
         var self = this;
         this.jumpTimer = setTimeout(function () { self.jumpNow(); }, JUMP_REST_MS) as unknown as number;
@@ -700,14 +697,12 @@ export class OwnPlayer {
         this.watch.setMarker(share);
         // The frame where a pending jump lands, over the bar that shows; the info bar's title and description hidden
         // meanwhile (the box stands where they are)
-        var on = this.watch.shown ? this.watch.seek : this.osdSeek;
-        (on === this.osdSeek ? this.watch.seek : this.osdSeek).hide();
+        this.osdSeek.hide();
+        this.watch.seek.hide();
         if (share >= 0) {
-            on.show(this.target, lengthOf(this.video));
-        } else {
-            on.hide();
+            (this.watch.shown ? this.watch.seek : this.osdSeek).show(this.target, this.length());
         }
-        toggleClass(this.el, 'by-player--seeking', share >= 0 && on === this.osdSeek && on.ready);
+        toggleClass(this.el, 'by-player--seeking', share >= 0 && !this.watch.shown && this.osdSeek.ready);
     }
 
     /** Open the watch page over the video (requesting its details if needed) */
@@ -1439,10 +1434,16 @@ export class OwnPlayer {
     /** Draw SponsorBlock segments and chapters on both bars once the duration is known. The length is the format's:
      * a kept pipeline reports the previous video's until the new one sets its own, which drew the marks out of place */
     private drawParts(): void {
-        var d = this.format ? this.format.duration || lengthOf(this.video) : 0;
+        var d = this.length();
         var info = this.watch.details;
         this.osdMarks.draw(this.segments, info ? info.chapters : [], d);
         this.watch.setMarks(this.segments, d);
+    }
+
+    /** The video's length (s; 0 unknown): its format's, as a kept pipeline reports the previous video's until the new
+     * one sets its own */
+    private length(): number {
+        return this.format ? this.format.duration || lengthOf(this.video) : 0;
     }
 
     /** Show YouTube's paid promotion notice at the start for as long as YouTube's player does (hidden by the watch
@@ -1478,13 +1479,9 @@ export class OwnPlayer {
         if (!c || this.captionAsked || !this.moving) {
             return;
         }
-        if (c.kind === 'translated' && translationsRefused()) {
-            this.untranslated(c);
-            return;
-        }
         this.captionAsked = true;
         var self = this;
-        loadCaptions(c.url, function () { return self.caption === c; }).then(function (track) {
+        loadCaptions(c.url, function () { return self.caption === c; }, c.kind === 'translated').then(function (track) {
             if (track && self.caption === c) {
                 self.track = track;
             }
@@ -1504,8 +1501,7 @@ export class OwnPlayer {
     /** While YouTube refuses translations, show the source of translation c instead, with a notice (the chosen
      * language stays, so the translation returns later) */
     private untranslated(c: Caption): void {
-        var url = c.url.replace(/&tlang=[^&]*/, '');
-        var from = (this.streams ? captionList(this.streams) : []).filter(function (one) { return one.url === url; })[0] || null;
+        var from = c.source || null;
         toast('YouTube is not translating subtitles right now.' + (from ? ' ' + from.name + ' shown.' : ''), undefined, PROBLEM);
         this.setCaption(from);
     }
@@ -1634,8 +1630,7 @@ export class OwnPlayer {
         if (this.osd.shown) {
             // The time and the name where a pending jump lands, else where it plays
             var at = this.target >= 0 ? this.target : v.currentTime;
-            var info = this.watch.details;
-            this.osd.setTime(dots([clock(at) + (length ? ' / ' + clock(length) : ''), nameAt(this.segments, info ? info.chapters : [], at)]),
+            this.osd.setTime(dots([clock(at) + (length ? ' / ' + clock(length) : ''), this.osdMarks.nameAt(at)]),
                 length ? v.currentTime / length : 0);
         }
         this.subtitleView.show(this.track ? this.track.textAt(v.currentTime) : null);
@@ -1760,7 +1755,7 @@ export class ListQueue {
  * original audio (stable volume if on); null: none playable */
 export function startFormats(s: Streams): { video: Format; audio: Format } | null {
     // At equal height and frame rate, the kept pipeline's codec, so it is reused (player/pipeline.ts)
-    var video = pickFormat(s.videos, Math.min(prefs().quality || MAX_HEIGHT, MAX_HEIGHT), pictureKind());
+    var video = pickFormat(s.videos, Math.min(prefs().quality || MAX_LINES, MAX_LINES), pictureKind());
     var track = s.audios[0];
     return video && track ? { video: video, audio: audioOf(track) } : null;
 }

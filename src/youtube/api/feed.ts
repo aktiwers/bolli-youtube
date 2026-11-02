@@ -620,15 +620,15 @@ function fromLockup(lockup: any): Video | null {
         }).join(' • ');
     });
     // Videos, music and mixes (starting with their first video) play; the rest open a page
-    var watch = get(lockup, 'rendererContext', 'commandContext', 'onTap', 'innertubeCommand', 'watchEndpoint');
+    var tap = get(lockup, 'rendererContext', 'commandContext', 'onTap', 'innertubeCommand');
+    var watch = get(tap, 'watchEndpoint');
+    var thumb = get(lockup, 'contentImage', 'thumbnailViewModel') || get(lockup, 'contentImage', 'collectionThumbnailViewModel', 'primaryThumbnail', 'thumbnailViewModel');
     var mix = lockup.contentType === 'LOCKUP_CONTENT_TYPE_PLAYLIST' && watch && watch.videoId ? watch.videoId as string : '';
     var plays = (lockup.contentType === 'LOCKUP_CONTENT_TYPE_VIDEO' || lockup.contentType === 'LOCKUP_CONTENT_TYPE_MUSIC') && lockup.contentId;
     if (!plays && !mix) {
-        var opens = pageOf(get(lockup, 'rendererContext', 'commandContext', 'onTap', 'innertubeCommand'));
-        var image = get(lockup, 'contentImage', 'collectionThumbnailViewModel', 'primaryThumbnail', 'thumbnailViewModel', 'image') ||
-            get(lockup, 'contentImage', 'thumbnailViewModel', 'image');
+        var opens = pageOf(tap);
         var page: Video | null = opens ? { id: opens.browseId + (opens.params || ''), title: text(get(meta, 'title')), channel: '', length: '',
-            info: '', page: opens, image: picture(image) } : null;
+            info: '', page: opens, image: picture(get(thumb, 'image')) } : null;
         // A playlist or show: a stack, with its count ("76 episodes")
         var collection = get(lockup, 'contentImage', 'collectionThumbnailViewModel');
         if (page && collection) {
@@ -650,8 +650,7 @@ function fromLockup(lockup: any): Video | null {
     var length = '';
     var live = false;
     var audio = false;
-    var image = get(lockup, 'contentImage', 'thumbnailViewModel') || get(lockup, 'contentImage', 'collectionThumbnailViewModel', 'primaryThumbnail', 'thumbnailViewModel');
-    (get(image, 'overlays') || []).forEach(function (o: any) {
+    (get(thumb, 'overlays') || []).forEach(function (o: any) {
         var badges = get(o, 'thumbnailBottomOverlayViewModel', 'badges') || get(o, 'thumbnailOverlayBadgeViewModel', 'thumbnailBadges') || [];
         badges.forEach(function (b: any) {
             var badge = get(b, 'thumbnailBadgeViewModel');
@@ -673,7 +672,7 @@ function fromLockup(lockup: any): Video | null {
         found.labelIcon = 'mix';
         found.stack = STACK;
         // The mix's own picture, not its first video's
-        found.image = picture(get(image, 'image'));
+        found.image = picture(get(thumb, 'image'));
     }
     var press = get(lockup, 'rendererContext', 'commandContext', 'onLongPress');
     if (press) {

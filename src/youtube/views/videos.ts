@@ -319,7 +319,8 @@ export class SearchBar {
     }
 
     /** OK searches, Left and Right move between the microphone and the bar; false: not handled (Left from the
-     * microphone, or from the bar when there is no microphone to go to) */
+     * microphone, or from the bar when there is no microphone to go to; Down, after which the focus comes back to
+     * the bar) */
     onKey(code: number): boolean {
         switch (code) {
             case KEY.OK:
@@ -328,20 +329,27 @@ export class SearchBar {
             case KEY.LEFT:
             case KEY.RIGHT:
                 var mic = code === KEY.LEFT;
-                if (mic === this.onMic || mic && !canListen()) {
+                if (mic === this.onMic || mic && !listens()) {
                     return !mic;
                 }
                 this.onMic = mic;
                 this.setFocused(true);
                 return true;
+            case KEY.DOWN:
+                this.onMic = false;
+                return false;
         }
         return false;
     }
+}
 
-    /** The focus left the bar: it comes back to the bar, not the microphone */
-    leave(): void {
-        this.onMic = false;
+/** The device has speech recognition (asked once: on Android each ask is a call into the system) */
+var listening: boolean | null = null;
+function listens(): boolean {
+    if (listening === null) {
+        listening = canListen();
     }
+    return listening;
 }
 
 /** A copy of layout with some values changed */
@@ -815,12 +823,13 @@ export class FeedView implements View {
     private drawEmpty(text: string): void {
         this.emptyEl.innerHTML = '';
         setShown(this.emptyEl, !!text);
-        for (var i = 0; text && i < EMPTY_TILES; i++) {
+        if (!text) {
+            return;
+        }
+        for (var i = 0; i < EMPTY_TILES; i++) {
             this.emptyEl.appendChild(h('div', 'by-empty-tile by-empty-tile--' + i));
         }
-        if (text) {
-            this.emptyEl.appendChild(h('div', 'by-empty-text', text));
-        }
+        this.emptyEl.appendChild(h('div', 'by-empty-text', text));
     }
 
     /** Dismisses YouTube's message (one of its buttons asked to) and shows the empty text instead */
@@ -836,14 +845,10 @@ export class FeedView implements View {
         }
         switch (code) {
             case KEY.DOWN:
-                if (this.bar) {
-                    this.bar.leave();
-                }
                 this.at = 'rows';
                 this.setFocused(this.focused);
                 return true;
             case KEY.UP:
-            case KEY.RIGHT:
                 return true;
         }
         return false;

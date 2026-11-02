@@ -1,5 +1,7 @@
 {
-    // ES5 for webOS 3.x (Chrome 38), which has Promise, Map and Set natively
+    // The apps run in webOS 3.x's WebAppMgr (Chrome 38): ES5 syntax only.
+    // Chrome 38 has Promise, Map and Set natively, so their typings are allowed;
+    // nothing else from ES2015+ (no polyfill bundle on purpose).
     "compilerOptions": {
         "target": "ES5",
         "module": "ES2015",

@@ -78,6 +78,8 @@ export interface Caption {
     name: string;
     /** Uploaded, speech recognition, or translated by YouTube from another track */
     kind: 'own' | 'asr' | 'translated';
+    /** A translation's source track (shown instead while YouTube refuses translations) */
+    source?: Caption;
 }
 
 /** A video's audio in one language (the original or a dub) */
@@ -389,14 +391,16 @@ function supported(mime: string): boolean {
     return SUPPORTED[mime];
 }
 
-/** The display's line count (0: not known yet; Infinity: no limit) */
+/** The most lines the player plays: the TV's 4K (also the Auto and "Highest available" cap: own-player.ts) */
+export var MAX_LINES = 2160;
+/** The most lines this device shows (0: not known yet): MAX_LINES, on Android at most its display's */
 var lines = 0;
-/** Whether the device should get this format: on Android up to the display's lines (by the short side, so portrait
- * videos count by width; larger formats drop frames), on the TV any (4K: own-player.ts) */
+/** Whether the device should get this format: up to its lines, by the short side so portrait videos count by width
+ * (on Android, formats larger than the display drop frames) */
 function shown(f: any): boolean {
     if (!lines) {
         var shell = typeof window === 'undefined' ? null : android();
-        lines = shell && shell.screenHeight && shell.screenHeight() || Infinity;
+        lines = Math.min(MAX_LINES, shell ? shell.screenHeight() : MAX_LINES);
     }
     return !f.height || Math.min(f.width || f.height, f.height) <= lines;
 }
@@ -456,11 +460,13 @@ export function captionList(s: Streams): Caption[] {
     var captions = s.captions.slice();
     var t = s.translations;
     if (t) {
+        var source = captions.filter(function (c) { return c.url === t!.from + '&fmt=vtt'; })[0];
         t.to.forEach(function (l) {
             // Another dub's auto-generated track is timed to that dub, so it does not count
             var has = captions.some(function (c) { return c.kind === 'own' && sameLanguage(c.language, l.code); }) || !!t!.heard && sameLanguage(t!.heard, l.code);
             if (wanted.indexOf(l.code) >= 0 && !has) {
-                captions.push({ url: t!.from + '&fmt=vtt&tlang=' + l.code, language: l.code, name: l.name + ' (auto-translated)', kind: 'translated' });
+                captions.push({ url: t!.from + '&fmt=vtt&tlang=' + l.code, language: l.code, name: l.name + ' (auto-translated)', kind: 'translated',
+                    source: source });
             }
         });
     }

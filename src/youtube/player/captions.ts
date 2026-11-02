@@ -56,12 +56,15 @@ export function translationsRefused(): boolean {
 }
 
 /** Load the subtitles at url in the set style, if still() says they are still wanted (else null). Retries once on
- * failure, except a refused translation, which rejects with the 429. */
-export function loadCaptions(url: string, still: () => boolean): Promise<Captions | null> {
+ * failure; a translation (translated) is not asked for while YouTube refuses them, and a refusal rejects at once. */
+export function loadCaptions(url: string, still: () => boolean, translated: boolean): Promise<Captions | null> {
+    if (translated && translationsRefused()) {
+        return Promise.reject({ status: 429 });
+    }
     return getText(url).then(null, function (e) {
         // Retry once: translated subtitles sometimes fail once and then load (the reason goes to the play log)
         note('subtitles failed', String(e && (e.message || e.status) || e));
-        if (e && e.status === 429 && /[?&]tlang=/.test(url)) {
+        if (e && e.status === 429 && translated) {
             refusedAt = Date.now();
             throw e;
         }

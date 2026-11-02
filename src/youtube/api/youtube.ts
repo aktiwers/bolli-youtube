@@ -163,6 +163,7 @@ export function tvPage(): Promise<TvPage> {
             if (!context || !context.client || !key) {
                 throw new Error('YouTube\'s TV page has changed');
             }
+            context.client.hl = english();
             mark('tvPage');
             var got: TvPage = { html: html, context: context, apiKey: key[1], oauth: [oauthClient(html, 0), oauthClient(html, 1)] };
             save(CLIENT_KEY, { context: got.context, apiKey: got.apiKey, oauth: got.oauth, at: Date.now() });
@@ -185,6 +186,7 @@ export function tvClient(): Promise<Client> {
         var age = kept && kept.context && kept.context.client && kept.apiKey && kept.oauth ? Date.now() - kept.at : Infinity;
         clientKept = age < CLIENT_KEEP_MS;
         if (clientKept) {
+            kept!.context.client.hl = english();
             client = Promise.resolve(kept as Client);
             if (age > CLIENT_FRESH_MS) {
                 tvPage().then(null, function () { return undefined; });
@@ -197,6 +199,14 @@ export function tvClient(): Promise<Client> {
         }
     }
     return client;
+}
+
+/** The language YouTube is asked in: English (the TV's own, e.g. en-GB, when it is English) whatever the TV's
+ * language, as the app's words are English and it reads YouTube's texts as English ones (a length is 6:10:58 in
+ * English, 6.10.58 in Danish) */
+function english(): string {
+    var tvs = navigator.language || '';
+    return /^en(-|$)/.test(tvs) ? tvs : 'en';
 }
 
 /** Drops cached client details YouTube refused; the next request fetches the /tv page */
@@ -275,8 +285,6 @@ function ask(endpoint: string, body: { [key: string]: unknown }, signedIn: () =>
             headers['X-YouTube-Client-Name'] = TVHTML5;
             headers['X-YouTube-Client-Version'] = t.context.client.clientVersion || '';
             var context = JSON.parse(JSON.stringify(t.context));
-            // The TV's language, as YouTube's TV app sends it (the /tv page says "en" even when the app uses e.g. en-GB)
-            context.client.hl = navigator.language || context.client.hl;
             if (sign && sign.channel) {
                 context.user = context.user || {};
                 context.user.onBehalfOfUser = sign.channel;

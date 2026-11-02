@@ -17,8 +17,8 @@ export interface AndroidShell {
      * blanks the screen a moment) */
     preferFrameRate(hz: number): boolean;
     /** The display's maximum height in lines (its largest mode: 1080 on an
-     * HD Chromecast); missing in older builds of the Android app */
-    screenHeight?(): number;
+     * HD Chromecast) */
+    screenHeight(): number;
 }
 
 /** The Android app around the page, or null (webOS, a browser) */

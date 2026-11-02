@@ -93,15 +93,20 @@ export function segmentAt(list: Segment[], t: number, skipped: { [index: number]
     return -1;
 }
 
-/** "Skipped the sponsor" */
+/** A segment's category as Settings lists it (undefined: one not listed) */
+function kindOf(s: Segment): PartKind | undefined {
+    return PARTS.filter(function (k) { return k.id === s.category; })[0];
+}
+
 /** A segment's name as shown after the time ("Sponsor") */
 export function segmentName(s: Segment): string {
-    var kind = PARTS.filter(function (k) { return k.id === s.category; })[0];
+    var kind = kindOf(s);
     return kind ? kind.label : s.category;
 }
 
+/** "Skipped the sponsor" */
 export function skippedText(s: Segment): string {
-    var kind = PARTS.filter(function (k) { return k.id === s.category; })[0];
+    var kind = kindOf(s);
     return 'Skipped ' + (kind ? kind.skipped : s.category);
 }
 

@@ -1,16 +1,18 @@
 // Marks on a progress bar, as in YouTube's player: SponsorBlock segments (a stripe each in its category's colour,
 // as in the SponsorBlock extension: themes/<id>.css .by-sb--sponsor …) and chapter breaks (a gap where each chapter
-// after the first begins: .by-chapter-gap), plus the current chapter's name (chapterAt). Chapters come with the
+// after the first begins: .by-chapter-gap), and the name of the part at a time (nameAt). Chapters come with the
 // watch page details (api/watch.ts).
 
 import { h } from '../../core/dom.js';
-import { Segment, segmentName } from '../api/sponsorblock.js';
+import { Segment, segmentAt, segmentName } from '../api/sponsorblock.js';
 import { Chapter } from '../api/watch.js';
 
 export class BarMarks {
     private el: HTMLElement;
     /** What is drawn, so an unchanged redraw is skipped (emptying and refilling the bar flickers on the TV) */
     private drawn = '';
+    private segments: Segment[] = [];
+    private chapters: Chapter[] = [];
 
     /** Inserted into bar before the given element (null: last) */
     constructor(bar: HTMLElement, before: Node | null) {
@@ -20,6 +22,8 @@ export class BarMarks {
 
     /** Draws the segments and chapters of a video of duration s (nothing when the duration is unknown) */
     draw(segments: Segment[], chapters: Chapter[], duration: number): void {
+        this.segments = segments;
+        this.chapters = chapters;
         var key = duration > 0 ? duration.toFixed(1) + '|' + segments.map(function (s) { return s.category + s.start + '-' + s.end; }).join() +
             '|' + chapters.map(function (c) { return c.start; }).join() : '';
         if (key === this.drawn) {
@@ -41,6 +45,12 @@ export class BarMarks {
         }
     }
 
+    /** The name shown after the time at t: the SponsorBlock segment's there, else the chapter's ('' none) */
+    nameAt(t: number): string {
+        var at = segmentAt(this.segments, t, {});
+        return at >= 0 ? segmentName(this.segments[at]) : chapterAt(this.chapters, t);
+    }
+
     /** Adds a mark at start (s) in a video of duration */
     private mark(className: string, start: number, duration: number): HTMLElement {
         var el = h('div', className);
@@ -50,22 +60,12 @@ export class BarMarks {
 }
 
 /** The name of the chapter playing at t ('' none) */
-export function chapterAt(chapters: Chapter[], t: number): string {
+function chapterAt(chapters: Chapter[], t: number): string {
     var name = '';
     for (var i = 0; i < chapters.length && chapters[i].start <= t; i++) {
         name = chapters[i].title;
     }
     return name;
-}
-
-/** The name shown after the time at t: the SponsorBlock segment's there, else the chapter's ('' none) */
-export function nameAt(segments: Segment[], chapters: Chapter[], t: number): string {
-    for (var i = 0; i < segments.length; i++) {
-        if (t >= segments[i].start && t < segments[i].end) {
-            return segmentName(segments[i]);
-        }
-    }
-    return chapterAt(chapters, t);
 }
 
 /** Where a chapter jump from t lands: the next chapter's start (way 1), or (way -1) the start of the chapter t is in,

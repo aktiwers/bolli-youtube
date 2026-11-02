@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Full screen on the app's dark colour from the first frame (no white flash) -->
+    <!-- Full screen on the app's own dark colour from the first frame (no white flash) -->
     <style name="Bolli" parent="@android:style/Theme.Black.NoTitleBar.Fullscreen">
         <item name="android:windowBackground">@color/background</item>
     </style>

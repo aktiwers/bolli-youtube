@@ -221,7 +221,6 @@ export class ChannelView implements View {
                     this.aboutPanel();
                     return true;
                 case KEY.DOWN:
-                    this.bar.leave();
                     this.go(this.at === 'bar' && this.hasMore() ? 'more' : 'buttons');
                     return true;
                 case KEY.UP:

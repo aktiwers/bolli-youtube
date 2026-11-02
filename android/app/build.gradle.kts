@@ -17,8 +17,8 @@ fun versionCodeOf(version: String): Int {
     return parts[0] * 1000000 + parts[1] * 1000 + parts[2]
 }
 
-/** A Java string literal for BuildConfig */
-fun quoted(s: String): String = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+/** A Java string literal for BuildConfig ("null": none) */
+fun quoted(s: String?): String = if (s == null) "null" else "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
 android {
     namespace = "org.bolli.youtube"
@@ -32,7 +32,10 @@ android {
         versionName = appVersion
         versionCode = versionCodeOf(appVersion)
         manifestPlaceholders["label"] = info["title"] as String
-        // YouTube serves its TV page and client by the LG TV browser's user agent
+        // As the LG TV's browser names itself (the web app there: its
+        // appinfo's userAgent, filled in by webOS): YouTube serves its TV
+        // app's page and client by it, and the web app asks for both as
+        // on the TV
         buildConfigField("String", "USER_AGENT", quoted("LG Browser/8.00.00 (webOS.TV-2017), _TV_O18/06.00.25 (LG, OLED55C7V-Z, wired)"))
         // Search's microphone: the device's language
         buildConfigField("String", "SPEECH_LANGUAGE", quoted(""))

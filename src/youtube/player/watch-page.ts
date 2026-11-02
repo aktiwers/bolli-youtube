@@ -22,7 +22,7 @@ import { PanelLine, paragraphs, SidePanel } from '../ui/side-panel.js';
 import { metrics, themed } from '../ui/theme.js';
 import { VideoTiles } from '../views/videos.js';
 import { bufferedEnd, lengthOf } from './dash.js';
-import { BarMarks, nameAt } from './bar-marks.js';
+import { BarMarks } from './bar-marks.js';
 import { SeekPreview } from './seek-preview.js';
 
 var HIDE_MS = 8000;
@@ -73,8 +73,6 @@ export class WatchPage {
     private marks: BarMarks;
     /** The seek preview over this page's bar */
     seek: SeekPreview;
-    /** The SponsorBlock segments on the bar, for the name after the time */
-    private segments: Segment[] = [];
     private avatar: HTMLImageElement;
     private subscribeButton: HTMLElement;
     private playButton: HTMLElement;
@@ -253,7 +251,6 @@ export class WatchPage {
 
     /** Draws SponsorBlock segments and the chapters (from the details) on the bar, for a video of duration s */
     setMarks(segments: Segment[], duration: number): void {
-        this.segments = segments;
         this.marks.draw(segments, this.info ? this.info.chapters : [], duration);
     }
 
@@ -642,7 +639,7 @@ export class WatchPage {
         var d = lengthOf(v);
         var t = v.currentTime;
         // The segment's or chapter's name after the time, as on YouTube
-        setText(this.time, dots([clock(t), nameAt(this.segments, this.info ? this.info.chapters : [], t)]));
+        setText(this.time, dots([clock(t), this.marks.nameAt(t)]));
         setText(this.length, d ? clock(d) : '');
         var played = d ? Math.min(1, t / d).toFixed(3) : '0';
         var loaded = d ? Math.min(1, bufferedEnd(v.buffered, t, 1) / d).toFixed(3) : '0';
