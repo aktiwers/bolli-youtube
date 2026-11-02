@@ -33,13 +33,20 @@ export interface Prefs {
     sabr: boolean;
     /** Tile thumbnail size: 'standard' (320 px wide), 'sharp' (480) or 'sharpest' (640) */
     pictures: string;
+    /** YouTube's most replayed graph over the player's progress bar (api/replays.ts) */
+    replays: boolean;
+    /** DeArrow (api/dearrow.ts): '' off, 'classic' or 'casual' */
+    dearrow: string;
+    /** DeArrow's options: 'thumbnails', 'frames' (a random frame where none was chosen), 'tidy' (titles tidied) */
+    dearrowOptions: string[];
 }
 
 /** The quality "Highest available": 8K's height, so a player picks the most the video and the device allow */
 export var HIGHEST = 4320;
 
 var KEY = 'youtube.prefs';
-var DEFAULTS: Prefs = { skip: ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'music_offtopic'], theme: 'youtube', startPage: 'home', quality: 0, preload: true, player: 'bolli', history: true, autoplay: true, autoplayWait: 10, stableVolume: false, previews: 'sound', captions: '', captionStyle: 'words', captionLanguages: [], startSign: true, sabr: false, pictures: 'sharpest' };
+var DEFAULTS: Prefs = { skip: ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'music_offtopic'], theme: 'youtube', startPage: 'home', quality: 0, preload: true, player: 'bolli', history: true, autoplay: true, autoplayWait: 10, stableVolume: false, previews: 'sound', captions: '', captionStyle: 'words', captionLanguages: [], startSign: true, sabr: false, pictures: 'sharpest', replays: true, dearrow: '',
+    dearrowOptions: ['thumbnails', 'frames', 'tidy'] };
 
 /** Read once (they are read on every key) and updated by setPref. Only changed settings are stored, so a new
  * default still applies to the rest. */
@@ -56,6 +63,14 @@ export function prefs(): Prefs {
         stored.skip = [];
     }
     delete stored.sponsorBlock;
+    // Migrate DeArrow's list of parts to its mode and options
+    if (stored.dearrow instanceof Array) {
+        var parts = stored.dearrow as string[];
+        stored.dearrow = parts.length ? 'classic' : '';
+        if (parts.length) {
+            stored.dearrowOptions = DEFAULTS.dearrowOptions.filter(function (o) { return o === 'tidy' || parts.indexOf(o) >= 0; });
+        }
+    }
     var read: { [name: string]: unknown } = {};
     for (var name in DEFAULTS) {
         // The stored value, else the default (e.g. a setting added since)

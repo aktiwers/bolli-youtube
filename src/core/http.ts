@@ -39,6 +39,15 @@ export function postJson<T>(url: string, body: unknown, headers?: { [name: strin
     return send('POST', url, JSON.stringify(body), all).then(function (text) { return parse<T>(text, url); });
 }
 
+/** POST JSON, the reply as text (for reading a part of a big reply without parsing it all) */
+export function postText(url: string, body: unknown, headers?: { [name: string]: string }): Promise<string> {
+    var all: { [name: string]: string } = { 'Content-Type': 'application/json' };
+    for (var name in headers) {
+        all[name] = headers[name];
+    }
+    return send('POST', url, JSON.stringify(body), all);
+}
+
 /** PUT or DELETE without a body; the reply body is ignored */
 export function sendRequest(method: string, url: string, headers?: { [name: string]: string }): Promise<void> {
     return send(method, url, null, headers).then(function () {

@@ -19,7 +19,7 @@ import { search, Video } from '../api/feed.js';
 import { keepSearch, recentSearches, Suggestion, suggestions } from '../api/suggest.js';
 import { icon, setIcon } from '../ui/icons.js';
 import { metrics } from '../ui/theme.js';
-import { Paging, rowH, VideoTiles } from './videos.js';
+import { brandedRows, Paging, rowH, VideoTiles } from './videos.js';
 
 /** Suggestions are requested once typing pauses this long (YouTube's app requests on every key) */
 var SUGGEST_MS = 80;
@@ -81,6 +81,8 @@ export class SearchView implements View {
 
     /** open: OK on a tile; onBack: the back arrow (or Back); ahead: prefetches a term's results */
     constructor(private open: (video: Video) => void, private onBack: () => void, private ahead: (term: string) => void) {
+        var self = this;
+        this.tiles.shown = function () { return self.stack.rows; };
         this.el = h('div', 'bd-search');
         setShown(this.el, false);
         this.content = h('div', 'bd-search-content');
@@ -128,6 +130,7 @@ export class SearchView implements View {
     }
 
     show(): void {
+        this.tiles.rebrand();
         setShown(this.el, true);
         this.stack.setShown(true);
         this.mark();
@@ -145,7 +148,7 @@ export class SearchView implements View {
         }
         var asked = ++this.searchAsked;
         var self = this;
-        search('').then(function (rows) {
+        search('').then(brandedRows).then(function (rows) {
             if (asked === self.searchAsked && !self.keyboard.text) {
                 self.recommended = true;
                 self.paging.set(rows.shelves, rows.next);
@@ -359,7 +362,7 @@ export class SearchView implements View {
         // No status text while loading
         setText(this.status, '');
         var self = this;
-        search(term).then(function (rows) {
+        search(term).then(brandedRows).then(function (rows) {
             if (asked !== self.searchAsked) {
                 return;
             }

@@ -318,6 +318,9 @@ html, body { background: #0f0f0f; }
 .by-player .osd-time { display: block; width: auto; margin-bottom: 12px; white-space: nowrap; }
 .by-player .osd-bar { display: block; width: 1168px; }
 
+/* The most replayed graph: a light grey hill, as on YouTube */
+.by-replays path { fill: rgba(241, 241, 241, .38); }
+
 /* The chapter row's cards: YouTube's picture with rounded corners and the start time on it in a tile's badge (with
    .bd-tile-label), the name under it in a tile's grey; the selected card ringed white with its name white, as a
    focused tile */

@@ -184,8 +184,21 @@ export function keptPage(p: Page): Promise<Rows> {
 /** Prefetches a page (the focus rests on its tile), so keptPage has it at once */
 export function pageAhead(p: Page): void {
     if (keepable(p)) {
-        pages.aheadJson(pageKey(p), function () { return pageJson(p); });
+        pages.aheadJson(pageKey(p), function () { return pageJson(p).then(tapped); });
     }
+}
+
+/** Told the rows (as JSON text) of each page and search fetched ahead, so what they show is prepared too (main.ts) */
+var aheadTap: ((json: string) => void) | null = null;
+export function tapAhead(fn: (json: string) => void): void {
+    aheadTap = fn;
+}
+
+function tapped(json: string): string {
+    if (aheadTap) {
+        aheadTap(json);
+    }
+    return json;
 }
 
 /** A page worth caching (or prefetching) */
@@ -272,7 +285,7 @@ export function search(query: string): Promise<Rows> {
 
 /** Prefetches query's results (the focus rests on a suggestion or on Search) */
 export function searchAhead(query: string): void {
-    searches.aheadJson(query, function () { return askSearch(query); });
+    searches.aheadJson(query, function () { return askSearch(query).then(tapped); });
 }
 
 /** query's results as JSON text (for the cache) */

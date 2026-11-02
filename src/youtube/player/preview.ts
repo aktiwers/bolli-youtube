@@ -6,9 +6,10 @@
 // place; hence the preview uses the codec the player would pick (VP9 or H.264).
 // The TV draws video on its own layer (a video inside the rounded, clipped tile
 // played but never showed), so the player's video lies over the tile with a ring
-// over its corners. It stops on any other key, after PREVIEW_MS, or when a player
-// shows; its position is kept a while so the opened video resumes there. Fails
-// quietly (the picture stays).
+// over its corners. It stops on any other key, after PREVIEW_MS (or at the
+// video's end), its sound fading out over the last FADE_MS to silence as it
+// stops, or when a player shows; its position is kept a while so the opened
+// video resumes there. Fails quietly (the picture stays).
 
 import { prefs } from '../api/prefs.js';
 import { segments } from '../api/sponsorblock.js';
@@ -16,8 +17,9 @@ import { kindOf, pickFormat, Streams, streams } from '../api/streams.js';
 import { OwnPlayer, pastParts, startFormats } from './own-player.js';
 
 var HEIGHT = 480;
-/** As YouTube's previews (their durationMs) */
-var PREVIEW_MS = 40000;
+/** How long a preview plays at most, and how long its sound fades out before it stops */
+var PREVIEW_MS = 90000;
+var FADE_MS = 8000;
 /** The opened video resumes at the preview's position if the preview played at least GO_ON_S and stopped within
  * GO_ON_MS */
 var GO_ON_S = 2;
@@ -26,6 +28,7 @@ var GO_ON_MS = 60000;
 export class TilePreview {
     private id = '';
     private timer = 0;
+    private fadeTimer = 0;
     /** Incremented per preview, so late answers for an old one are dropped */
     private gen = 0;
     /** Where the last preview stopped */
@@ -55,7 +58,11 @@ export class TilePreview {
                     self.stop();
                 }
             });
-            self.timer = setTimeout(function () { self.stop(); }, PREVIEW_MS) as unknown as number;
+            // Until PREVIEW_MS, or the video's end if that comes first, the sound fading out over the last FADE_MS
+            var left = format.duration > 0 ? (format.duration - pastParts(got[1], 0)) * 1000 : 0;
+            var length = left > 0 ? Math.min(PREVIEW_MS, left) : PREVIEW_MS;
+            self.fadeTimer = setTimeout(function () { self.player.peekFade(Math.min(FADE_MS, length)); }, Math.max(0, length - FADE_MS)) as unknown as number;
+            self.timer = setTimeout(function () { self.stop(); }, length) as unknown as number;
         }, function () { return undefined; });
     }
 
@@ -75,6 +82,7 @@ export class TilePreview {
     stop(): void {
         this.gen++;
         clearTimeout(this.timer);
+        clearTimeout(this.fadeTimer);
         var t = this.player.peekStop();
         if (t > 0) {
             this.left = { id: this.id, t: t, at: Date.now() };

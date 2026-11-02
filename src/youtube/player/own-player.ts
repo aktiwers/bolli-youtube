@@ -17,21 +17,25 @@ import { PlayerOsd } from '../../player/osd.js';
 import { SubtitleView } from '../../player/subtitles.js';
 import { PROBLEM, skipEdge, toast } from '../ui/toast.js';
 import { knownAvatar } from '../api/avatars.js';
+import { dearrowOn, dearrowPicture, dearrowTitle, dearrowWait } from '../api/dearrow.js';
 import { dots, Page, thumbnail, thumbnailFallback, Video, videoOf } from '../api/feed.js';
 import { prefs, setPref } from '../api/prefs.js';
+import { Replays, replays } from '../api/replays.js';
 import { Segment, segmentAt, segments, skippedText } from '../api/sponsorblock.js';
 import { WatchReport } from '../api/stats.js';
 import { noAnswer } from '../api/youtube.js';
-import { AudioTrack, base, Caption, captionList, forgetStreams, Format, kindOf, MAX_LINES, NoStreams, pickFormat, playableStreams, sabrStreams, streams, Streams } from '../api/streams.js';
+import { AudioTrack, AUTO_LINES, base, Caption, captionList, forgetStreams, Format, kindOf, NoStreams, pickFormat, playableStreams, sabrStreams, streams, Streams } from '../api/streams.js';
 import { channelPicture, watchInfo, WatchInfo } from '../api/watch.js';
 import { FillLoader } from '../ui/fill-loader.js';
 import { PanelLine } from '../ui/side-panel.js';
 import { CAPTION_STYLES, Captions, loadCaptions, translationsRefused } from './captions.js';
 import { bufferedEnd, DashEngine, dropAhead, Engine, lengthOf } from './dash.js';
+import { LiveEngine, liveShare, LiveSpan, liveTime } from './live-engine.js';
 import { OFF_START_S, pauseVideo, pictureKind, playVideo, releasePipeline } from './pipeline.js';
 import { note, ranges } from './play-log.js';
 import { BarMarks, chapterJump } from './bar-marks.js';
 import { ChapterRow } from './chapter-row.js';
+import { ReplayGraph } from './replay-graph.js';
 import { SeekPreview } from './seek-preview.js';
 import { SabrEngine } from './sabr-engine.js';
 import { StatsBox } from './stats-box.js';
@@ -85,6 +89,10 @@ function keysLine(chapters: boolean): string {
     return 'OK pause  ·  Left / Right jump 10 s (twice: chapter)  ·  Up ' + (chapters ? 'chapters and ' : '') + 'the description  ·  ' +
         'Down related videos, subtitles and more';
 }
+/** How often a preview's fading sound steps down (ms) */
+var FADE_STEP_MS = 100;
+/** How long a start waits for DeArrow's title of a video no tile asked it for (ms) */
+var DEARROW_START_MS = 5000;
 /** The keys line while the chapter row is open */
 var KEYS_LINE_ROW = 'Left / Right chapter  ·  OK play from there  ·  Up, Down or Back close';
 
@@ -151,6 +159,9 @@ export class OwnPlayer {
      * again when the row closes without a pick) */
     private chapterRow: ChapterRow;
     private chapterPaused = false;
+    /** YouTube's most replayed graph over the info bar's progress bar, and the video's (null: none) */
+    private osdReplays: ReplayGraph;
+    private replays: Replays | null = null;
     /** YouTube's "Includes paid promotion" chip, top left for the first seconds (Streams.paid) */
     private paidChip: HTMLElement;
     private paidTimer = 0;
@@ -220,6 +231,9 @@ export class OwnPlayer {
     private captionAsked = false;
     /** A tile preview playing in this player's video (small, at the tile; the app keeps the keys). OK on the tile
      * takes it over as it plays, then switches to the target format. */
+    /** The player's volume (0-1: setVolume), and the preview's fade out (0: none) */
+    private volume = 1;
+    private fadeTimer = 0;
     private peek: Taken | null = null;
     /** Called when the preview stops by itself (failed or ended) */
     private peekEnded: () => void = function () { return undefined; };
@@ -261,7 +275,8 @@ export class OwnPlayer {
             subtitles: function () { self.watch.panel.open('Subtitles', function () { return self.subtitleLines(); }); },
             settings: function () { self.settingsPanel(); },
             rest: function (video: Video) { self.onAhead(video, false); },
-            restPage: function (page: Page) { self.onPageAhead(page); }
+            restPage: function (page: Page) { self.onPageAhead(page); },
+            live: function () { return self.liveSpan(); }
         });
         // The subtitles go under the watch page (themes: .by-player--watch)
         this.watch.onShown = function (shown) { toggleClass(self.el, 'by-player--watch', shown); };
@@ -281,6 +296,7 @@ export class OwnPlayer {
         var bar = this.el.querySelector('.osd-bar') as HTMLElement;
         this.osdMarks = new BarMarks(bar, bar.querySelector('.osd-marker'));
         this.osdSeek = new SeekPreview(bar);
+        this.osdReplays = new ReplayGraph(bar);
         this.chapterRow = new ChapterRow(bar.parentNode as Node);
         this.paidChip = this.el.appendChild(paidChip()) as HTMLElement;
         toggleClass(this.paidChip, 'by-paid--start', true);
@@ -368,7 +384,7 @@ export class OwnPlayer {
         this.letGo();
         var self = this;
         this.peekEnded = stopped;
-        var engine: DashEngine = new DashEngine(this.video, function (why) {
+        var engine: Engine = engineFor(this.video, s, function (why) {
             if (engine === self.engine) {
                 self.failed(why);
             } else if (self.peek && self.peek.engine === engine) {
@@ -437,6 +453,9 @@ export class OwnPlayer {
         reset(this.ring);
         this.video.style.display = '';
         this.video.muted = false;
+        // Full sound again (a preview taken over while its sound faded)
+        clearInterval(this.fadeTimer);
+        this.video.volume = this.volume;
         toggleClass(this.el, 'by-player--peek', false);
         toggleClass(this.ring, 'by-peek-ring--on', false);
     }
@@ -514,11 +533,13 @@ export class OwnPlayer {
             return null;
         }
         var t = this.position();
+        // A live stream: within its window
+        var w = this.window();
         return {
             id: want.id,
-            t: t,
-            duration: lengthOf(v),
-            loaded: bufferedEnd(v.buffered, t),
+            t: t - w.from,
+            duration: w.to - w.from,
+            loaded: bufferedEnd(v.buffered, t) - w.from,
             ended: v.ended,
             waiting: !this.held && (!this.moving || v.seeking || v.readyState < 3 && !v.paused),
             paused: this.held || v.paused
@@ -549,8 +570,9 @@ export class OwnPlayer {
         }
     }
 
+    /** Plays from t (s; a live stream: from its window's start) */
     seekTo(t: number): void {
-        t = Math.max(0, t);
+        t = Math.max(0, t) + this.window().from;
         this.showPaid(false);
         if (this.engine && this.moving) {
             this.engine.seek(t);
@@ -565,8 +587,24 @@ export class OwnPlayer {
 
     /** Volume (0-100) and mute of this player (not the TV's) */
     setVolume(level: number, muted: boolean): void {
-        this.video.volume = Math.max(0, Math.min(1, level / 100));
+        this.volume = Math.max(0, Math.min(1, level / 100));
+        this.video.volume = this.volume;
         this.video.muted = muted;
+    }
+
+    /** Fades the preview's sound out over ms, reaching silence as it ends (down a curve: steeper at the end, as the
+     * ear hears it) */
+    peekFade(ms: number): void {
+        var self = this;
+        var from = Date.now();
+        clearInterval(this.fadeTimer);
+        this.fadeTimer = setInterval(function () {
+            var left = Math.max(0, 1 - (Date.now() - from) / ms);
+            self.video.volume = self.volume * left * left;
+            if (!left) {
+                clearInterval(self.fadeTimer);
+            }
+        }, FADE_STEP_MS) as unknown as number;
     }
 
     /** The subtitle language ('' off) */
@@ -715,8 +753,9 @@ export class OwnPlayer {
      * on the watch page's bar while shown, else on the info bar) */
     private jump(seconds: number): void {
         var v = this.video;
+        var w = this.window();
         // Not while starting: in a reused pipeline the time and duration are still the previous video's
-        if (!(v.duration > 0) || !this.engine || !this.moving) {
+        if (!(w.to > w.from) || !this.engine || !this.moving) {
             return;
         }
         var now = Date.now();
@@ -729,7 +768,7 @@ export class OwnPlayer {
         this.pressGap = gap;
         this.chapterRun = to >= 0;
         if (to >= 0) {
-            this.aim(Math.min(v.duration - 1, to));
+            this.aim(Math.min(w.to - 1, to));
             return;
         }
         if (fresh) {
@@ -737,10 +776,10 @@ export class OwnPlayer {
         }
         this.pressedBy = seconds;
         var grow = Math.pow(2, Math.max(0, now - this.heldSince - HOLD_GROW_MS) / HOLD_DOUBLE_MS);
-        var step = Math.round(Math.min(Math.abs(seconds) * grow, Math.max(Math.abs(seconds), v.duration * HOLD_MOST)));
+        var step = Math.round(Math.min(Math.abs(seconds) * grow, Math.max(Math.abs(seconds), (w.to - w.from) * HOLD_MOST)));
         var from = this.target >= 0 ? this.target : v.currentTime;
         this.firstFrom = from;
-        this.aim(Math.max(0, Math.min(v.duration - 1, from + (seconds < 0 ? -step : step))));
+        this.aim(Math.max(w.from, Math.min(w.to - 1, from + (seconds < 0 ? -step : step))));
     }
 
     /** The pending jump set to t (s), run once presses stop */
@@ -750,7 +789,8 @@ export class OwnPlayer {
         if (!this.watch.shown) {
             this.showOsd(false);
         }
-        this.setMarker(t / this.video.duration);
+        var span = this.liveSpan();
+        this.setMarker(span ? liveShare(t, span) : t / this.video.duration);
         clearTimeout(this.jumpTimer);
         var self = this;
         this.jumpTimer = setTimeout(function () { self.jumpNow(); }, JUMP_REST_MS) as unknown as number;
@@ -783,7 +823,10 @@ export class OwnPlayer {
         this.osdSeek.hide();
         this.watch.seek.hide();
         if (share >= 0) {
-            (this.watch.shown ? this.watch.seek : this.osdSeek).show(this.target, this.length());
+            // YouTube's "Most replayed" label where it shows it
+            var label = this.replays && this.replays.label;
+            var named = label && this.target >= label.from && this.target <= label.to ? label.text : '';
+            (this.watch.shown ? this.watch.seek : this.osdSeek).show(this.target, this.length(), named);
         }
         toggleClass(this.el, 'by-player--seeking', share >= 0 && !this.watch.shown && this.osdSeek.ready);
     }
@@ -917,7 +960,7 @@ export class OwnPlayer {
             }
         });
         this.osd.setHead('', want.channel);
-        this.osd.setTitle(want.title);
+        this.osd.setTitle(dearrowTitle(want.id, want.title));
         this.osd.setDescription('');
         this.osd.setQuality(0, 0);
         this.closeChapters(false);
@@ -926,11 +969,22 @@ export class OwnPlayer {
         this.osd.setTime('', 0);
         this.osd.setMessage('');
         this.watch.setVideo(want.id, want.title, want.channel);
-        // A returning video keeps its details (else they are requested once the picture moves)
+        // A returning video keeps its details; else they are asked for now, beside the streams
         if (want.info) {
             this.infoAsked = true;
             this.watch.setInfo(want.info);
             this.drawParts();
+        }
+        this.askInfo();
+        // DeArrow's title for a video no tile asked it for (started from a phone, or the queue's next)
+        if (dearrowOn()) {
+            dearrowWait([want], DEARROW_START_MS).then(function () {
+                if (self.want === want) {
+                    var title = (self.streams && self.streams.title) || want.title;
+                    self.osd.setTitle(dearrowTitle(want.id, title));
+                    self.watch.setTitle(title);
+                }
+            });
         }
         // Hide the previous video's loading sign (its channel picture is not this one's)
         this.loader.hide();
@@ -990,7 +1044,7 @@ export class OwnPlayer {
                     self.failed(why);
                 }
             };
-            var engine: Engine = s.sabr ? new SabrEngine(self.video, s.sabr, failed) : new DashEngine(self.video, failed);
+            var engine: Engine = engineFor(self.video, s, failed);
             self.primed = { id: video.id, streams: s, video: f.video, target: f.video, audio: s.audios[0], engine: engine, kind: 'next' };
             engine.load(f.video, f.audio, pastParts(got[1], video.start || 0));
         }, function () { return undefined; });
@@ -1006,7 +1060,7 @@ export class OwnPlayer {
                 poster.src = fallback;
             }
         };
-        poster.src = thumbnail(id);
+        poster.src = dearrowPicture(id, thumbnail(id));
         setShown(poster, true);
     }
 
@@ -1035,7 +1089,7 @@ export class OwnPlayer {
         this.engine = taken.engine;
         this.format = taken.video;
         this.showDetails(s, want);
-        if (taken.target.itag !== taken.video.itag && taken.engine instanceof DashEngine) {
+        if (taken.target.itag !== taken.video.itag && (taken.engine instanceof DashEngine || taken.engine instanceof LiveEngine)) {
             taken.engine.switchVideo(taken.target);
             this.format = taken.target;
         }
@@ -1049,11 +1103,20 @@ export class OwnPlayer {
 
     /** Show the title, channel and description from the streams */
     private showDetails(s: Streams, want: Want): void {
+        // The most replayed graph (a live stream has none)
+        var self = this;
+        if (prefs().replays && !s.live && !this.replays) {
+            replays(want.id).then(function (r) {
+                if (self.want === want) {
+                    self.setReplays(r);
+                }
+            }, function () { return undefined; });
+        }
         this.osdSeek.set(s.storyboard);
         this.watch.seek.set(s.storyboard);
         this.watch.setPaid(s.paid ? s.paid.text : '');
         this.osd.setHead('', s.channel || want.channel);
-        this.osd.setTitle(s.title || want.title);
+        this.osd.setTitle(dearrowTitle(want.id, s.title || want.title));
         this.osd.setDescription(s.description);
         this.watch.setTitle(s.title || want.title);
         this.watch.setDescription(s.description);
@@ -1151,10 +1214,9 @@ export class OwnPlayer {
                 self.failed(why);
             }
         };
-        // Via SABR (the account's streams), else each format from its URL; displayed once it plays
-        var sabr = this.streams && this.streams.sabr;
+        // Displayed once it plays
         this.video.style.display = 'none';
-        var engine: Engine = this.engine = sabr ? new SabrEngine(this.video, sabr, failed) : new DashEngine(this.video, failed);
+        var engine: Engine = this.engine = engineFor(this.video, this.streams, failed);
         engine.load(video, this.audioFormat() as Format, t);
         // A new start: fall back to YouTube's player if it does not play
         this.giveUpLater();
@@ -1293,6 +1355,7 @@ export class OwnPlayer {
         this.audioTrack = null;
         this.infoAsked = false;
         this.segments = [];
+        this.setReplays(null);
         this.osdSeek.set(null);
         this.watch.seek.set(null);
         this.skipped = {};
@@ -1469,7 +1532,7 @@ export class OwnPlayer {
         if (!f || f === playing) {
             return;
         }
-        if (same && this.moving && this.engine instanceof DashEngine) {
+        if (same && this.moving && (this.engine instanceof DashEngine || this.engine instanceof LiveEngine)) {
             this.engine.switchVideo(f, QUALITY_SWITCH_S);
             this.format = f;
             this.osd.setQuality(f.height, f.fps);
@@ -1529,6 +1592,25 @@ export class OwnPlayer {
         this.watch.setMarks(this.segments, d);
         this.chapterRow.set(chapters);
         this.showKeys();
+    }
+
+    /** The video's most replayed graph (null: none), over the info bar's progress bar */
+    private setReplays(r: Replays | null): void {
+        this.replays = r;
+        this.osdReplays.set(r);
+        toggleClass(this.el, 'by-player--replays', !!r);
+    }
+
+    /** What can be played: a live stream's window, else the video from 0 to its length (s) */
+    private window(): { from: number; to: number } {
+        var span = this.liveSpan();
+        return span ? { from: span.from, to: span.edge } : { from: 0, to: lengthOf(this.video) };
+    }
+
+    /** A live stream's window (null: a video, or not known yet) */
+    private liveSpan(): LiveSpan | null {
+        var e = this.engine;
+        return e instanceof LiveEngine && e.edge > 0 ? { from: e.oldest, edge: e.edge } : null;
     }
 
     /** The video's length (s; 0 unknown): its format's, as a kept pipeline reports the previous video's until the new
@@ -1691,13 +1773,13 @@ export class OwnPlayer {
                 want.paidShown = true;
                 this.showPaid(!this.watch.shown);
             }
-            // Watch page details, now that the start is done
+            // Watch page details (asked at the start; again if that failed)
             this.askInfo();
             this.loadCaption();
             // Playing now (no longer loading)
             this.onChange();
             // One report per playback (renewed URLs restart the picture, not the playback)
-            if (prefs().history && !this.report) {
+            if (prefs().history && !this.report && !(this.streams && this.streams.live)) {
                 this.report = new WatchReport(want.id, v.currentTime, function () {
                     var audio = self.audioFormat();
                     return { video: self.format ? self.format.itag : 0, audio: audio ? audio.itag : 0 };
@@ -1718,7 +1800,11 @@ export class OwnPlayer {
                 this.onAhead(coming, true);
             }
         }
-        if (this.osd.shown) {
+        var span = this.liveSpan();
+        if (this.osd.shown && span) {
+            // Live: LIVE, or how far behind the head (a pending jump's), on a bar over the stream's window
+            this.osd.setTime(liveTime(this.target >= 0 ? this.target : v.currentTime, span), liveShare(v.currentTime, span));
+        } else if (this.osd.shown) {
             // The time and the name of the chapter row's selected chapter, else where a pending jump lands, else where it
             // plays
             var chosen = this.chapterRow.selected;
@@ -1759,6 +1845,12 @@ export class OwnPlayer {
             this.start(this.away);
         }
     }
+}
+
+/** The engine for a video's streams: a live stream's segments, SABR (the account's streams), else each format's own
+ * URL */
+function engineFor(video: HTMLVideoElement, s: Streams | null, failed: (why: string) => void): Engine {
+    return s && s.live ? new LiveEngine(video, s.live, failed) : s && s.sabr ? new SabrEngine(video, s.sabr, failed) : new DashEngine(video, failed);
 }
 
 /** Position and size el (px), rounded to whole pixels */
@@ -1848,7 +1940,7 @@ export class ListQueue {
  * original audio (stable volume if on); null: none playable */
 export function startFormats(s: Streams): { video: Format; audio: Format } | null {
     // At equal height and frame rate, the kept pipeline's codec, so it is reused (player/pipeline.ts)
-    var video = pickFormat(s.videos, Math.min(prefs().quality || MAX_LINES, MAX_LINES), pictureKind());
+    var video = pickFormat(s.videos, prefs().quality || AUTO_LINES, pictureKind());
     var track = s.audios[0];
     return video && track ? { video: video, audio: audioOf(track) } : null;
 }

@@ -225,6 +225,13 @@
 .by-seek-preview-frame { position: relative; background-color: #000; background-repeat: no-repeat; }
 .by-seek-preview-time { text-align: center; }
 
+/* The most replayed graph (player/replay-graph.ts): over the info bar's progress bar, its full width; the time over the
+   bar (its theme's margin too) and a jump's preview move up over it */
+.by-replays { display: none; position: absolute; left: 0; bottom: 100%; width: 100%; height: 56px; margin-bottom: 3px; }
+.by-player--replays .by-replays { display: block; }
+.by-player.by-player--replays .osd-time { margin-bottom: 71px; }
+.by-player--replays .osd-bar .by-seek-preview { bottom: 103px; }
+
 /* The chapter row on the info bar, over its time line (player/chapter-row.ts, which sizes the cards): the strip sliding
    under it (the padding keeps the selected card's ring in view, the margin the cards in line with the bar) */
 .by-chapters { display: none; margin: 18px -6px 0; padding: 6px; overflow: hidden; }

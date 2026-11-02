@@ -317,11 +317,34 @@ export class TileRow {
         });
     }
 
-    /** Calls fn for each item with this id, with its tile (undefined: not built yet) */
-    private eachTile(id: string, fn: (item: TileItem, tile: Tile | undefined) => void): void {
+    /** Gives a tile another title, and image with its fallback (none: the same), for the same video (e.g. DeArrow's);
+     * an unbuilt tile gets them when built */
+    retitle(id: string, title: string, image?: string, fallback?: string): void {
+        var self = this;
+        this.eachTile(id, function (item, tile, index) {
+            var swap = !!image && item.image !== image;
+            if (swap) {
+                item.image = image as string;
+                item.fallback = fallback;
+            }
+            item.title = title;
+            if (tile) {
+                setText(tile.el.querySelector('.bd-tile-title') as HTMLElement, title);
+                if (swap) {
+                    tile.img.onerror = item.fallback ? fallBack(tile.img, item.fallback) : null;
+                    if (tile.hasImage) {
+                        tile.img.src = self.picture(index);
+                    }
+                }
+            }
+        });
+    }
+
+    /** Calls fn for each item with this id, with its tile (undefined: not built yet) and index */
+    private eachTile(id: string, fn: (item: TileItem, tile: Tile | undefined, index: number) => void): void {
         for (var i = 0; i < this.items.length; i++) {
             if (this.items[i].id === id) {
-                fn(this.items[i], this.tiles[i]);
+                fn(this.items[i], this.tiles[i], i);
             }
         }
     }

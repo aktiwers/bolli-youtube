@@ -12,6 +12,7 @@ import { KEY } from '../../core/keys.js';
 import { clock } from '../../core/time.js';
 import { RowStack } from '../../ui/row-stack.js';
 import { rowHeight, TileRow } from '../../ui/tile-row.js';
+import { dearrowTitle } from '../api/dearrow.js';
 import { dots, Page, Video, videoOf } from '../api/feed.js';
 import { Segment } from '../api/sponsorblock.js';
 import { Comments, comments, WatchInfo } from '../api/watch.js';
@@ -22,6 +23,7 @@ import { PanelLine, paragraphs, SidePanel } from '../ui/side-panel.js';
 import { metrics, themed } from '../ui/theme.js';
 import { VideoTiles } from '../views/videos.js';
 import { bufferedEnd, lengthOf } from './dash.js';
+import { liveShare, LiveSpan, liveTime } from './live-engine.js';
 import { BarMarks } from './bar-marks.js';
 import { SeekPreview } from './seek-preview.js';
 
@@ -48,6 +50,8 @@ export interface WatchActions {
     rest(video: Video): void;
     /** Focus rested on a page that may be opened (the channel, a related playlist): prefetch it */
     restPage(page: Page): void;
+    /** A live stream's window (null: a video) */
+    live(): LiveSpan | null;
 }
 
 type Zone = 'bar' | 'buttons' | 'related';
@@ -239,8 +243,9 @@ export class WatchPage {
         setPaid(this.paid, text);
     }
 
+    /** The video's title (DeArrow's where it has one) */
     setTitle(title: string): void {
-        setText(this.title, title);
+        setText(this.title, dearrowTitle(this.id, title));
         this.drawMeta();
     }
 
@@ -268,13 +273,15 @@ export class WatchPage {
             return;
         }
         if (info.title) {
-            setText(this.title, info.title);
+            setText(this.title, dearrowTitle(this.id, info.title));
         }
         this.channel = info.channel || this.channel;
         this.drawMeta();
         setSrc(this.avatar, info.avatar);
         var m = metrics().watch;
         this.tiles = new VideoTiles();
+        var self = this;
+        this.tiles.shown = function () { return self.stack.rows; };
         var items = this.tiles.items(info.related);
         var lines: TileRow[] = [];
         for (var i = 0; i < items.length; i += 3) {
@@ -638,11 +645,16 @@ export class WatchPage {
         var v = this.video;
         var d = lengthOf(v);
         var t = v.currentTime;
-        // The segment's or chapter's name after the time, as on YouTube
-        setText(this.time, dots([clock(t), this.marks.nameAt(t)]));
-        setText(this.length, d ? clock(d) : '');
-        var played = d ? Math.min(1, t / d).toFixed(3) : '0';
-        var loaded = d ? Math.min(1, bufferedEnd(v.buffered, t, 1) / d).toFixed(3) : '0';
+        var span = this.actions.live();
+        // The segment's or chapter's name after the time, as on YouTube; live: LIVE or how far behind, over the
+        // stream's window
+        setText(this.time, span ? liveTime(t, span) : dots([clock(t), this.marks.nameAt(t)]));
+        setText(this.length, d && !span ? clock(d) : '');
+        var share = function (at: number): string {
+            return (span ? liveShare(at, span) : d ? Math.min(1, at / d) : 0).toFixed(3);
+        };
+        var played = share(t);
+        var loaded = share(bufferedEnd(v.buffered, t, 1));
         if (played !== this.bar.played) {
             this.bar.played = played;
             this.played.style.webkitTransform = 'scaleX(' + played + ')';

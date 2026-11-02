@@ -21,8 +21,10 @@ Bolli YouTube is not made by or connected to YouTube or Google. You sign in with
 ## What it does
 
 - Home, Subscriptions, Library, Gaming, Podcasts, Music, Movies and Sports, like YouTube's TV app
-- Its own player: up to 4K, chapters, subtitles (also auto-translated), dubbed audio tracks and stable volume
+- Its own player: up to 4K (8K and AV1 on TVs that play them), live streams, chapters, subtitles (also auto-translated), dubbed audio tracks and stable volume
 - Skips sponsors, intros and the like with [SponsorBlock](https://sponsor.ajay.app)
+- YouTube's "Most replayed" graph over the progress bar
+- Titles and thumbnails without clickbait from [DeArrow](https://dearrow.ajay.app), if you turn it on in Settings
 - Ad block
 - Previews when you rest on a video
 - Search with YouTube's suggestions, and voice search on Android TV (the microphone, or the remote's search key)
@@ -97,6 +99,7 @@ That gives you the app in `apps/bolli-youtube`.
 
 - [YouTube AdFree](https://github.com/webosbrew/youtube-webos) (GPL-3.0): how to hook into YouTube's TV app, and its ad filters, I learned from it.
 - [SponsorBlock](https://sponsor.ajay.app): the segments its users mark.
+- [DeArrow](https://dearrow.ajay.app): the titles and thumbnails its users submit (CC BY-NC-SA 4.0). Its logo is based on [Twemoji](https://github.com/twitter/twemoji) (CC-BY 4.0).
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [NewPipe](https://github.com/TeamNewPipe/NewPipeExtractor): the YouTube client the player asks for streams.
 - Fonts: Roboto (Apache 2.0) and Inter (SIL Open Font License). QR codes: [QR Code Generator](https://github.com/kazuhikoarase/qrcode-generator) by Kazuhiko Arase (MIT).
 

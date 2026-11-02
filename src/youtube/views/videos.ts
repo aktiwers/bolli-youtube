@@ -14,6 +14,7 @@ import { mark } from '../../core/perf.js';
 import { View } from '../../core/view.js';
 import { RowStack } from '../../ui/row-stack.js';
 import { rowHeight, TileItem, TileLayout, TileRow } from '../../ui/tile-row.js';
+import { dearrowFetch, dearrowListen, dearrowOn, dearrowPicture, dearrowSettings, dearrowTitle, dearrowWait } from '../api/dearrow.js';
 import { more, Nudge, PageButton, Rows, Shelf, Tab, thumbnail, thumbnailFallback, Video } from '../api/feed.js';
 import { Pills } from '../ui/pills.js';
 import { FillLoader, LOGO } from '../ui/fill-loader.js';
@@ -220,6 +221,28 @@ export class Paging {
     }
 }
 
+/** The longest a page waits for DeArrow's branding of its first screen before it draws (the rest come into their tiles
+ * as they arrive) */
+var DEARROW_WAIT_MS = 500;
+
+/** Rows, once DeArrow's branding of their first screen (the first two rows' first six tiles) is in or
+ * DEARROW_WAIT_MS passed (at once with DeArrow off) */
+export function brandedRows(rows: Rows): Promise<Rows> {
+    if (!dearrowOn()) {
+        return Promise.resolve(rows);
+    }
+    var videos: Video[] = [];
+    rows.shelves.slice(0, 2).forEach(function (shelf) {
+        videos = videos.concat(shelf.videos.slice(0, 6));
+    });
+    return dearrowWait(videos, DEARROW_WAIT_MS).then(function () { return rows; });
+}
+
+/** A video's own picture: its poster, the picture YouTube gave it, else its thumbnail */
+function ownImage(v: Video): string {
+    return v.poster || v.image || thumbnail(v.id);
+}
+
 /** Builds tile rows for shelves and maps tiles back to their videos */
 export class VideoTiles {
     /** Left margin of the rows (0: the theme's; a channel page has no rail and uses YouTube's 64) */
@@ -228,14 +251,22 @@ export class VideoTiles {
     big = false;
     /** Row spacing (null: the theme's lineRows off Home; Home's own) */
     spacing: RowSpacing | null = null;
+    /** The rows the tiles show in now (the view's: its stack's), which DeArrow's branding goes into as it arrives */
+    shown: () => TileRow[] = function () { return []; };
     private videos: { [id: string]: Video } = {};
+    /** The videos whose DeArrow branding is still to come, how many, and the listener for it */
+    private branding: { [id: string]: boolean } = {};
+    private pending = 0;
+    private unlisten: (() => void) | null = null;
+    /** The DeArrow settings the tiles were made with */
+    private brandedAs = '';
 
     /** fresh: forget the videos of the previous rows */
     rows(shelves: Shelf[], fresh: boolean): TileRow[] {
         var self = this;
         var m = metrics();
         if (fresh) {
-            this.videos = {};
+            this.reset();
         }
         // The theme's layout at the requested margin; off Home, a row without a subtitle sits higher and one with it is
         // taller (as YouTube's: metrics.lineRows)
@@ -258,7 +289,14 @@ export class VideoTiles {
         });
     }
 
-    /** Tiles for videos (duplicates skipped) */
+    /** Forgets the videos of the previous tiles (all are made anew) */
+    reset(): void {
+        this.videos = {};
+        this.brandedAs = dearrowSettings();
+    }
+
+    /** Tiles for videos (duplicates skipped), with DeArrow's titles and pictures where it has them (YouTube's
+     * thumbnail stays the fallback) */
     items(videos: Video[]): TileItem[] {
         var self = this;
         var seen: { [id: string]: boolean } = {};
@@ -267,9 +305,12 @@ export class VideoTiles {
             if (!seen[v.id]) {
                 seen[v.id] = true;
                 self.videos[v.id] = v;
+                var image = v.page ? v.image || '' : ownImage(v);
+                var branded = v.page || v.poster ? image : dearrowPicture(v.id, image);
                 // A page without an image: its name on the tile, like a "See all" tile
                 items.push(v.page && !v.image ? { id: v.id, title: v.title, image: '', more: '' } : {
-                    id: v.id, title: v.title, image: v.page ? v.image || '' : v.poster || v.image || thumbnail(v.id), fallback: v.page ? '' : thumbnailFallback(v.id),
+                    id: v.id, title: v.page ? v.title : dearrowTitle(v.id, v.title), image: branded,
+                    fallback: v.page ? '' : thumbnailFallback(v.id) || (branded !== image ? image : ''),
                     wideImage: v.poster ? v.wide || thumbnail(v.id) : undefined,
                     label: v.live ? 'LIVE' : v.audio && v.length ? '\u266a ' + v.length : v.length, labelIcon: v.labelIcon, stack: v.stack,
                     lines: [v.channel, themed(v.info)], progress: watched[v.id] ? watched[v.id].progress : v.progress, round: v.round,
@@ -278,7 +319,66 @@ export class VideoTiles {
                 });
             }
         });
+        if (dearrowOn()) {
+            this.brand(videos);
+        }
         return items;
+    }
+
+    /** DeArrow's branding asked for where not known yet; the tiles get it as it arrives */
+    private brand(videos: Video[]): void {
+        var self = this;
+        dearrowFetch(videos).forEach(function (id) {
+            if (!self.branding[id]) {
+                self.branding[id] = true;
+                self.pending++;
+            }
+        });
+        if (!this.unlisten && this.pending) {
+            this.unlisten = dearrowListen(function (id) { self.branded(id); });
+        }
+    }
+
+    /** Video id's DeArrow branding arrived: its tiles take it (the listener stops once nothing more is to come) */
+    private branded(id: string): void {
+        if (!this.branding[id]) {
+            return;
+        }
+        delete this.branding[id];
+        this.pending--;
+        this.apply(id);
+        if (!this.pending && this.unlisten) {
+            this.unlisten();
+            this.unlisten = null;
+        }
+    }
+
+    /** The tiles made again with DeArrow's settings if they changed since (a screen shown again after Settings) */
+    rebrand(): void {
+        if (this.brandedAs === dearrowSettings()) {
+            return;
+        }
+        this.brandedAs = dearrowSettings();
+        var self = this;
+        var videos = Object.keys(this.videos).map(function (id) { return self.videos[id]; }).filter(function (v) { return !v.page; });
+        videos.forEach(function (v) { self.apply(v.id); });
+        if (dearrowOn()) {
+            this.brand(videos);
+        }
+    }
+
+    /** Video id's tiles with its title and picture as DeArrow's settings now give them */
+    private apply(id: string): void {
+        var v = this.videos[id];
+        if (v && !v.page) {
+            var title = dearrowTitle(id, v.title);
+            var own = ownImage(v);
+            var image = v.poster ? undefined : dearrowPicture(id, own);
+            var fallback = thumbnailFallback(id) || (image !== own ? own : '');
+            this.shown().forEach(function (row) {
+                row.retitle(id, title, image, fallback);
+            });
+        }
     }
 
     video(item: TileItem | null): Video | null {
@@ -478,6 +578,8 @@ export class FeedView implements View {
         this.tiles.pad = opts.pad || 0;
         this.tiles.big = !!opts.big;
         this.tiles.spacing = opts.spacing || null;
+        var self = this;
+        this.tiles.shown = function () { return self.stack.rows; };
         this.el = h('div', 'bd-page');
         setShown(this.el, false);
         this.stack = this.newStack(false);
@@ -520,6 +622,7 @@ export class FeedView implements View {
     show(rest?: boolean): void {
         this.shown = true;
         this.covered = false;
+        this.tiles.rebrand();
         setShown(this.el, true);
         this.stack.setShown(true);
         if (!this.asked) {
@@ -1128,6 +1231,9 @@ export class FeedView implements View {
     private ask(gen: number, renew?: boolean): void {
         var self = this;
         this.load(renew).then(function (rows) {
+            // With DeArrow on, the first screen draws with its titles and pictures (waiting a little at most)
+            return rows ? brandedRows(rows) : rows;
+        }).then(function (rows) {
             if (gen !== self.gen) {
                 return;
             }
@@ -1301,6 +1407,7 @@ export class FeedView implements View {
         if (grid) {
             self.paging.set([], grid.next || '', function (videos) { self.addLines(self.tiles.items(videos)); });
             self.stack.setRows([]);
+            self.tiles.reset();
             self.addLines(self.tiles.items(grid.videos));
         } else {
             self.paging.set(shelves, rows ? rows.next : '');

@@ -115,6 +115,14 @@ export interface Streams {
     paid?: { text: string; ms: number };
     /** The seek preview's frames (null: none, as for a live stream) */
     storyboard: Storyboard | null;
+    /** A live stream (null: a video): its formats come as numbered segments (player/live-engine.ts) */
+    live: Live | null;
+}
+
+/** A live stream's segments: about this long each (s), and how far back they reach (s) */
+export interface Live {
+    segment: number;
+    dvr: number;
 }
 
 /** A storyboard level: sheets of w x h frames, cols x rows a sheet, one frame every interval ms */
@@ -315,15 +323,18 @@ function ask(id: string, again: boolean): Promise<Streams> {
 export function streamsOf(reply: any, sabr?: boolean): Streams {
     var details = reply.videoDetails || {};
     var formats: any[] = reply.streamingData && reply.streamingData.adaptiveFormats || [];
+    // A live stream's formats are numbered segments (no index)
+    var live = !!details.isLive && !sabr ? formats.filter(function (f) { return f.targetDurationSec; })[0] : null;
     var playable = formats.filter(function (f) {
-        return (f.url || sabr) && f.initRange && f.indexRange && /^((video|audio)\/mp4;|video\/webm; codecs="vp9")/.test(f.mimeType || '') && supported(f.mimeType) &&
-            shown(f);
+        return (f.url || sabr) && (live ? f.targetDurationSec : f.initRange && f.indexRange) &&
+            /^((video|audio)\/mp4;|video\/webm; codecs="vp9")/.test(f.mimeType || '') && shown(f) && supported(f);
     });
-    // VP9 before H.264 at the same height and frame rate: VP9 goes up to 4K, so most videos use one codec and the
-    // TV's pipeline can be reused for the next video (a codec change tears it down: player/pipeline.ts)
-    var videos = playable.filter(function (f) { return /^video\/(mp4; codecs="avc1|webm)/.test(f.mimeType); }).map(formatOf);
-    var vp9 = function (f: Format): number { return /webm/.test(f.mime) ? 1 : 0; };
-    videos.sort(function (a, b) { return b.height - a.height || b.fps - a.fps || vp9(b) - vp9(a) || b.bitrate - a.bitrate; });
+    // VP9 before AV1 before H.264 at the same height and frame rate: VP9 goes up to 4K, so most videos use one codec
+    // and the TV's pipeline can be reused for the next video (a codec change tears it down: player/pipeline.ts); AV1
+    // (where the TV plays it) saves bandwidth over H.264, and may be all there is at 8K
+    var videos = playable.filter(function (f) { return /^video\/(mp4; codecs="(avc1|av01)|webm)/.test(f.mimeType); }).map(formatOf);
+    var rank = function (f: Format): number { return /webm/.test(f.mime) ? 2 : /av01/.test(f.mime) ? 1 : 0; };
+    videos.sort(function (a, b) { return b.height - a.height || b.fps - a.fps || rank(b) - rank(a) || b.bitrate - a.bitrate; });
     var audios = audioTracks(playable.filter(function (f) { return /^audio\/mp4/.test(f.mimeType); }));
     var tracklist = reply.captions && reply.captions.playerCaptionsTracklistRenderer || {};
     var paid = reply.paidContentOverlay && reply.paidContentOverlay.paidContentOverlayRenderer;
@@ -336,7 +347,8 @@ export function streamsOf(reply: any, sabr?: boolean): Streams {
         captions: captionsOf(tracklist),
         translations: translationsOf(tracklist),
         sabr: null,
-        storyboard: storyboardOf(reply.storyboards)
+        storyboard: storyboardOf(reply.storyboards),
+        live: live ? { segment: +live.targetDurationSec, dvr: +live.maxDvrDurationSec || 0 } : null
     };
     var said = paid && text(paid.text);
     if (said) {
@@ -380,19 +392,38 @@ function audioTracks(formats: any[]): AudioTrack[] {
 }
 
 /** Media Source support per MIME type (checked once per type: a video with dubs has ~100 formats of a few types) */
-var SUPPORTED: { [mime: string]: boolean } = {};
-function supported(mime: string): boolean {
+/** Media Source's answers by codec, height and frame rate */
+var SUPPORTED: { [key: string]: boolean } = {};
+/** Whether Media Source here checks a video's size and frame rate (webOS does; elsewhere they are ignored; null: not
+ * asked yet) */
+var sized: boolean | null = null;
+/** Whether this device plays the format: its codec, and (where Media Source checks them) its size and frame rate, so
+ * 8K or 60 fps formats are used only where the TV plays them. AV1 only there: elsewhere it may say yes to AV1 that it
+ * would decode in software */
+function supported(f: any): boolean {
     if (typeof MediaSource === 'undefined') {
         return true;
     }
-    if (SUPPORTED[mime] === undefined) {
-        SUPPORTED[mime] = MediaSource.isTypeSupported(mime);
+    if (sized === null) {
+        // A size every device plays and one none does: only a platform that checks sizes tells them apart
+        sized = MediaSource.isTypeSupported('video/mp4; codecs="avc1.4d401e"; width=640; height=360; framerate=30') &&
+            !MediaSource.isTypeSupported('video/mp4; codecs="avc1.4d401e"; width=30000; height=20000; framerate=30');
     }
-    return SUPPORTED[mime];
+    if (!sized && /av01/.test(f.mimeType)) {
+        return false;
+    }
+    var key = f.mimeType + ' ' + (f.height || 0) + ' ' + (f.fps || 0);
+    if (SUPPORTED[key] === undefined) {
+        SUPPORTED[key] = MediaSource.isTypeSupported(f.mimeType + (sized && f.width && f.height ? '; width=' + f.width + '; height=' + f.height +
+            (f.fps ? '; framerate=' + f.fps : '') : ''));
+    }
+    return SUPPORTED[key];
 }
 
-/** The most lines the player plays: the TV's 4K (also the Auto and "Highest available" cap: own-player.ts) */
-export var MAX_LINES = 2160;
+/** The most lines the player plays: 8K, where the device plays it (supported, shown) */
+var MAX_LINES = 4320;
+/** Auto's highest (the quality setting's default): 4K, as 8K takes ~80 Mbit/s */
+export var AUTO_LINES = 2160;
 /** The most lines this device shows (0: not known yet): MAX_LINES, on Android at most its display's */
 var lines = 0;
 /** Whether the device should get this format: up to its lines, by the short side so portrait videos count by width
@@ -494,6 +525,11 @@ export function base(language: string): string {
 }
 
 
+/** A format's byte range (none, as a live format's segments are numbered: 0 to -1) */
+function rangeOf(r: any): Range {
+    return r ? { start: +r.start, end: +r.end } : { start: 0, end: -1 };
+}
+
 function formatOf(f: any): Format {
     return {
         itag: f.itag,
@@ -505,8 +541,8 @@ function formatOf(f: any): Format {
         bitrate: f.averageBitrate || f.bitrate || 0,
         length: +f.contentLength || 0,
         duration: (+f.approxDurationMs || 0) / 1000,
-        init: { start: +f.initRange.start, end: +f.initRange.end },
-        index: { start: +f.indexRange.start, end: +f.indexRange.end },
+        init: rangeOf(f.initRange),
+        index: rangeOf(f.indexRange),
         lmt: String(f.lastModified || ''),
         xtags: f.xtags || '',
         track: f.audioTrack && f.audioTrack.id || '',

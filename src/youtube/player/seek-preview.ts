@@ -9,6 +9,7 @@
 
 import { h, setText, toggleClass, translate } from '../../core/dom.js';
 import { clock } from '../../core/time.js';
+import { dots } from '../api/feed.js';
 import { Storyboard, storyboardFrame } from '../api/streams.js';
 
 /** The frame's height in the box (layout px), about the size YouTube's TV app draws its frames; its width follows their shape */
@@ -135,8 +136,8 @@ export class SeekPreview {
         this.hide();
     }
 
-    /** The frame at t (s) of a video duration s long, above that place on the bar */
-    show(t: number, duration: number): void {
+    /** The frame at t (s) of a video duration s long, above that place on the bar; label: after its time ('' none) */
+    show(t: number, duration: number, label: string): void {
         if (!board || !(duration > 0)) {
             this.hide();
             return;
@@ -145,7 +146,7 @@ export class SeekPreview {
         if (sheetFor(this.wanted.url).ready) {
             this.paint();
         }
-        setText(this.time, clock(t));
+        setText(this.time, dots([clock(t), label]));
         this.room = this.room || this.bar.offsetWidth;
         translate(this.el, Math.max(0, Math.min(this.room - this.width, Math.round(t / duration * this.room - this.width / 2))), 0);
         toggleClass(this.el, 'by-seek-preview--on', true);

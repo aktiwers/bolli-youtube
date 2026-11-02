@@ -5,6 +5,7 @@
 
 import { h, setShown, setSrc, setText } from '../../core/dom.js';
 import { KEY } from '../../core/keys.js';
+import { dearrowPicture, dearrowTitle } from '../api/dearrow.js';
 import { thumbnail, Video } from '../api/feed.js';
 import { Pills } from '../ui/pills.js';
 
@@ -57,8 +58,8 @@ export class UpNext {
     /** Starts the countdown to video (seconds), focus on Play now */
     show(video: Video, seconds: number): void {
         this.video = video;
-        setSrc(this.img, thumbnail(video.id));
-        setText(this.title, video.title);
+        setSrc(this.img, dearrowPicture(video.id, thumbnail(video.id)));
+        setText(this.title, dearrowTitle(video.id, video.title));
         setText(this.channel, video.channel);
         this.buttons.focus(0);
         this.left = seconds;

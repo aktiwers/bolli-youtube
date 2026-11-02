@@ -85,7 +85,8 @@ function pref<K extends keyof Prefs>(label: string, summary: string, picture: st
 }
 
 /** An app on/off pref, with notes for on and off */
-function flag(label: string, summary: string, picture: string, name: 'history' | 'preload' | 'startSign' | 'sabr', on: string, off: string): Setting {
+function flag(label: string, summary: string, picture: string, name: 'history' | 'preload' | 'startSign' | 'sabr' | 'replays', on: string,
+    off: string): Setting {
     return pick(label, summary, picture, function () { return onOff(on, off); }, function () { return prefs()[name] ? 1 : 0; },
         function (value) { setPref(name, value === 1); });
 }
@@ -146,26 +147,40 @@ function subtitles(more: () => void): Setting {
     });
 }
 
-function sponsorBlock(): Setting {
+/** An app pref listing several choices, each turned on and off by itself */
+function several(label: string, summary: string, picture: string, name: 'skip' | 'dearrowOptions', list: () => Choice[]): Setting {
     return {
-        label: 'SponsorBlock',
-        summary: 'Skips the parts of videos that SponsorBlock\'s users marked. Choose the kinds to skip.',
-        // SponsorBlock's logo (from github.com/ajayyy/SponsorBlock), bundled with the app
-        picture: 'sponsorblock.png',
+        label: label,
+        summary: summary,
+        picture: picture,
         choices: {
-            list: function () {
-                return PARTS.map(function (k) { return { value: k.id, name: k.name, note: k.note }; });
-            },
+            list: list,
             isSet: function (id) {
-                return prefs().skip.indexOf(id as string) >= 0;
+                return prefs()[name].indexOf(id as string) >= 0;
             },
             choose: function (id) {
-                var skip = prefs().skip;
-                setPref('skip', skip.indexOf(id as string) >= 0 ? skip.filter(function (one) { return one !== id; }) : skip.concat([id as string]));
+                var on = prefs()[name];
+                setPref(name, on.indexOf(id as string) >= 0 ? on.filter(function (one) { return one !== id; }) : on.concat([id as string]));
             },
             many: true
         }
     };
+}
+
+function sponsorBlock(): Setting {
+    // SponsorBlock's logo (from github.com/ajayyy/SponsorBlock), bundled with the app
+    return several('SponsorBlock', 'Skips the parts of videos that SponsorBlock\'s users marked. Choose the kinds to skip.', 'sponsorblock.png', 'skip',
+        function () { return PARTS.map(function (k) { return { value: k.id, name: k.name, note: k.note }; }); });
+}
+
+/** DeArrow's options (used while it is on) */
+function dearrowOptions(): Setting {
+    var options: Choice[] = [
+        { value: 'thumbnails', name: 'Thumbnails', note: 'the frames DeArrow\'s users chose from the video' },
+        { value: 'frames', name: 'Random frames', note: 'where no frame was chosen, one from the video (YouTube\'s thumbnail until DeArrow has it ready)' },
+        { value: 'tidy', name: 'Tidy titles', note: 'every title in Title Case, without shouting capitals, emoji or extra exclamation marks' }
+    ];
+    return several('DeArrow options', 'What DeArrow changes besides the titles its users wrote.', 'dearrow.png', 'dearrowOptions', function () { return options; });
 }
 
 /** The app's own settings (pages: possible start pages; more: Subtitles' "More languages") */
@@ -181,7 +196,7 @@ function bolli(pages: StartPage[], more: () => void): Setting[] {
         pref('Video quality', 'The quality videos start at', pic('clear_search_history'), 'quality', function () {
             return [
                 { value: 0, name: 'Auto', note: 'as good as the video and the connection allow, up to 4K' },
-                { value: HIGHEST, name: 'Highest available', note: 'the best the video has, up to 4K' },
+                { value: HIGHEST, name: 'Highest available', note: 'the best the video has, up to 8K where the TV plays it' },
                 { value: 2160, name: '4K (2160p)', note: 'or the closest below it' },
                 { value: 1440, name: '1440p (2K)', note: 'or the closest below it' },
                 { value: 1080, name: '1080p (HD)', note: 'or the closest below it' },
@@ -201,6 +216,18 @@ function bolli(pages: StartPage[], more: () => void): Setting[] {
             ];
         }),
         sponsorBlock(),
+        // Its picture drawn for the app in the style of YouTube's
+        flag('Most replayed', 'A graph over the progress bar in Bolli\'s player of the parts people watch again the most, from YouTube',
+            'replays.png', 'replays', 'shown on videos YouTube has one for (popular ones)', 'no graph'),
+        // DeArrow's logo (from github.com/ajayyy/DeArrow, based on Twemoji), bundled with the app
+        pref('DeArrow', 'Titles and thumbnails DeArrow\'s users submit, in place of clickbait', 'dearrow.png', 'dearrow', function () {
+            return [
+                { value: '', name: 'Off', note: 'YouTube\'s titles and thumbnails' },
+                { value: 'classic', name: 'Classic', note: 'DeArrow\'s titles and thumbnails wherever its users submitted them' },
+                { value: 'casual', name: 'Casual', note: 'YouTube\'s own titles where DeArrow\'s users voted them fine (funny, clever, descriptive), DeArrow\'s elsewhere' }
+            ];
+        }),
+        dearrowOptions(),
         flag('History', 'What you watch in Bolli\'s player, told to YouTube', pic('privacy_and_terms'),
             'history', 'it goes into your YouTube history, and YouTube remembers where you stopped', 'Bolli\'s player tells YouTube nothing of what you watch'),
         // Any page of the rail

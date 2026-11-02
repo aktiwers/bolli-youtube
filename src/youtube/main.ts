@@ -21,7 +21,8 @@ import { PROBLEM, toast } from './ui/toast.js';
 import { googleOf, keptProfiles, ownChannel, Profile, profiles, signOut } from './api/accounts.js';
 import { saveAvatars } from './api/avatars.js';
 import { channelAhead, isChannel } from './api/channel.js';
-import { first, get, home, keptPage, page, Page, PageButton, pageAhead as fetchPageAhead, Rows, searchAhead as fetchSearchAhead, sized, SubChannel, subscriptions, text, Video } from './api/feed.js';
+import { dearrowFetch, dearrowOn, dearrowTitle, saveDearrow, Wanted } from './api/dearrow.js';
+import { first, get, home, keptPage, page, Page, PageButton, pageAhead as fetchPageAhead, Rows, searchAhead as fetchSearchAhead, sized, SubChannel, subscriptions, tapAhead, text, Video } from './api/feed.js';
 import { forgetKept } from './api/kept-pages.js';
 import { prefs, reloadPrefs, setPref } from './api/prefs.js';
 import { forgetStreams, streams } from './api/streams.js';
@@ -450,6 +451,20 @@ function searchAhead(term: string): void {
     }
 }
 
+/** The first videos of a page or search fetched ahead get DeArrow's branding too, so it opens with it at once */
+var DEARROW_AHEAD = 12;
+tapAhead(function (json) {
+    if (dearrowOn()) {
+        var ids: Wanted[] = [];
+        var found = /"id":"([\w-]{11})"/g;
+        var m: RegExpExecArray | null;
+        while ((m = found.exec(json)) && ids.length < DEARROW_AHEAD) {
+            ids.push({ id: m[1] });
+        }
+        dearrowFetch(ids);
+    }
+});
+
 /** Prefetches a page (focus rests on its tile or the watch page's channel avatar) so it opens at once */
 function pageAhead(p: Page): void {
     if (prefs().preload) {
@@ -552,7 +567,7 @@ function logoEntries(): RailEntry[] {
         ] });
     }
     list.push({ label: 'Switch account', action: openAccounts });
-    list.push({ label: 'Restart app', action: function () { saveAvatars(); window.location.reload(); } });
+    list.push({ label: 'Restart app', action: function () { saveAvatars(); saveDearrow(); window.location.reload(); } });
     return list;
 }
 
@@ -744,7 +759,8 @@ function play(video: Video): void {
     if (video.movie && prefs().player === 'bolli') {
         toast('Movies can only play in YouTube\'s player, so it opens there', 'info');
     } else {
-        toast(ready ? 'Opening ' + video.title + ' …' : 'Starting YouTube\'s player for ' + video.title + ' …');
+        var title = dearrowTitle(video.id, video.title);
+        toast(ready ? 'Opening ' + title + ' …' : 'Starting YouTube\'s player for ' + title + ' …');
     }
 }
 
@@ -911,6 +927,7 @@ function route(code: number): boolean {
                 switchSection(startPage);
             } else {
                 saveAvatars();
+                saveDearrow();
                 exitApp();
             }
             return true;
@@ -990,6 +1007,7 @@ document.addEventListener('visibilitychange', function () {
     if (document.hidden) {
         preview.stop();
         saveAvatars();
+        saveDearrow();
         // Out of sight: swap in waiting fresh rows
         var view = screen();
         if (view.putFresh) {

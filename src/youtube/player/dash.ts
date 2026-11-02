@@ -44,7 +44,8 @@ var STILL_AHEAD = 3;
 
 /** What the player needs from an engine (this one, and player/sabr-engine.ts for SABR) */
 export interface Engine {
-    load(video: Format, audio: Format, startAt: number): void;
+    /** preview: a tile's preview (an engine may then use what was fetched ahead differently) */
+    load(video: Format, audio: Format, startAt: number, preview?: boolean): void;
     seek(t: number): void;
     jump(to: number, from: number): void;
     /** Stops; the pipeline is kept, paused, for the next video (player/pipeline.ts) */
@@ -65,25 +66,30 @@ export interface Segment {
 /** The segments of an MP4 file, from its first bytes (up to the end of its sidx box); [] without one */
 export function parseSidx(data: ArrayBuffer): Segment[] {
     var view = new DataView(data);
-    var at = 0;
-    while (at + 8 <= data.byteLength) {
+    var box = findBox(view, 0, data.byteLength, 'sidx');
+    return box ? sidxSegments(view, box.at, box.size) : [];
+}
+
+/** The MP4 box of this type among the boxes from from to to: its offset and size (null: none) */
+export function findBox(view: DataView, from: number, to: number, type: string): { at: number; size: number } | null {
+    var at = from;
+    while (at + 8 <= to) {
         var size = view.getUint32(at);
-        var type = String.fromCharCode(view.getUint8(at + 4), view.getUint8(at + 5), view.getUint8(at + 6), view.getUint8(at + 7));
-        if (size === 1 && at + 16 <= data.byteLength) {
+        if (size === 1 && at + 16 <= to) {
             size = u64(view, at + 8);
         }
         if (size < 8) {
-            return [];
+            return null;
         }
-        if (type === 'sidx') {
-            return sidxSegments(view, at, size);
+        if (String.fromCharCode(view.getUint8(at + 4), view.getUint8(at + 5), view.getUint8(at + 6), view.getUint8(at + 7)) === type) {
+            return { at: at, size: size };
         }
         at += size;
     }
-    return [];
+    return null;
 }
 
-function u64(view: DataView, at: number): number {
+export function u64(view: DataView, at: number): number {
     return view.getUint32(at) * 4294967296 + view.getUint32(at + 4);
 }
 
@@ -143,6 +149,38 @@ function uint(view: DataView, at: number, size: number): number {
         value = value * 256 + view.getUint8(at + i);
     }
     return value;
+}
+
+/** A WebM file's start (s): its first Cluster's Timecode by the TimecodeScale of its Info (a live segment, which
+ * carries its own header); NaN if not found */
+export function webmStart(data: ArrayBuffer): number {
+    var view = new DataView(data);
+    var SEGMENT = 0x18538067, INFO = 0x1549A966, SCALE = 0x2AD7B1, CLUSTER = 0x1F43B675, TIMECODE = 0xE7;
+    var scale = 1000000;
+    var at = 0;
+    while (at < data.byteLength) {
+        var id = vint(view, at, true);
+        var size = id ? vint(view, at + id.length, false) : null;
+        if (!id || !size) {
+            return NaN;
+        }
+        var start = at + id.length + size.length;
+        // Into these: their children follow
+        if (id.value === SEGMENT || id.value === INFO || id.value === CLUSTER) {
+            at = start;
+            continue;
+        }
+        if (id.value === SCALE) {
+            scale = uint(view, start, size.value);
+        } else if (id.value === TIMECODE) {
+            return uint(view, start, size.value) * scale / 1e9;
+        }
+        if (size.value === Infinity) {
+            return NaN;
+        }
+        at = start + size.value;
+    }
+    return NaN;
 }
 
 /** The segments (clusters, from the Cues) of a WebM file, from its first bytes up to the end of the Cues;

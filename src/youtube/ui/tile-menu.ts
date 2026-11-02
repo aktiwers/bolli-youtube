@@ -7,6 +7,7 @@
 // tile disappears at once.
 
 import { PROBLEM, toast } from './toast.js';
+import { dearrowTitle } from '../api/dearrow.js';
 import { Page, pageOf, Video } from '../api/feed.js';
 import { commandsOf, MenuItem, tileMenu, toastOf } from '../api/menu.js';
 import { run } from '../api/watch.js';
@@ -24,7 +25,7 @@ export interface TileMenuActions {
 
 /** Opens the video's menu in the panel ("Loading" until YouTube replies) */
 export function openTileMenu(panel: SidePanel, video: Video, actions: TileMenuActions): void {
-    panel.openAsked(video.title || 'Video', tileMenu(video), function (items) {
+    panel.openAsked(dearrowTitle(video.id, video.title) || 'Video', tileMenu(video), function (items) {
         return items.map(function (item) {
             return { label: item.title, stay: saves(item), action: function () { act(panel, video, item, actions); } };
         });
