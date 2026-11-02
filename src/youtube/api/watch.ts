@@ -37,10 +37,11 @@ export interface WatchInfo {
     chapters: Chapter[];
 }
 
-/** A chapter of a video: its name, where it begins (s) */
+/** A chapter of a video: its name, where it begins (s), YouTube's picture of it ('' none) */
 export interface Chapter {
     title: string;
     start: number;
+    picture: string;
 }
 
 export interface Subscribe {
@@ -297,7 +298,7 @@ function chaptersOf(reply: any): Chapter[] {
         return get(m, 'payload', 'macroMarkersListEntity', 'markersList');
     }).filter(function (l: any) { return l && l.markerType === 'MARKER_TYPE_CHAPTERS'; })[0];
     return (list && list.markers || []).map(function (m: any) {
-        return { title: text(m.title), start: +m.startMillis / 1000 };
+        return { title: text(m.title), start: +m.startMillis / 1000, picture: picture(m.thumbnailDetails) };
     }).filter(function (c: Chapter) { return c.title && c.start >= 0; });
 }
 

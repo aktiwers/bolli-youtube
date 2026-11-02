@@ -318,6 +318,16 @@ html, body { background: #0f0f0f; }
 .by-player .osd-time { display: block; width: auto; margin-bottom: 12px; white-space: nowrap; }
 .by-player .osd-bar { display: block; width: 1168px; }
 
+/* The chapter row's cards: YouTube's picture with rounded corners and the start time on it as on a tile, the name under
+   it in grey; the selected card ringed white with its name white, as a focused tile */
+.by-chapter-frame, .by-chapter-img { border-radius: 8px; background: #212121; }
+.by-chapter--selected .by-chapter-frame { box-shadow: 0 0 0 4px #f1f1f1; }
+.by-chapter-time { padding: 0 4px; height: 20px; line-height: 20px; border-radius: 4px; background: rgba(6, 6, 6, .85); font-size: 14px;
+                   font-weight: 700; color: #f1f1f1; }
+.by-chapter-title { margin-top: 10px; max-height: 42px; overflow: hidden; font-size: 16px; font-weight: 500; line-height: 21px; color: #aaa;
+                    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.by-chapter--selected .by-chapter-title { color: #f1f1f1; }
+
 /* The watch page (player/watch-page.ts), as YouTube's TV watch page: the title, channel, views and age
    at the top; the time, the bar and round grey buttons at the bottom (the focused one white, play-pause
    bigger), the related videos under them; a shade over the video, darker at the bottom. In the related

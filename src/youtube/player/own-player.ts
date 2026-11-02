@@ -23,7 +23,7 @@ import { Segment, segmentAt, segments, skippedText } from '../api/sponsorblock.j
 import { WatchReport } from '../api/stats.js';
 import { noAnswer } from '../api/youtube.js';
 import { AudioTrack, base, Caption, captionList, forgetStreams, Format, kindOf, MAX_LINES, NoStreams, pickFormat, playableStreams, sabrStreams, streams, Streams } from '../api/streams.js';
-import { channelPicture, watchInfo, WatchInfo } from '../api/watch.js';
+import { Chapter, channelPicture, watchInfo, WatchInfo } from '../api/watch.js';
 import { FillLoader } from '../ui/fill-loader.js';
 import { PanelLine } from '../ui/side-panel.js';
 import { CAPTION_STYLES, Captions, loadCaptions, translationsRefused } from './captions.js';
@@ -31,6 +31,7 @@ import { bufferedEnd, DashEngine, dropAhead, Engine, lengthOf } from './dash.js'
 import { OFF_START_S, pauseVideo, pictureKind, playVideo, releasePipeline } from './pipeline.js';
 import { note, ranges } from './play-log.js';
 import { BarMarks, chapterJump } from './bar-marks.js';
+import { ChapterRow } from './chapter-row.js';
 import { SeekPreview } from './seek-preview.js';
 import { SabrEngine } from './sabr-engine.js';
 import { StatsBox } from './stats-box.js';
@@ -81,6 +82,11 @@ var FILLS: { [step: string]: number } = { start: 0.2, streams: 0.45, loadedmetad
 var WARM_S = 3;
 var FULL_S = 0.4;
 var KEYS_LINE = 'OK pause  ·  Left / Right jump 10 s (twice: chapter)  ·  Up the description  ·  Down related videos, subtitles and more';
+/** The same with chapters, and while the chapter row is open */
+var KEYS_LINE_CHAPTERS = 'OK pause  ·  Left / Right jump 10 s (twice: chapter)  ·  Up chapters and the description  ·  Down related videos, subtitles and more';
+var KEYS_LINE_ROW = 'Left / Right chapter  ·  OK play from there  ·  Up or Back close  ·  Down related videos, subtitles and more';
+/** No chapters (one list, so the chapter row keeps its cards while a video has none) */
+var NO_CHAPTERS: Chapter[] = [];
 
 /** A video handed to the player while it plays (nothing reloaded): its streams, the format playing, the target format
  * (switched to in place), the audio and the engine */
@@ -141,6 +147,10 @@ export class OwnPlayer {
     private osdMarks: BarMarks;
     /** The seek preview over the info bar (the watch page has its own) */
     private osdSeek: SeekPreview;
+    /** The chapters to pick from over the info bar's time line (Up), and whether opening it paused the video (it plays
+     * again when the row closes without a pick) */
+    private chapterRow: ChapterRow;
+    private chapterPaused = false;
     /** YouTube's "Includes paid promotion" chip, top left for the first seconds (Streams.paid) */
     private paidChip: HTMLElement;
     private paidTimer = 0;
@@ -236,6 +246,7 @@ export class OwnPlayer {
         var self = this;
         this.osd = new PlayerOsd(this.el, function () { return self.video.paused || !self.moving; }, function () {
             toggleClass(self.subtitleBox, 'vod-subtitles--up', false);
+            self.closeChapters(false);
         });
         this.watch = new WatchPage(this.el, this.video, {
             toggle: function () { self.toggle(); },
@@ -270,6 +281,8 @@ export class OwnPlayer {
         var bar = this.el.querySelector('.osd-bar') as HTMLElement;
         this.osdMarks = new BarMarks(bar, bar.querySelector('.osd-marker'));
         this.osdSeek = new SeekPreview(bar);
+        var timeLine = bar.parentNode as HTMLElement;
+        this.chapterRow = new ChapterRow(timeLine.parentNode as HTMLElement, timeLine);
         this.paidChip = this.el.appendChild(paidChip()) as HTMLElement;
         toggleClass(this.paidChip, 'by-paid--start', true);
         this.stats = new StatsBox(this.el, this.video, function () {
@@ -586,6 +599,10 @@ export class OwnPlayer {
             this.watch.onKey(code);
             return true;
         }
+        if (this.chapterRow.open) {
+            this.chapterKey(code);
+            return true;
+        }
         switch (code) {
             case KEY.BACK:
                 this.leave();
@@ -599,11 +616,12 @@ export class OwnPlayer {
                 this.jump(code === KEY.LEFT ? -JUMP_S : JUMP_S);
                 return true;
             case KEY.UP:
-                // The description, and Up again closes it (back to the picture alone)
+                // The description, with the chapters to pick from; Up again closes it (back to the picture alone)
                 if (this.osd.asked) {
                     this.osd.hide();
                 } else {
                     this.showOsd(true);
+                    this.openChapters();
                 }
                 return true;
             case KEY.DOWN:
@@ -612,6 +630,73 @@ export class OwnPlayer {
         }
         // The app behind gets no keys while the player shows
         return true;
+    }
+
+    /** The chapter row's keys: Left/Right the chapter before or after, OK plays from the selected one; Up and Back close
+     * the row and the description, Down opens the watch page */
+    private chapterKey(code: number): void {
+        switch (code) {
+            case KEY.LEFT:
+            case KEY.RIGHT:
+                this.chapterRow.move(code === KEY.LEFT ? -1 : 1);
+                this.showChapter();
+                break;
+            case KEY.OK:
+                var to = this.chapterRow.selected!.start;
+                this.closeChapters(false);
+                this.osd.hide();
+                this.target = to;
+                this.jumpNow();
+                if (this.held) {
+                    this.resume();
+                }
+                break;
+            case KEY.UP:
+            case KEY.BACK:
+                this.closeChapters(true);
+                this.osd.hide();
+                break;
+            case KEY.DOWN:
+                this.closeChapters(true);
+                this.openWatch();
+                break;
+        }
+    }
+
+    /** The chapter row opened at the chapter playing, the video paused meanwhile (not while starting or jumping) */
+    private openChapters(): void {
+        if (!this.chapterRow.has || !this.moving || this.target >= 0) {
+            return;
+        }
+        this.chapterPaused = !this.held && !this.video.paused;
+        if (this.chapterPaused) {
+            this.pause();
+        }
+        this.chapterRow.openAt(this.video.currentTime);
+        this.osd.setLine(KEYS_LINE_ROW);
+        this.showChapter();
+    }
+
+    /** The selected chapter's start marked on the bar, its time and name on the time line */
+    private showChapter(): void {
+        var length = this.length();
+        this.osd.setMarker(length ? this.chapterRow.selected!.start / length : -1);
+        this.tick();
+    }
+
+    /** The chapter row closed; resume: play on if opening it paused the video */
+    private closeChapters(resume: boolean): void {
+        if (!this.chapterRow.open) {
+            return;
+        }
+        this.chapterRow.close();
+        this.osd.setMarker(-1);
+        this.osd.setLine(KEYS_LINE_CHAPTERS);
+        if (resume && this.chapterPaused) {
+            this.resume();
+        }
+        this.chapterPaused = false;
+        this.tick();
     }
 
     /** OK: pause or play. During a jump (pending, or its seek) it jumps now and plays rather than pausing. */
@@ -695,7 +780,7 @@ export class OwnPlayer {
     private setMarker(share: number): void {
         this.osd.setMarker(share);
         this.watch.setMarker(share);
-        // The frame where a pending jump lands, over the bar that shows; the info bar's title and description hidden
+        // The frame where a pending jump lands, over the bar that shows; the info bar's channel and title hidden
         // meanwhile (the box stands where they are)
         this.osdSeek.hide();
         this.watch.seek.hide();
@@ -837,6 +922,8 @@ export class OwnPlayer {
         this.osd.setTitle(want.title);
         this.osd.setDescription('');
         this.osd.setQuality(0, 0);
+        this.closeChapters(false);
+        this.chapterRow.set(NO_CHAPTERS);
         this.osd.setLine(KEYS_LINE);
         this.osd.setTime('', 0);
         this.osd.setMessage('');
@@ -1254,8 +1341,9 @@ export class OwnPlayer {
     private showOsd(withText: boolean): void {
         this.tick();
         this.osd.show(withText);
-        // A jump's frames ready before it starts
+        // A jump's frames and the chapter row's pictures ready before they show
         this.osdSeek.prefetch(this.video.currentTime);
+        this.chapterRow.prefetch(this.video.currentTime);
         toggleClass(this.subtitleBox, 'vod-subtitles--up', true);
     }
 
@@ -1435,9 +1523,13 @@ export class OwnPlayer {
      * a kept pipeline reports the previous video's until the new one sets its own, which drew the marks out of place */
     private drawParts(): void {
         var d = this.length();
-        var info = this.watch.details;
-        this.osdMarks.draw(this.segments, info ? info.chapters : [], d);
+        var chapters = this.watch.details ? this.watch.details.chapters : NO_CHAPTERS;
+        this.osdMarks.draw(this.segments, chapters, d);
         this.watch.setMarks(this.segments, d);
+        this.chapterRow.set(chapters);
+        if (!this.chapterRow.open) {
+            this.osd.setLine(this.chapterRow.has ? KEYS_LINE_CHAPTERS : KEYS_LINE);
+        }
     }
 
     /** The video's length (s; 0 unknown): its format's, as a kept pipeline reports the previous video's until the new
@@ -1628,9 +1720,11 @@ export class OwnPlayer {
             }
         }
         if (this.osd.shown) {
-            // The time and the name where a pending jump lands, else where it plays
-            var at = this.target >= 0 ? this.target : v.currentTime;
-            this.osd.setTime(dots([clock(at) + (length ? ' / ' + clock(length) : ''), this.osdMarks.nameAt(at)]),
+            // The time and the name where a pending jump lands, else the chapter row's selected chapter, else where it
+            // plays
+            var chosen = this.target >= 0 ? null : this.chapterRow.selected;
+            var at = this.target >= 0 ? this.target : chosen ? chosen.start : v.currentTime;
+            this.osd.setTime(dots([clock(at) + (length ? ' / ' + clock(length) : ''), chosen ? chosen.title : this.osdMarks.nameAt(at)]),
                 length ? v.currentTime / length : 0);
         }
         this.subtitleView.show(this.track ? this.track.textAt(v.currentTime) : null);
