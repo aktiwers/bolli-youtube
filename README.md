@@ -16,6 +16,8 @@ Bolli YouTube is not made by or connected to YouTube or Google. You sign in with
 
 <p align="center">Google TV and Android TV: enter the code <b>3023199</b> in the Downloader app, or open <a href="https://aftv.news/3023199">aftv.news/3023199</a> in a browser.</p>
 
+<p align="center">LG webOS: add the Homebrew repository <code>https://aktiwers.github.io/bolli-homebrew/apps.json</code> in the Homebrew Channel (<a href="#lg-webos">see below</a>).</p>
+
 ## What it does
 
 - Home, Subscriptions, Library, Gaming, Podcasts, Music, Movies and Sports, like YouTube's TV app
