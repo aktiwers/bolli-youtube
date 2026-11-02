@@ -215,3 +215,11 @@
 .by-library-head { position: absolute; overflow: hidden; -webkit-transition: -webkit-transform .3s ease, opacity .3s ease; }
 .by-library-strip { position: relative; white-space: nowrap; -webkit-transition: -webkit-transform .2s ease; }
 .by-library-card { display: inline-block; position: relative; vertical-align: top; overflow: hidden; }
+
+/* The seek preview over a bar (player/seek-preview.ts): above the bar and its time line, at the jump's place; on the
+   info bar the title and description hidden while it shows */
+.by-seek-preview { position: absolute; left: 0; bottom: 44px; display: none; z-index: 2; }
+.by-player--seeking .osd-head, .by-player--seeking .osd-now, .by-player--seeking .osd-text { visibility: hidden; }
+.by-seek-preview.by-seek-preview--on { display: block; }
+.by-seek-preview-frame { background-color: #000; background-repeat: no-repeat; }
+.by-seek-preview-time { text-align: center; }

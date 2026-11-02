@@ -111,6 +111,24 @@ export interface Streams {
     only?: boolean;
     /** YouTube's paid promotion notice and how long to show it at the start (ms) */
     paid?: { text: string; ms: number };
+    /** The seek preview's frames (null: none, as for a live stream) */
+    storyboard: Storyboard | null;
+}
+
+/** A storyboard level: sheets of w x h frames, cols x rows a sheet, one frame every interval ms */
+export interface Storyboard {
+    /** A sheet's address, with $L for the level and $N for the sheet's name */
+    base: string;
+    level: number;
+    w: number;
+    h: number;
+    count: number;
+    cols: number;
+    rows: number;
+    interval: number;
+    /** The sheet's name, $M for its number ("M$M") */
+    name: string;
+    sigh: string;
 }
 
 /** Translatable subtitles: from (source track URL), to (target languages), and heard (the language of the default
@@ -315,7 +333,8 @@ export function streamsOf(reply: any, sabr?: boolean): Streams {
         audios: audios,
         captions: captionsOf(tracklist),
         translations: translationsOf(tracklist),
-        sabr: null
+        sabr: null,
+        storyboard: storyboardOf(reply.storyboards)
     };
     var said = paid && text(paid.text);
     if (said) {
@@ -380,6 +399,31 @@ function shown(f: any): boolean {
         lines = shell && shell.screenHeight && shell.screenHeight() || Infinity;
     }
     return !f.height || Math.min(f.width || f.height, f.height) <= lines;
+}
+
+/** The sharpest storyboard level of a /player reply's storyboards (spec: "base|w#h#count#cols#rows#interval#name#sigh|..."),
+ * null when there is none with frames over time */
+export function storyboardOf(boards: any): Storyboard | null {
+    var spec: string = boards && boards.playerStoryboardSpecRenderer && boards.playerStoryboardSpecRenderer.spec || '';
+    var parts = spec.split('|');
+    var best: Storyboard | null = null;
+    for (var i = 1; i < parts.length; i++) {
+        var f = parts[i].split('#');
+        var level: Storyboard = { base: parts[0], level: i - 1, w: +f[0], h: +f[1], count: +f[2], cols: +f[3], rows: +f[4], interval: +f[5], name: f[6] || '', sigh: f[7] || '' };
+        if (level.interval > 0 && level.w > 0 && level.cols > 0 && level.rows > 0 && (!best || level.w > best.w)) {
+            best = level;
+        }
+    }
+    return best;
+}
+
+/** Where the frame at t (s) is: its sheet's address and its column and row there */
+export function storyboardFrame(sb: Storyboard, t: number): { url: string; col: number; row: number } {
+    var index = Math.max(0, Math.min(sb.count - 1, Math.floor(t * 1000 / sb.interval)));
+    var per = sb.cols * sb.rows;
+    var at = index % per;
+    var url = sb.base.replace('$L', String(sb.level)).replace('$N', sb.name.replace('$M', String(Math.floor(index / per))));
+    return { url: url + (sb.sigh ? '&sigh=' + sb.sigh : ''), col: at % sb.cols, row: Math.floor(at / sb.cols) };
 }
 
 /** The video's uploaded and auto-generated subtitles */

@@ -31,6 +31,7 @@ import { bufferedEnd, DashEngine, dropAhead, Engine, lengthOf } from './dash.js'
 import { OFF_START_S, pauseVideo, pictureKind, playVideo, releasePipeline } from './pipeline.js';
 import { note, ranges } from './play-log.js';
 import { BarMarks, chapterJump, nameAt } from './bar-marks.js';
+import { SeekPreview } from './seek-preview.js';
 import { SabrEngine } from './sabr-engine.js';
 import { StatsBox } from './stats-box.js';
 import { UpNext } from './up-next.js';
@@ -140,6 +141,8 @@ export class OwnPlayer {
     private upNext: UpNext;
     /** SponsorBlock segments on the info bar's progress bar */
     private osdMarks: BarMarks;
+    /** The seek preview over the info bar (the watch page has its own) */
+    private osdSeek: SeekPreview;
     /** YouTube's "Includes paid promotion" chip, top left for the first seconds (Streams.paid) */
     private paidChip: HTMLElement;
     private paidTimer = 0;
@@ -268,6 +271,7 @@ export class OwnPlayer {
         });
         var bar = this.el.querySelector('.osd-bar') as HTMLElement;
         this.osdMarks = new BarMarks(bar, bar.querySelector('.osd-marker'));
+        this.osdSeek = new SeekPreview(bar);
         this.paidChip = this.el.appendChild(paidChip()) as HTMLElement;
         toggleClass(this.paidChip, 'by-paid--start', true);
         this.stats = new StatsBox(this.el, this.video, function () {
@@ -694,6 +698,16 @@ export class OwnPlayer {
     private setMarker(share: number): void {
         this.osd.setMarker(share);
         this.watch.setMarker(share);
+        // The frame where a pending jump lands, over the bar that shows; the info bar's title and description hidden
+        // meanwhile (the box stands where they are)
+        var on = this.watch.shown ? this.watch.seek : this.osdSeek;
+        (on === this.osdSeek ? this.watch.seek : this.osdSeek).hide();
+        if (share >= 0) {
+            on.show(this.target, lengthOf(this.video));
+        } else {
+            on.hide();
+        }
+        toggleClass(this.el, 'by-player--seeking', share >= 0 && on === this.osdSeek && on.ready);
     }
 
     /** Open the watch page over the video (requesting its details if needed) */
@@ -955,6 +969,8 @@ export class OwnPlayer {
 
     /** Show the title, channel and description from the streams */
     private showDetails(s: Streams, want: Want): void {
+        this.osdSeek.set(s.storyboard);
+        this.watch.seek.set(s.storyboard);
         this.watch.setPaid(s.paid ? s.paid.text : '');
         this.osd.setHead('', s.channel || want.channel);
         this.osd.setTitle(s.title || want.title);
@@ -1197,6 +1213,8 @@ export class OwnPlayer {
         this.audioTrack = null;
         this.infoAsked = false;
         this.segments = [];
+        this.osdSeek.set(null);
+        this.watch.seek.set(null);
         this.skipped = {};
         this.setCaption(null);
         clearTimeout(this.jumpTimer);
@@ -1241,6 +1259,8 @@ export class OwnPlayer {
     private showOsd(withText: boolean): void {
         this.tick();
         this.osd.show(withText);
+        // A jump's frames ready before it starts
+        this.osdSeek.prefetch(this.video.currentTime);
         toggleClass(this.subtitleBox, 'vod-subtitles--up', true);
     }
 

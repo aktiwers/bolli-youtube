@@ -56,7 +56,7 @@ public class MainActivity extends Activity {
         if (BuildConfig.USER_AGENT != null) {
             s.setUserAgentString(BuildConfig.USER_AGENT);
         }
-        // Frames of other sites (youtube.com) keep their cookies
+        // Frames of other sites keep their cookies (a framed site stays signed in)
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, true);
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);

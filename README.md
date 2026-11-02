@@ -61,6 +61,17 @@ Or install the IPK directly:
 https://github.com/aktiwers/bolli-youtube/releases/latest/download/bolli-youtube.ipk
 ```
 
+## Cast from your phone
+
+On older LG TVs, casting from the YouTube app on your phone goes straight to Bolli YouTube.
+
+Newer LG TVs with Google Cast (2022 and later) send casts to LG's own YouTube app instead. There, link your phone once:
+
+1. Open Bolli YouTube and go to Settings › Link with TV code.
+2. In the YouTube app on your phone, tap the cast icon › Link with TV code, and enter the code.
+
+After that, Bolli YouTube shows up in your phone's cast menu whenever it's open on the TV.
+
 ## Build it yourself
 
 You need Node.js. The app is plain ES5 for the old Chrome 38 in webOS 3.x.

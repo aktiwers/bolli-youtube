@@ -23,6 +23,7 @@ import { metrics, themed } from '../ui/theme.js';
 import { VideoTiles } from '../views/videos.js';
 import { bufferedEnd, lengthOf } from './dash.js';
 import { BarMarks, nameAt } from './bar-marks.js';
+import { SeekPreview } from './seek-preview.js';
 
 var HIDE_MS = 8000;
 /** Focus resting this long on a video prefetches it (as on the browse screens); on the channel button or Comments
@@ -70,6 +71,8 @@ export class WatchPage {
     /** The bar's fills and the knob as last written */
     private bar = { played: '', loaded: '', knob: '' };
     private marks: BarMarks;
+    /** The seek preview over this page's bar */
+    seek: SeekPreview;
     /** The SponsorBlock segments on the bar, for the name after the time */
     private segments: Segment[] = [];
     private avatar: HTMLImageElement;
@@ -142,6 +145,7 @@ export class WatchPage {
         this.marks = new BarMarks(bar, null);
         bar.appendChild(this.knob);
         bar.appendChild(this.marker);
+        this.seek = new SeekPreview(bar);
         controls.appendChild(bar);
         var row = h('div', 'by-watch-buttons');
         var left = h('div', 'by-watch-left');
