@@ -27,8 +27,9 @@ export interface WatchInfo {
     related: Video[];
     /** The video YouTube plays next ('' none) */
     next: string;
-    /** Token for the comments ('' none) */
+    /** Token for the comments ('' none), and their count as YouTube shows it ("25k"; '' none) */
     comments: string;
+    commentCount: string;
     /** Like and dislike (null: not allowed): LIKE, DISLIKE or INDIFFERENT, and YouTube's command for each */
     like: { status: string; commands: { [status: string]: any } } | null;
     /** The channel's subscribe button (null: none) */
@@ -86,12 +87,29 @@ export interface Comment {
     /** "2.7K" ('' none) */
     likes: string;
     replies: number;
+    avatar: string;
+    pinned: boolean;
+    /** Token for its Replies (the comment in full with its buttons, then its replies; '' none) */
+    detail: string;
+    /** In its Replies: Like and Dislike (on, and YouTube's commands to turn each on and off; null: none) */
+    vote: { like: Toggle; dislike: Toggle } | null;
+}
+
+/** One of a comment's toggle buttons: on, and YouTube's command for turning it on and for turning it off */
+export interface Toggle {
+    on: boolean;
+    set: any;
+    unset: any;
 }
 
 export interface Comments {
     list: Comment[];
     /** Token for the next part ('' none) */
     next: string;
+    /** "Comment as @…" or "Reply as @…" with the account's picture (YouTube takes them on the phone; null: none) */
+    handoff: { text: string; avatar: string } | null;
+    /** In Replies: the comment replied to, in full with its buttons (null: a list of comments) */
+    focal: Comment | null;
 }
 
 /** Cached video details (api/kept-pages.ts), parsed and as reply text (only a few: hundreds of KB each) */
@@ -219,6 +237,13 @@ function requestOf(command: any): (() => Promise<unknown>) | null {
             return innertube('account/set_setting', { settingItemId: setting.settingItemId, newValue: { boolValue: !!setting.boolValue } });
         };
     }
+    // A comment's Like or Dislike, on or off
+    var vote = command.performCommentActionEndpoint;
+    if (vote) {
+        return function () {
+            return innertube('comment/perform_comment_action', { actions: [vote.action] });
+        };
+    }
     var like = command.likeEndpoint;
     if (like) {
         return function () {
@@ -286,6 +311,7 @@ export function watchInfoOf(reply: any): WatchInfo {
             get(sets[0], 'autoplayVideoRenderer', 'autonavEndpointRenderer', 'endpoint', 'watchEndpoint', 'videoId') || '',
         comments: get(panel('comment-item-section'), 'content', 'sectionListRenderer', 'contents', 0, 'itemSectionRenderer', 'continuations', 0,
             'reloadContinuationData', 'continuation') || '',
+        commentCount: text(get(panel('comment-item-section'), 'header', 'engagementPanelTitleHeaderRenderer', 'contextualInfo')),
         like: likeOf(likeButton),
         subscribe: subscribeOf(subscribeButton),
         chapters: chaptersOf(reply)
@@ -342,21 +368,41 @@ export function saveOptionsOf(reply: any): SaveOption[] {
     });
 }
 
-/** Parses a reply to a comments token */
+/** Parses a reply to a comments token: a list of comments, or a comment's Replies (the comment first) */
 export function commentsOf(reply: any): Comments {
     var part = get(reply, 'continuationContents', 'itemSectionContinuation') || {};
+    var found: Comments = { list: [], next: nextOf(part), handoff: null, focal: null };
+    (part.contents || []).forEach(function (c: any) {
+        var thread = get(c, 'commentThreadRenderer', 'comment', 'commentRenderer');
+        if (thread) {
+            found.list.push(commentOf(thread));
+        } else if (c.commentRenderer) {
+            found.focal = commentOf(c.commentRenderer);
+        } else if (c.handoffInstructionRenderer) {
+            found.handoff = { text: text(c.handoffInstructionRenderer.text), avatar: picture(c.handoffInstructionRenderer.avatar) };
+        }
+    });
+    return found;
+}
+
+function commentOf(c: any): Comment {
+    var buttons = get(c, 'actionButtons', 'commentActionButtonsRenderer');
+    var like = toggleOf(get(buttons, 'likeButton', 'toggleButtonRenderer'));
+    var dislike = toggleOf(get(buttons, 'dislikeButton', 'toggleButtonRenderer'));
     return {
-        list: (part.contents || []).map(function (c: any) {
-            return get(c, 'commentThreadRenderer', 'comment', 'commentRenderer');
-        }).filter(function (c: any) { return c; }).map(function (c: any) {
-            return {
-                author: text(c.authorText),
-                age: text(c.publishedTimeText),
-                text: text(c.contentText),
-                likes: text(c.voteCount),
-                replies: +c.replyCount || 0
-            };
-        }),
-        next: nextOf(part)
+        author: text(c.authorText),
+        age: text(c.publishedTimeText),
+        text: text(c.contentText),
+        likes: text(c.voteCount),
+        replies: +c.replyCount || 0,
+        avatar: picture(c.authorThumbnail),
+        pinned: !!c.pinnedCommentBadge,
+        detail: get(c, 'detailViewEndpoint', 'showEngagementPanelEndpoint', 'engagementPanel', 'engagementPanelSectionListRenderer', 'content',
+            'sectionListRenderer', 'contents', 0, 'itemSectionRenderer', 'continuations', 0, 'reloadContinuationData', 'continuation') || '',
+        vote: like && dislike ? { like: like, dislike: dislike } : null
     };
+}
+
+function toggleOf(b: any): Toggle | null {
+    return b && b.defaultServiceEndpoint && b.toggledServiceEndpoint ? { on: !!b.isToggled, set: b.defaultServiceEndpoint, unset: b.toggledServiceEndpoint } : null;
 }

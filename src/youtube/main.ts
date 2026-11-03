@@ -1130,6 +1130,8 @@ tv.onStart = function () {
     own.release();
 };
 own.onPageAhead = pageAhead;
+// A video's comments shown: offered to a phone signed in to the same account, as YouTube's TV app does
+own.onComments = function (id) { cast.commentsHandoff(id); };
 own.onFallback = function (id, t) {
     handedOver = id;
     tv.play(id, function () {

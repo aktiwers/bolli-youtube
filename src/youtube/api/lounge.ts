@@ -81,6 +81,11 @@ export class Lounge {
         save(KEY, this.kept);
     }
 
+    /** The screen's id and its device id ('' screen before the first start) */
+    get screen(): { screenId: string; deviceId: string } {
+        return { screenId: this.kept.screenId, deviceId: this.kept.deviceId };
+    }
+
     /** The data LG's DIAL server gives phones (they can join the screen with it directly) */
     get dialData(): string {
         var k = this.kept;

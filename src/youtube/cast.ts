@@ -10,8 +10,10 @@
 // screen shows, or at once for a cast.
 
 import { KEY } from '../core/keys.js';
+import { android } from '../core/platform.js';
 import { toast } from './ui/toast.js';
 import { prefs, setPref } from './api/prefs.js';
+import { offerComments, withdrawComments } from './api/handoff.js';
 import { Lounge } from './api/lounge.js';
 import { newCpn } from './api/youtube.js';
 import { ListQueue, OwnPlayer, Playing } from './player/own-player.js';
@@ -26,6 +28,8 @@ type Fields = { [name: string]: string };
 
 export class Cast {
     private lounge = new Lounge();
+    /** The comments offered to the phone (YouTube's hand-off): the offer's id once given (null: none) */
+    private offer: Promise<string> | null = null;
     private dialData = DIAL_DATA;
     /** A phone is in the lounge (state is sent only then) */
     private remotes = false;
@@ -45,6 +49,26 @@ export class Cast {
         var self = this;
         this.lounge.onCommand = function (name, fields) { self.command(name, fields); };
         player.onChange = function () { self.changed(); };
+    }
+
+    /** While video id's comments show, offers commenting on it from the phone (YouTube's hand-off, as its TV app does
+     * it: the YouTube app on a phone signed in to the same account offers the comment box); null: the comments closed,
+     * the offer is withdrawn */
+    commentsHandoff(id: string | null): void {
+        var was = this.offer;
+        this.offer = null;
+        if (was) {
+            was.then(function (actionId) {
+                if (actionId) {
+                    withdrawComments(actionId).then(null, function () { return undefined; });
+                }
+            }, function () { return undefined; });
+        }
+        var screen = this.lounge.screen;
+        if (id && screen.screenId) {
+            this.offer = offerComments(id, screen.screenId, screen.deviceId, android() ? '' : 'LG');
+            this.offer.then(null, function () { return undefined; });
+        }
     }
 
     /** Opens the lounge (once) and registers the screen with LG's DIAL server */
@@ -199,7 +223,7 @@ export class Cast {
                 }
                 break;
             case 'getDiscoveryDeviceId':
-                this.lounge.send('setDiscoveryDeviceId', { discoveryDeviceId: '', loungeDeviceId: '' });
+                this.lounge.send('setDiscoveryDeviceId', { discoveryDeviceId: this.lounge.screen.deviceId, loungeDeviceId: '' });
                 break;
             case 'getPartyGamesMode':
                 this.lounge.send('onPartyGamesModeChanged', { isActive: 'false' });

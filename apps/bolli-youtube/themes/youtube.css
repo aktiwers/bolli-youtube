@@ -283,6 +283,35 @@ html, body { background: #0f0f0f; }
 
 /* Toasts, as YouTube's: a dark box with round corners at the top right, a white icon
    before light text */
+/* Comments as YouTube's TV player shows them: a floating panel at the right, each comment a card, white when focused */
+.by-comments-dim { background: rgba(0, 0, 0, .55); }
+.by-comments-panel { left: 800px; top: 24px; width: 456px; height: 672px; border-radius: 20px; background: #171717; }
+.by-comments-head { left: 24px; top: 24px; font-size: 24px; line-height: 32px; color: #f1f1f1; }
+.by-comments-title { font-weight: 700; }
+.by-comments-count { margin-left: 10px; font-weight: 500; }
+.by-comments-body { left: 24px; top: 80px; width: 408px; height: 592px; }
+.by-comment { margin-bottom: 12px; padding: 16px; border-radius: 12px; background: #363636; color: #f1f1f1;
+              -webkit-transition: background-color .15s ease-out, color .15s ease-out; }
+.by-comment--focused { background: #f0f0f0; color: #0f0f0f; }
+.by-comment-avatar { width: 36px; height: 36px; margin-right: 16px; border-radius: 50%; background: #555; }
+.by-comment-by { font-size: 15px; line-height: 22px; color: #aaa; }
+.by-comment--focused .by-comment-by { color: #606060; }
+.by-comment-pin { width: 24px; height: 24px; margin-left: 10px; }
+.by-comment-text { margin-top: 12px; font-size: 16px; line-height: 23px; }
+.by-comment-counts { margin-top: 14px; font-size: 13px; line-height: 18px; color: #aaa; }
+.by-comment--focused .by-comment-counts { color: #606060; }
+.by-comment-count-icon { width: 16px; height: 16px; margin-right: 6px; vertical-align: -3px; }
+.by-comment-count { margin-right: 18px; }
+.by-comment--handoff { padding: 12px 16px; }
+.by-comment-handoff { font-size: 15px; line-height: 21px; }
+.by-comment-handoff-icon { width: 24px; height: 24px; margin-left: 10px; }
+.by-comment--focal { padding: 12px 16px 16px; background: transparent; }
+.by-comment-buttons { margin-top: 16px; }
+.by-comment-button { width: 24px; height: 24px; margin-right: 10px; padding: 12px; border-radius: 24px; background: #373737; color: #f1f1f1;
+                     -webkit-transition: background-color .15s ease-out, color .15s ease-out; }
+.by-comment-button--focused { background: #f1f1f1; color: #0f0f0f; }
+.by-comments-note { padding: 16px; font-size: 17px; color: #aaa; }
+
 /* The phone's volume while casting, as Apple TV shows a volume: a dark capsule top right, a speaker and a level bar */
 .by-volume { top: 32px; right: 40px; height: 44px; padding: 0 20px 0 16px; border-radius: 22px; background: rgba(44, 44, 46, .92);
              box-shadow: 0 8px 28px rgba(0, 0, 0, .45); }
@@ -365,10 +394,15 @@ html, body { background: #0f0f0f; }
 .by-watch-marker { top: -5px; width: 16px; height: 16px; margin-left: -8px; border-radius: 8px; background: rgba(255, 0, 0, .6); }
 .by-watch-buttons { margin-top: 22px; height: 64px; }
 .by-watch-left, .by-watch-right { top: 8px; }
-.by-watch-button { width: 48px; height: 48px; padding: 12px; border-radius: 24px; background: #373737; color: #f1f1f1; }
+.by-watch-button { width: 48px; height: 48px; padding: 12px; border-radius: 24px; background: #373737; color: #f1f1f1;
+                   -webkit-transition: background-color .2s ease-out, color .2s ease-out, -webkit-transform .2s ease-out; }
 .by-watch-left .by-watch-button { margin-right: 10px; }
 .by-watch-right .by-watch-button, .by-watch-group { margin-left: 10px; }
-.by-watch-avatar { padding: 0; }
+/* The channel's picture inset in the round button, as YouTube's: the button's ring shows the focus, white, the
+   picture grown a little */
+.by-watch-avatar { padding: 6px; }
+.by-watch-avatar-img { border-radius: 50%; }
+.by-watch-avatar.by-watch-button--focused { -webkit-transform: scale(1.1); }
 .by-watch-pill { width: auto; padding: 0 22px; line-height: 48px; font-size: 16px; font-weight: 500; }
 .by-watch-center .by-watch-button { margin: 8px 8px 0; }
 .by-watch-center .by-watch-play { width: 64px; height: 64px; padding: 16px; margin-top: 0; border-radius: 32px; }
@@ -398,7 +432,7 @@ html, body { background: #0f0f0f; }
 .by-line--plain.by-line--focused { background: rgba(255, 255, 255, .12); color: #f1f1f1; }
 .by-line--plain.by-line--focused .by-line-over { color: #ddd; }
 .by-line--plain.by-line--focused .by-line-under { color: #aaa; }
-.by-watch-subscribe--on { background: #272727; color: #aaa; }
+.by-watch-subscribe--on { background: #373737; color: #f1f1f1; }
 .by-watch-subscribe--on.by-watch-button--focused { background: #f1f1f1; color: #0f0f0f; }
 
 /* SponsorBlock segments on both bars, in SponsorBlock's own colours */

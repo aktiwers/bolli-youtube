@@ -183,6 +183,22 @@
 .by-player--peek { background: transparent; overflow: hidden; }
 .by-player--peek > * { display: none; }
 .by-player--peek > video { display: block; }
+/* Comments over the video (player/comments-view.ts): the watch page's own content hidden meanwhile */
+.by-watch--comments .by-watch-body, .by-watch--comments .by-watch-shade, .by-watch--comments .by-watch-dim { visibility: hidden; }
+.by-comments, .by-comments-dim { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; }
+.by-comments-dim { opacity: 0; -webkit-transition: opacity .25s ease; }
+.by-comments--replies .by-comments-dim { opacity: 1; }
+.by-comments-panel, .by-comments-head, .by-comments-body, .by-comments-list { position: absolute; }
+.by-comments-panel, .by-comments-body { overflow: hidden; }
+.by-comments-list { left: 0; top: 0; width: 100%; -webkit-transition: -webkit-transform .2s ease-out; }
+.by-comment { position: relative; }
+.by-comment-head, .by-comment--handoff { display: -webkit-flex; display: flex; -webkit-align-items: center; align-items: center; }
+.by-comment-by, .by-comment-handoff { -webkit-flex: 1; flex: 1; overflow: hidden; }
+.by-comment-by { white-space: nowrap; text-overflow: ellipsis; }
+.by-comment-handoff { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.by-comment-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 5; overflow: hidden; word-wrap: break-word; white-space: pre-line; }
+.by-comment--focal .by-comment-text { display: block; -webkit-line-clamp: none; }
+.by-comment-count-icon, .by-comment-button { display: inline-block; }
 .by-volume { position: absolute; z-index: 7; display: -webkit-flex; display: flex; -webkit-align-items: center; align-items: center;
              visibility: hidden; opacity: 0; -webkit-transition: opacity .35s ease, visibility 0s linear .35s; }
 .by-volume--shown { visibility: visible; opacity: 1; -webkit-transition: opacity .2s ease-out; }

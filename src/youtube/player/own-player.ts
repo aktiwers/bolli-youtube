@@ -149,6 +149,8 @@ export class OwnPlayer {
     onFallback: (id: string, t: number) => void = function () { return undefined; };
     /** Open a page over the app (the channel's) after closing the player */
     onPage: (page: Page) => void = function () { return undefined; };
+    /** The comments of video id opened (null: closed), to offer them to a phone (cast.ts) */
+    onComments: (id: string | null) => void = function () { return undefined; };
     /** The video that may play next, to preload: NEXT_AHEAD_S before the end (kept: not cancelled by keys), or when
      * the watch page's focus rests on it */
     onAhead: (video: Video, kept: boolean) => void = function () { return undefined; };
@@ -304,7 +306,8 @@ export class OwnPlayer {
             settings: function () { self.settingsPanel(); },
             rest: function (video: Video) { self.onAhead(video, false); },
             restPage: function (page: Page) { self.onPageAhead(page); },
-            live: function () { return self.liveSpan(); }
+            live: function () { return self.liveSpan(); },
+            comments: function (id: string | null) { self.onComments(id); }
         });
         // The subtitles go under the watch page (themes: .by-player--watch)
         this.watch.onShown = function (shown) { toggleClass(self.el, 'by-player--watch', shown); };

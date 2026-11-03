@@ -3,7 +3,8 @@
 // (channel, description, subscribe, previous / play-pause / next, like, dislike, comments, save, subtitles,
 // settings); below them the related videos (api/watch.ts), three per row, entered with Down. Related tiles are
 // built as soon as the details arrive and kept while hidden, so Down shows them at once. Lists open in the side
-// panel (ui/side-panel.ts). Up from the buttons focuses the bar (Left/Right jump); the page hides after HIDE_MS
+// panel (ui/side-panel.ts), the comments over the video as YouTube's (comments-view.ts). Up from the buttons
+// focuses the bar (Left/Right jump); the page hides after HIDE_MS
 // without a key while the video plays. It also holds the video's details (e.g. the video YouTube plays next).
 // Related layout sizes come from the theme (metrics.watch), the rest from themes/<id>.css.
 
@@ -25,6 +26,7 @@ import { VideoTiles } from '../views/videos.js';
 import { bufferedEnd, lengthOf } from './dash.js';
 import { liveShare, LiveSpan, liveTime } from './live-engine.js';
 import { BarMarks } from './bar-marks.js';
+import { CommentsView } from './comments-view.js';
 import { SeekPreview } from './seek-preview.js';
 
 var HIDE_MS = 8000;
@@ -33,8 +35,6 @@ var HIDE_MS = 8000;
 var REST_MS = 1500;
 var CHANNEL_REST_MS = 500;
 var JUMP_S = 10;
-/** More comments are requested once the focus is this near their end */
-var COMMENTS_AHEAD = 4;
 
 /** What the page's buttons do in the player */
 export interface WatchActions {
@@ -52,6 +52,8 @@ export interface WatchActions {
     restPage(page: Page): void;
     /** A live stream's window (null: a video) */
     live(): LiveSpan | null;
+    /** The comments of video id opened (null: closed): offered to the phone meanwhile, as YouTube's TV app does */
+    comments(id: string | null): void;
 }
 
 type Zone = 'bar' | 'buttons' | 'related';
@@ -105,10 +107,8 @@ export class WatchPage {
     private channel = '';
     /** The video is in a playlist (as far as known) */
     private saved = false;
-    /** The comments shown, the token of the next part, and the token of the part in flight ('' none) */
-    private commentLines: PanelLine[] = [];
-    private commentsNext = '';
-    private fetching = '';
+    /** The comments over the video, as YouTube's player shows them */
+    private comments: CommentsView;
     /** Incremented per video, so late replies for the previous one are dropped */
     private gen = 0;
     private hideTimer = 0;
@@ -186,7 +186,7 @@ export class WatchPage {
         add(group, this.likeButton, function () { self.like('LIKE'); }, has('like'));
         add(group, this.dislikeButton, function () { self.like('DISLIKE'); }, has('like'));
         this.commentsAt = this.buttons.count;
-        add(group, icon('comments', 'by-watch-button by-watch-icon'), function () { self.commentsPanel(); }, has('comments'));
+        add(group, icon('comments', 'by-watch-button by-watch-icon'), function () { self.openComments(); }, has('comments'));
         add(group, this.saveButton, function () { self.savePanel(); }, function () { return !!self.info; });
         // Last in the group, as on YouTube
         add(group, this.subtitlesButton, function () { self.actions.subtitles(); });
@@ -201,6 +201,12 @@ export class WatchPage {
         this.status.style.top = m.top + 'px';
         this.body.appendChild(this.status);
         this.panel = new SidePanel(this.el);
+        this.comments = new CommentsView(this.el);
+        this.comments.onClose = function () {
+            toggleClass(self.el, 'by-watch--comments', false);
+            self.actions.comments(null);
+            self.arm();
+        };
         setShown(this.el, false);
         parent.appendChild(this.el);
         ['play', 'pause', 'timeupdate', 'progress'].forEach(function (type) {
@@ -341,6 +347,7 @@ export class WatchPage {
         }
         clearTimeout(this.hideTimer);
         this.panel.close();
+        this.comments.close();
         this.zone = 'buttons';
         this.place();
         this.shown = false;
@@ -350,7 +357,9 @@ export class WatchPage {
 
     /** Handles a key while shown */
     onKey(code: number): void {
-        if (this.panel.shown) {
+        if (this.comments.shown) {
+            this.comments.onKey(code);
+        } else if (this.panel.shown) {
             this.panel.onKey(code);
         } else if (this.zone === 'related') {
             this.relatedKey(code);
@@ -369,7 +378,7 @@ export class WatchPage {
         clearTimeout(this.restTimer);
         var self = this;
         this.restTimer = setTimeout(function () {
-            if (!self.shown || self.panel.shown) {
+            if (!self.shown || self.panel.shown || self.comments.shown) {
                 return;
             }
             var row = self.stack.row;
@@ -530,60 +539,16 @@ export class WatchPage {
         this.panel.open('Description', lines.concat(paragraphs(this.description)));
     }
 
-    /** Opens the comments and requests the first part */
-    private commentsPanel(): void {
-        var self = this;
-        this.commentLines = [{ label: 'Loading comments …', plain: true }];
-        this.panel.open('Comments', function () { return self.commentLines; }, 0, function () { self.moreComments(); });
-        this.commentsNext = (this.info as WatchInfo).comments;
-        this.moreComments(true);
-    }
-
-    /** Loads the next comments part when the focus nears the end (first: the first part, replacing "Loading";
-     * a part still in flight for previously opened comments is ignored) */
-    private moreComments(first?: boolean): void {
-        var token = this.commentsNext;
-        if (!token || this.fetching && !first || !first && this.panel.at < this.panel.count - 1 - COMMENTS_AHEAD) {
-            return;
-        }
-        this.fetching = token;
-        var gen = this.gen;
-        var self = this;
-        // The first part may already be prefetched (focus rested on Comments)
-        var ahead = first && this.commentsAhead && this.commentsAhead.token === token ? this.commentsAhead.part : null;
+    /** Opens the comments over the video (the watch page's own content hidden, as YouTube's), with the first part if
+     * prefetched */
+    private openComments(): void {
+        var info = this.info as WatchInfo;
+        var ahead = this.commentsAhead && this.commentsAhead.token === info.comments ? this.commentsAhead.part : undefined;
         this.commentsAhead = null;
-        (ahead || comments(token)).then(function (part) {
-            if (self.fetching === token) {
-                self.fetching = '';
-            }
-            if (gen !== self.gen || self.commentsNext !== token) {
-                return;
-            }
-            var lines: PanelLine[] = part.list.map(function (c) {
-                return {
-                    over: dots([c.author, c.age]),
-                    label: c.text,
-                    plain: true,
-                    under: dots([c.likes ? c.likes + ' likes' : '', c.replies ? c.replies + (c.replies === 1 ? ' reply' : ' replies') : ''])
-                };
-            });
-            self.commentsNext = part.next;
-            if (first) {
-                self.commentLines = lines.length ? lines : [{ label: 'No comments yet.', plain: true }];
-                self.panel.refresh();
-            } else {
-                self.commentLines = self.commentLines.concat(lines);
-                self.panel.add(lines);
-            }
-        }, function () {
-            if (self.fetching === token) {
-                self.fetching = '';
-            }
-            if (first && gen === self.gen && self.commentsNext === token) {
-                self.commentLines = [{ label: 'Could not load the comments.', plain: true }];
-                self.panel.refresh();
-            }
-        });
+        clearTimeout(this.hideTimer);
+        toggleClass(this.el, 'by-watch--comments', true);
+        this.comments.open(info.comments, info.commentCount, ahead);
+        this.actions.comments(this.id);
     }
 
     // ---- drawing
@@ -677,9 +642,9 @@ export class WatchPage {
     private arm(): void {
         clearTimeout(this.hideTimer);
         var self = this;
-        if (this.shown && !this.panel.shown && this.zone !== 'related' && !this.video.paused) {
+        if (this.shown && !this.panel.shown && !this.comments.shown && this.zone !== 'related' && !this.video.paused) {
             this.hideTimer = setTimeout(function () {
-                if (!self.panel.shown && self.zone !== 'related' && !self.video.paused) {
+                if (!self.panel.shown && !self.comments.shown && self.zone !== 'related' && !self.video.paused) {
                     self.hide();
                 }
             }, HIDE_MS) as unknown as number;
