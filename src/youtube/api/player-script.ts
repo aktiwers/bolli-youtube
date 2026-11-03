@@ -9,8 +9,18 @@
 // worker (window stubbed) with one line appended that exposes that call via
 // messages. In a page frame it blocks the app ~1.8 s on the TV; in a worker
 // only ~0.2 s. The worker holds ~45 MB, so it is dropped IDLE_MS after the
-// last use. If anything fails, SABR is unavailable and the player carries on.
+// last use. In a script without that shape the line appended uses the
+// script's stream URL builder, found and called as yt-dlp's solver does it
+// (urlBuilders). If both fail, it is the code yt-dlp's solver makes to
+// compute n in that script: a job keeps it, made ES5 for old TVs, for each
+// new TV player script (github.com/aktiwers/bolli-solver), so no app update
+// is needed; the app keeps it too. If all fail, SABR is unavailable and the
+// player carries on. The signature timestamp is handed out as soon as the
+// script is read, so /player is asked while the script still starts in its
+// worker.
 
+import { getText } from '../../core/http.js';
+import { load, save } from '../../core/store.js';
 import { answer, tvPage, youtubePage } from './youtube.js';
 
 export interface PlayerScript {
@@ -31,6 +41,24 @@ export interface NTransform {
 var IDLE_MS = 60000;
 /** Give up if the script has not run by then */
 var RUN_MS = 20000;
+/** A script that failed to run is not tried again for this long (each try costs ~1.8 s and ~45 MB on the TV) */
+var FAILED_MS = 5 * 60000;
+/** Where the solver job keeps its code for each script (players/<id>/<name>.js), tried in turn: GitHub itself
+ * (fresh within minutes), then a CDN (it may lag hours behind a new version, but answers when GitHub does not) */
+var SOLVED = ['https://raw.githubusercontent.com/aktiwers/bolli-solver/main/players/',
+    'https://cdn.jsdelivr.net/gh/aktiwers/bolli-solver@main/players/'];
+var SOLVED_MS = 20000;
+/** The solver job's code for the scripts that last needed it (YouTube serves a few versions at once), kept across
+ * starts so those skip the search and the download */
+var KEPT_KEY = 'youtube.solved';
+var KEPT_COUNT = 3;
+/** The TV player script its /tv page names: /s/player/<id>/tv-player….vflset/<name>.js */
+var PLAYER_PATH = /\/s\/player\/([\w-]+)\/tv-player[\w-]*\.vflset\/([\w-]+)\.js/;
+/** Stream URL builders tried at most, and how far back a block's start is looked for */
+var BUILDERS_MAX = 8;
+var BLOCK_SCAN = 20000;
+/** The script's closure ends here: code added before it reaches the script's own names */
+var END = '}).call(this);';
 /** Window stubs for what the script reads while it runs in the worker (the transform needs none of them) */
 var STUB = 'var window=self,top=self,parent=self;self.document={createElement:function(){return{style:{},setAttribute:function(){},' +
     'appendChild:function(){},getContext:function(){return null}}},documentElement:{style:{}},addEventListener:function(){},' +
@@ -43,26 +71,45 @@ var TAIL = '\n;self.onmessage=function(e){var r;try{r={id:e.data.id,v:self.__bol
 var script: Promise<PlayerScript> | null = null;
 var worker: Worker | null = null;
 var idleTimer = 0;
+var kept: { file: string; code: string }[] = load<{ file: string; code: string }[]>(KEPT_KEY) || [];
 
-/** The TV player script's n transform, loaded on demand (again after a failure or after being dropped IDLE_MS after
- * its last use) */
+/** The TV player script's signature timestamp, and its n transform (which waits for the script to run in its worker,
+ * so /player can be asked meanwhile). Loaded on demand: again after a failure to load, FAILED_MS after a failure to
+ * run, or after being dropped IDLE_MS after its last use. */
 export function playerScript(): Promise<PlayerScript> {
     clearTimeout(idleTimer);
     if (!script) {
-        script = Promise.all<any>([tvPage(), youtubePage()]).then(function (got) {
-            var path = /\/s\/player\/[\w-]+\/tv-player[\w-]*\.vflset\/[\w-]+\.js/.exec(got[0].html);
-            if (!path) {
+        var made: Promise<PlayerScript> = script = Promise.all<any>([tvPage(), youtubePage()]).then(function (got) {
+            var found = PLAYER_PATH.exec(got[0].html);
+            if (!found) {
                 throw new Error('No TV player script');
             }
+            var file = found[1] + '/' + found[2] + '.js';
             var w = got[1] as Window;
-            return answer(w, 'GET', path[0], null, {}).then(function (r) {
+            return answer(w, 'GET', found[0], null, {}).then(function (r) {
                 if (r.status !== 200) {
                     throw new Error('The TV player script: ' + r.status);
                 }
-                return run(r.text);
+                var js = r.text;
+                var sts = +(/signatureTimestamp:(\d+)/.exec(js) || [])[1];
+                if (!sts || js.lastIndexOf(END) < 0) {
+                    throw new Error('The TV player script has an unexpected shape');
+                }
+                var ran = run(js, file);
+                ran.then(null, function (e: Error) {
+                    if (script === made) {
+                        var failed = script = Promise.reject(e);
+                        failed.then(null, function () { return undefined; });
+                        setTimeout(function () {
+                            if (script === failed) {
+                                script = null;
+                            }
+                        }, FAILED_MS);
+                    }
+                });
+                return { sts: sts, n: function (v: string) { return ran.then(function (n) { return n(v); }); } };
             });
         });
-        var made = script;
         made.then(null, function () {
             if (script === made) {
                 script = null;
@@ -79,16 +126,56 @@ export function playerScript(): Promise<PlayerScript> {
     return script;
 }
 
-/** Run the script in a worker and call the transform by message (checked to actually change an n) */
-function run(js: string): Promise<PlayerScript> {
+/** The script running in its worker with its transform: found by its old shape, else through its stream URL builder
+ * as yt-dlp's solver finds it (urlBuilders), else by the solver job's code for the script (file: <id>/<name>.js;
+ * kept from an earlier run: no download) */
+function run(js: string, file: string): Promise<(v: string) => Promise<string>> {
     var found = findNTransform(js);
-    var patched = found && withExport(js, found);
-    var sts = +(/signatureTimestamp:(\d+)/.exec(js) || [])[1];
-    if (!patched || !sts) {
-        return Promise.reject(new Error('The n transform was not found'));
+    var own = found ? start(atEnd(js, exportOf(found))) : Promise.reject(new Error('The n transform was not found'));
+    return own.then(null, function (e: Error) {
+        var builders = urlBuilders(js);
+        return builders.length ? start(atEnd(js, builderExport(builders))) : Promise.reject(e);
+    }).then(null, function (e: Error) {
+        return fromJob(js, file).then(null, function (other: Error) {
+            throw new Error(e.message + ' (solved: ' + other.message + ')');
+        });
+    });
+}
+
+/** The script running with the solver job's code for it: kept, else downloaded (and kept once it runs) */
+function fromJob(js: string, file: string): Promise<(v: string) => Promise<string>> {
+    var known = kept.filter(function (k) { return k.file === file; })[0];
+    if (known) {
+        return start(atEnd(js, known.code)).then(null, function (e: Error) {
+            // Downloaded again next time
+            kept = kept.filter(function (k) { return k !== known; });
+            save(KEPT_KEY, kept);
+            throw e;
+        });
     }
+    return solved(file).then(function (code) {
+        return start(atEnd(js, code)).then(function (n) {
+            kept = [{ file: file, code: code }].concat(kept.filter(function (k) { return k.file !== file; })).slice(0, KEPT_COUNT);
+            save(KEPT_KEY, kept);
+            return n;
+        });
+    });
+}
+
+/** The solver job's code for a script, from GitHub, else from the CDN */
+function solved(file: string): Promise<string> {
+    return getText(SOLVED[0] + file, SOLVED_MS).then(null, function () {
+        return getText(SOLVED[1] + file, SOLVED_MS);
+    }).then(null, function (e) {
+        throw new Error('not found: ' + e.message);
+    });
+}
+
+/** Run a script (in parts) that sets self.__bolliN in a worker and call the transform by message (checked to actually
+ * change an n) */
+function start(parts: string[]): Promise<(v: string) => Promise<string>> {
     removeWorker();
-    var url = URL.createObjectURL(new Blob([STUB, patched, TAIL], { type: 'text/javascript' }));
+    var url = URL.createObjectURL(new Blob([STUB].concat(parts, [TAIL]), { type: 'text/javascript' }));
     var w = worker = new Worker(url);
     var asked: { [id: number]: (reply: { v?: string; error?: string }) => void } = {};
     var asks = 0;
@@ -105,10 +192,14 @@ function run(js: string): Promise<PlayerScript> {
             w.postMessage({ id: id, v: v });
         });
     };
-    var ran = new Promise<PlayerScript>(function (resolve, reject) {
-        var timer = setTimeout(function () { reject(new Error('The TV player script did not run')); }, RUN_MS);
+    var ran = new Promise<(v: string) => Promise<string>>(function (resolve, reject) {
+        var timer = setTimeout(function () {
+            URL.revokeObjectURL(url);
+            reject(new Error('The TV player script did not run'));
+        }, RUN_MS);
         w.onerror = function (e) {
             clearTimeout(timer);
+            URL.revokeObjectURL(url);
             reject(new Error('The TV player script failed: ' + e.message));
         };
         w.onmessage = function (e) {
@@ -131,7 +222,7 @@ function run(js: string): Promise<PlayerScript> {
                 if (v === 'abcdefghijklmnop') {
                     reject(new Error('The n transform did not run'));
                 } else {
-                    resolve({ n: n, sts: sts });
+                    resolve(n);
                 }
             }, reject);
         };
@@ -183,13 +274,77 @@ export function findNTransform(js: string): NTransform | null {
     return { fn: make[5], a: key ^ (+make[6]), b: key ^ (+make[7]) };
 }
 
-/** The script with the transform exposed at the end of its closure (null: unexpected ending) */
-export function withExport(js: string, t: NTransform): string | null {
-    var end = js.lastIndexOf('}).call(this);');
-    if (end < 0) {
-        return null;
+/** The functions that make a stream URL object, by name, as yt-dlp's solver (github.com/yt-dlp/ejs) finds them: each
+ * a function whose own body sets alr=yes on it, as a statement of its own ([]: none) */
+export function urlBuilders(js: string): string[] {
+    var out: string[] = [];
+    var set = /[;{][\w$]+\.[\w$]+\("alr","yes"\)[;}]/g;
+    var m: RegExpExecArray | null;
+    while ((m = set.exec(js)) && out.length < BUILDERS_MAX) {
+        var open = blockStart(js, m.index + 1);
+        // The block must be the function's body: function name(…){ or name=function(…){
+        var head = open < 0 ? null : /(?:function\s+([\w$]+)|([\w$][\w$.]*)\s*=\s*function)\s*\([^()]*\)\s*$/.exec(js.slice(Math.max(0, open - 200), open));
+        var name = head && (head[1] || head[2]);
+        if (name && out.indexOf(name) < 0) {
+            out.push(name);
+        }
     }
-    return js.slice(0, end) + ';window.__bolliN=function(v){return ' + t.fn + '(' + t.a + ',' + t.b + ',v)};' + js.slice(end);
+    return out;
+}
+
+/** Where the block holding position at opens (its unmatched "{" before it), within BLOCK_SCAN characters (-1: not
+ * found); strings are stepped over */
+function blockStart(js: string, at: number): number {
+    var depth = 0;
+    var stop = Math.max(0, at - BLOCK_SCAN);
+    for (var i = at - 1; i >= stop; i--) {
+        var c = js.charAt(i);
+        if (c === '"' || c === '\'') {
+            // Back to the string's opening quote (an escaped quote does not open it)
+            for (i--; i >= stop && !(js.charAt(i) === c && !escaped(js, i)); i--) {
+                // inside the string
+            }
+        } else if (c === '}') {
+            depth++;
+        } else if (c === '{') {
+            if (!depth) {
+                return i;
+            }
+            depth--;
+        }
+    }
+    return -1;
+}
+
+/** Whether the character at i is escaped (an odd number of backslashes before it) */
+function escaped(js: string, i: number): boolean {
+    var n = 0;
+    while (js.charAt(i - 1 - n) === '\\') {
+        n++;
+    }
+    return n % 2 === 1;
+}
+
+/** Code that exposes the transform through the stream URL builders (tried in turn, as yt-dlp's solver does it): a URL
+ * object made with n set, its first own method (not constructor, set, get or clone) run, its n read */
+export function builderExport(names: string[]): string {
+    return 'self.__bolliN=function(n){var made=[' + names.map(function (name) { return 'function(){return ' + name + '}'; }).join(',') +
+        '],why=null;for(var i=0;i<made.length;i++){try{var u=made[i]()("https://youtube.com/watch?v=yt","s",undefined);u.set("n",n);' +
+        'var p=Object.getPrototypeOf(u),k=Object.keys(p).concat(Object.getOwnPropertyNames(p));for(var j=0;j<k.length;j++){' +
+        'if(k[j]!=="constructor"&&k[j]!=="set"&&k[j]!=="get"&&k[j]!=="clone"){u[k[j]]();break}}var r=u.get("n");' +
+        'if(r&&r!==n){return r}}catch(x){why=x}}throw why||new Error("n unchanged")};';
+}
+
+/** Code that exposes the found transform as self.__bolliN */
+export function exportOf(t: NTransform): string {
+    return 'self.__bolliN=function(v){return ' + t.fn + '(' + t.a + ',' + t.b + ',v)};';
+}
+
+/** The script in parts with code added at the end of its closure (which run checks it has), where the script's own
+ * names are in reach; parts, so the worker's Blob makes the one copy */
+export function atEnd(js: string, code: string): string[] {
+    var end = js.lastIndexOf(END);
+    return [js.slice(0, end), ';', code, js.slice(end)];
 }
 
 function esc(name: string): string {

@@ -11,11 +11,13 @@ import { h, LAYOUT_HEIGHT, LAYOUT_WIDTH, setShown, setText, toggleClass, transla
 import { KEY } from '../../core/keys.js';
 import { canListen } from '../../core/platform.js';
 import { mark } from '../../core/perf.js';
+import { clock } from '../../core/time.js';
 import { View } from '../../core/view.js';
 import { RowStack } from '../../ui/row-stack.js';
 import { rowHeight, TileItem, TileLayout, TileRow } from '../../ui/tile-row.js';
 import { dearrowFetch, dearrowListen, dearrowOn, dearrowPicture, dearrowSettings, dearrowTitle, dearrowWait } from '../api/dearrow.js';
 import { more, Nudge, PageButton, Rows, Shelf, Tab, thumbnail, thumbnailFallback, Video } from '../api/feed.js';
+import { NoStreams, streams } from '../api/streams.js';
 import { Pills } from '../ui/pills.js';
 import { FillLoader, LOGO } from '../ui/fill-loader.js';
 import { icon } from '../ui/icons.js';
@@ -39,6 +41,8 @@ var BUTTON_ICONS: { [iconType: string]: string } = {
 var TILES_AHEAD = 6;
 var ROWS_AHEAD = 3;
 var LINES_AHEAD = 4;
+/** Length lookups at once (videos YouTube lists without a length, as in its preview carousel) */
+var LOOKUPS = 2;
 /** Consecutive empty parts before fetching stops (until focus moves) */
 var EMPTY_PARTS = 3;
 /** Rows this old are refreshed behind the ones shown (Subscriptions sooner: main.ts) */
@@ -243,6 +247,45 @@ function ownImage(v: Video): string {
     return v.poster || v.image || thumbnail(v.id);
 }
 
+/** Lengths looked up from videos' streams (also the previews' start), for the session: 'LIVE', '' (none known) */
+var lengths: { [id: string]: Promise<string> } = {};
+var looking = 0;
+var waiting: (() => void)[] = [];
+
+function lengthOf(id: string): Promise<string> {
+    if (!lengths[id]) {
+        lengths[id] = new Promise<string>(function (resolve) {
+            var ask = function (): void {
+                looking++;
+                streams(id).then(function (s) {
+                    var longest = 0;
+                    s.videos.forEach(function (f) { longest = Math.max(longest, f.duration); });
+                    resolve(s.live ? 'LIVE' : longest ? clock(longest) : '');
+                }, function (e: NoStreams) {
+                    resolve(e.length ? clock(e.length) : '');
+                }).then(function () {
+                    looking--;
+                    var next = waiting.shift();
+                    if (next) {
+                        next();
+                    }
+                });
+            };
+            if (looking < LOOKUPS) {
+                ask();
+            } else {
+                waiting.push(ask);
+            }
+        });
+    }
+    return lengths[id];
+}
+
+/** A tile's label: LIVE, else the length (with a note for audio) */
+function labelOf(v: Video): string {
+    return v.live ? 'LIVE' : v.audio && v.length ? '\u266a ' + v.length : v.length;
+}
+
 /** Builds tile rows for shelves and maps tiles back to their videos */
 export class VideoTiles {
     /** Left margin of the rows (0: the theme's; a channel page has no rail and uses YouTube's 64) */
@@ -312,17 +355,37 @@ export class VideoTiles {
                     id: v.id, title: v.page ? v.title : dearrowTitle(v.id, v.title), image: branded,
                     fallback: v.page ? '' : thumbnailFallback(v.id) || (branded !== image ? image : ''),
                     wideImage: v.poster ? v.wide || thumbnail(v.id) : undefined,
-                    label: v.live ? 'LIVE' : v.audio && v.length ? '\u266a ' + v.length : v.length, labelIcon: v.labelIcon, stack: v.stack,
+                    label: labelOf(v), labelIcon: v.labelIcon, stack: v.stack,
                     lines: [v.channel, themed(v.info)], progress: watched[v.id] ? watched[v.id].progress : v.progress, round: v.round,
                     // In the theme's wording (e.g. "CC" as YouTube's TV app writes it)
                     chips: v.badges && v.badges.map(word), offerChip: v.offer && word(v.offer)
                 });
+                if (!v.page && !v.poster && !v.live && !v.length) {
+                    self.measure(v);
+                }
             }
         });
         if (dearrowOn()) {
             this.brand(videos);
         }
         return items;
+    }
+
+    /** A video YouTube lists without a length: its tiles get it once looked up */
+    private measure(v: Video): void {
+        var self = this;
+        lengthOf(v.id).then(function (length) {
+            if (length && self.videos[v.id] === v) {
+                if (length === 'LIVE') {
+                    v.live = true;
+                } else {
+                    v.length = length;
+                }
+                self.shown().forEach(function (row) {
+                    row.setLabel(v.id, labelOf(v));
+                });
+            }
+        });
     }
 
     /** DeArrow's branding asked for where not known yet; the tiles get it as it arrives */

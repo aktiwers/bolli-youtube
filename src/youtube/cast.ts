@@ -36,6 +36,8 @@ export class Cast {
     private told = nothingTold();
     private volume = 100;
     private muted = false;
+    /** The phone's last commands (names, with their volume fields), for diagnosis on the TV */
+    heard: string[] = [];
 
     /** press: a key from the phone's arrows, handled as a remote key; play: starts a video from the phone (main.ts
      * prepares the screen for the player first) */
@@ -88,6 +90,9 @@ export class Cast {
     // ---- from the phone
 
     private command(name: string, f: Fields): void {
+        var volume = f.volume !== undefined || f.delta !== undefined || f.muted !== undefined;
+        this.heard = this.heard.slice(-29).concat([new Date().toTimeString().slice(0, 8) + ' ' + name +
+            (volume ? ' volume ' + f.volume + ' delta ' + f.delta + ' muted ' + f.muted : '')]);
         var p = this.player;
         var now = p.now;
         switch (name) {
@@ -151,13 +156,13 @@ export class Cast {
                 this.volume = f.delta ? this.volume + (+f.delta || 0) : f.volume !== undefined ? +f.volume || 0 : this.volume;
                 this.volume = Math.max(0, Math.min(100, this.volume));
                 this.muted = f.muted !== undefined ? f.muted === 'true' : this.muted;
-                p.setVolume(this.volume, this.muted);
+                p.setVolume(this.volume, this.muted, true);
                 this.tellVolume();
                 break;
             case 'mute':
             case 'unMute':
                 this.muted = name === 'mute';
-                p.setVolume(this.volume, this.muted);
+                p.setVolume(this.volume, this.muted, true);
                 this.tellVolume();
                 break;
             case 'getVolume':
@@ -264,6 +269,29 @@ export class Cast {
         } else if (stateOf(now) !== this.told.state) {
             this.stateChange();
         }
+        this.tellAutoplayNext();
+    }
+
+    /** What Autoplay plays next, and its countdown starting or dismissed (as YouTube's TV app tells the phone) */
+    private tellAutoplayNext(): void {
+        var p = this.player;
+        var next = p.autoplayNext;
+        var id = next ? next.id : '';
+        if (id !== this.told.next) {
+            this.told.next = id;
+            this.lounge.send('autoplayUpNext', id ? { videoId: id } : {});
+        }
+        var counting = p.upNextVideo;
+        var countingId = counting ? counting.id : '';
+        if (countingId !== this.told.counting) {
+            if (countingId) {
+                this.lounge.send('nowAutoplaying', { videoId: countingId, timeout: String(prefs().autoplayWait) });
+            } else if (!p.now || p.now.id !== this.told.counting) {
+                // Cancelled, not played
+                this.lounge.send('autoplayDismissed', {});
+            }
+            this.told.counting = countingId;
+        }
     }
 
     /** The playing video's fields in the lounge's format */
@@ -369,9 +397,9 @@ function stateOf(now: Playing): number {
     return now.ended ? 0 : now.waiting ? 3 : now.paused ? 2 : 1;
 }
 
-/** Nothing told yet: no video, no state */
-function nothingTold(): { id: string; cpn: string; state: number; duration: number } {
-    return { id: '', cpn: '', state: -2, duration: 0 };
+/** Nothing told yet: no video, no state, no Autoplay video or countdown */
+function nothingTold(): { id: string; cpn: string; state: number; duration: number; next: string; counting: string } {
+    return { id: '', cpn: '', state: -2, duration: 0, next: '', counting: '' };
 }
 
 /** The extra fields YouTube sent with the phone's list (echoed back in nowPlaying) */

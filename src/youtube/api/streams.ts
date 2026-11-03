@@ -162,6 +162,8 @@ export interface Sabr {
 export interface NoStreams {
     status: string;
     reason: string;
+    /** The video's length (s) when YouTube tells it anyway (an age check) */
+    length?: number;
 }
 
 /** The visitor id: the stored one while recent (unless fresh), else a new one */
@@ -268,7 +270,11 @@ function askSabr(id: string): Promise<Streams> {
                 throw { status: 'NO_SABR', reason: 'no SABR stream' } as NoStreams;
             }
             var n = (/[?&]n=([^&]*)/.exec(url) || [])[1];
-            return (n ? script.n(decodeURIComponent(n)) : Promise.resolve('')).then(function (changed) {
+            // The transform may still be starting, or fail now: SABR is then unavailable
+            var transformed = n ? script.n(decodeURIComponent(n)).then(null, function (e: Error) {
+                throw { status: 'NO_SABR', reason: e.message } as NoStreams;
+            }) : Promise.resolve('');
+            return transformed.then(function (changed) {
                 if (n) {
                     url = url.replace(/([?&]n=)[^&]*/, '$1' + encodeURIComponent(changed));
                 }
@@ -313,7 +319,7 @@ function ask(id: string, again: boolean): Promise<Streams> {
         if (!again && playable.status === 'LOGIN_REQUIRED' && /bot/i.test(playable.reason || '')) {
             return ask(id, true);
         }
-        throw { status: playable.status || 'NO_REPLY', reason: playable.reason || '' } as NoStreams;
+        throw { status: playable.status || 'NO_REPLY', reason: playable.reason || '', length: +(reply && reply.videoDetails && reply.videoDetails.lengthSeconds) || undefined } as NoStreams;
     }, function (e: HttpError | NoStreams) {
         throw (e as NoStreams).reason !== undefined ? e : { status: 'HTTP', reason: (e as HttpError).message } as NoStreams;
     });
@@ -397,9 +403,9 @@ var SUPPORTED: { [key: string]: boolean } = {};
 /** Whether Media Source here checks a video's size and frame rate (webOS does; elsewhere they are ignored; null: not
  * asked yet) */
 var sized: boolean | null = null;
-/** Whether this device plays the format: its codec, and (where Media Source checks them) its size and frame rate, so
- * 8K or 60 fps formats are used only where the TV plays them. AV1 only there: elsewhere it may say yes to AV1 that it
- * would decode in software */
+/** Whether this device plays the format: its codec, and its size and frame rate where Media Source checks them (webOS)
+ * or, on Android, as its decoders say; so 8K, 60 fps or AV1 formats are used only where the device plays them. AV1
+ * not where nothing tells (a Media Source may say yes to AV1 it would decode in software) */
 function supported(f: any): boolean {
     if (typeof MediaSource === 'undefined') {
         return true;
@@ -409,13 +415,14 @@ function supported(f: any): boolean {
         sized = MediaSource.isTypeSupported('video/mp4; codecs="avc1.4d401e"; width=640; height=360; framerate=30') &&
             !MediaSource.isTypeSupported('video/mp4; codecs="avc1.4d401e"; width=30000; height=20000; framerate=30');
     }
-    if (!sized && /av01/.test(f.mimeType)) {
-        return false;
-    }
     var key = f.mimeType + ' ' + (f.height || 0) + ' ' + (f.fps || 0);
     if (SUPPORTED[key] === undefined) {
-        SUPPORTED[key] = MediaSource.isTypeSupported(f.mimeType + (sized && f.width && f.height ? '; width=' + f.width + '; height=' + f.height +
+        var asked = MediaSource.isTypeSupported(f.mimeType + (sized && f.width && f.height ? '; width=' + f.width + '; height=' + f.height +
             (f.fps ? '; framerate=' + f.fps : '') : ''));
+        var shell = android();
+        var codec = (/codecs="([^".]+)/.exec(f.mimeType) || [])[1] || '';
+        var decoders = shell && shell.decodes && f.width && f.height ? shell.decodes(codec, f.width, f.height, f.fps || 0) : null;
+        SUPPORTED[key] = asked && (decoders !== null ? decoders : sized || !/av01/.test(f.mimeType));
     }
     return SUPPORTED[key];
 }

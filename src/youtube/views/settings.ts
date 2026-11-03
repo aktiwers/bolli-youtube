@@ -186,12 +186,6 @@ function dearrowOptions(): Setting {
 /** The app's own settings (pages: possible start pages; more: Subtitles' "More languages") */
 function bolli(pages: StartPage[], more: () => void): Setting[] {
     var settings = [
-        pref('Player', 'The player the videos play in', pic('living_room_pre_app_user_setting'), 'player', function () {
-            return [
-                { value: 'bolli', name: 'Bolli\'s player', note: 'starts sooner, quick keys, up to 4K, its own watch page (Down)' },
-                { value: 'youtube', name: 'YouTube\'s player', note: 'YouTube\'s own, with its own watch page' }
-            ];
-        }),
         autoplay(),
         pref('Video quality', 'The quality videos start at', pic('clear_search_history'), 'quality', function () {
             return [

@@ -183,6 +183,11 @@
 .by-player--peek { background: transparent; overflow: hidden; }
 .by-player--peek > * { display: none; }
 .by-player--peek > video { display: block; }
+.by-volume { position: absolute; z-index: 7; display: -webkit-flex; display: flex; -webkit-align-items: center; align-items: center;
+             visibility: hidden; opacity: 0; -webkit-transition: opacity .35s ease, visibility 0s linear .35s; }
+.by-volume--shown { visibility: visible; opacity: 1; -webkit-transition: opacity .2s ease-out; }
+.by-volume-track { overflow: hidden; }
+.by-volume-fill { height: 100%; }
 .by-peek-ring { position: absolute; display: none; z-index: 41; }
 .by-peek-ring.by-peek-ring--on { display: block; }
 

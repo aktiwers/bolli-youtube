@@ -21,7 +21,7 @@ import { PROBLEM, toast } from './ui/toast.js';
 import { googleOf, keptProfiles, ownChannel, Profile, profiles, signOut } from './api/accounts.js';
 import { saveAvatars } from './api/avatars.js';
 import { channelAhead, isChannel } from './api/channel.js';
-import { dearrowFetch, dearrowOn, dearrowTitle, saveDearrow, Wanted } from './api/dearrow.js';
+import { dearrowFetch, dearrowOn, saveDearrow, Wanted } from './api/dearrow.js';
 import { first, get, home, keptPage, page, Page, PageButton, pageAhead as fetchPageAhead, Rows, searchAhead as fetchSearchAhead, sized, SubChannel, subscriptions, tapAhead, text, Video } from './api/feed.js';
 import { forgetKept } from './api/kept-pages.js';
 import { prefs, reloadPrefs, setPref } from './api/prefs.js';
@@ -641,9 +641,6 @@ function askAccount(): void {
  * reloads the screens (accountChanged) */
 function switched(): void {
     tv.shutDown();
-    if (prefs().player !== 'bolli') {
-        tv.start();
-    }
     askedAccount = false;
     screen().hide();
     for (var id in pagesOf) {
@@ -728,7 +725,7 @@ function pressNudge(command: any, view: FeedView): void {
  * position when further than the tile's own start */
 function play(video: Video): void {
     // Films play only in YouTube's player (a toast says so)
-    var bolli = prefs().player === 'bolli' && !video.movie;
+    var bolli = !video.movie;
     // Release YouTube's app kept for films (ready or starting): the app's player needs the decoder and memory
     if (bolli) {
         tv.shutDown();
@@ -756,12 +753,7 @@ function play(video: Video): void {
     if (!tv.play(video.id, updateMenu, t, video.movie)) {
         return;
     }
-    if (video.movie && prefs().player === 'bolli') {
-        toast('Movies can only play in YouTube\'s player, so it opens there', 'info');
-    } else {
-        var title = dearrowTitle(video.id, video.title);
-        toast(ready ? 'Opening ' + title + ' …' : 'Starting YouTube\'s player for ' + title + ' …');
-    }
+    toast('Movies can only play in YouTube\'s player, so it opens there' + (ready ? '' : ' (starting it)'), 'info');
 }
 
 /** Preloads the focused tile's video for a faster start, and shows its preview */
@@ -769,33 +761,25 @@ function preloadFocused(): void {
     clearTimeout(preloadTimer);
     preloadTimer = setTimeout(function () {
         var p = prefs();
-        var bolli = p.player === 'bolli';
         if (own.busy || tv.busy || document.hidden) {
             return;
         }
         var tile = focusedTile();
         readyForFilms(tile);
         // Not while the screen's pictures are still loading
-        var video = tv.warming || !p.preload && !(bolli && p.previews !== 'off') || picturesWaiting() ? null : tile;
+        var video = tv.warming || !p.preload && p.previews === 'off' || picturesWaiting() ? null : tile;
         if (!video || video.page || video.movie) {
             if (video && video.page) {
                 pageAhead(video.page);
-            } else if (video && !bolli && p.preload) {
-                tv.preload(video.id);
             }
             return;
         }
         if (p.preload) {
-            if (bolli) {
-                preloadVideo(video.id, video.start || 0, video.channel);
-            } else {
-                tv.preload(video.id);
-            }
+            preloadVideo(video.id, video.start || 0, video.channel);
         }
-        // Preview only with the app's player (otherwise YouTube's app holds the video decoder); not for the video just
-        // closed (OK resumes it)
+        // A preview, not of the video just closed (OK resumes it)
         var frame = screen().el.querySelector('.bd-tile--focused .bd-tile-frame') as HTMLElement | null;
-        if (bolli && p.previews !== 'off' && frame && own.leftId !== video.id) {
+        if (p.previews !== 'off' && frame && own.leftId !== video.id) {
             // Release YouTube's app kept for films: the preview needs the decoder
             tv.shutDown();
             preview.show(video.id, frame, p.previews === 'sound');
@@ -803,13 +787,13 @@ function preloadFocused(): void {
     }, PRELOAD_REST_MS) as unknown as number;
 }
 
-/** With the app's player, YouTube's app is started and the film preloaded while focus rests on a film tile (only it
- * plays films; from cold, playback takes ~13 s after OK). Released after FILMS_LEFT_MS off films (idle, it holds
- * ~60 MB) or when the app's player plays. Settings: Videos start sooner */
+/** YouTube's app is started and the film preloaded while focus rests on a film tile (only it plays films; from cold,
+ * playback takes ~13 s after OK). Released after FILMS_LEFT_MS off films (idle, it holds ~60 MB) or when the app's
+ * player plays. Settings: Videos start sooner */
 function readyForFilms(tile: Video | null, ahead?: boolean): void {
     var p = prefs();
     clearTimeout(filmTimer);
-    if (p.player !== 'bolli' || tv.busy || own.busy || document.hidden) {
+    if (tv.busy || own.busy || document.hidden) {
         return;
     }
     if (tile && tile.movie && p.preload) {
@@ -1123,10 +1107,8 @@ own.onFallback = function (id, t) {
     handedOver = id;
     tv.play(id, function () {
         handedOver = '';
-        // Shut YouTube's app down when the app's player is chosen (also if it gave up before showing, without onShown)
-        if (prefs().player === 'bolli') {
-            tv.shutDown();
-        }
+        // Shut YouTube's app down again (also if it gave up before showing, without onShown)
+        tv.shutDown();
         updateMenu();
     }, t);
 };
@@ -1251,15 +1233,10 @@ switchSection(startPage);
 // The logo's list names the account; a guest gets "Who's watching?"
 knowAccount();
 updateMenu();
-// Start YouTube's TV app once the first screen is drawn and keys rest (a picked video starts it at once).
-// With the app's player it starts only when needed (a video the app's player cannot play, a focused film
-// tile: readyForFilms), since its warm-up video holds the TV's video decoder
+// Once the first screen is drawn and keys rest: the cast receiver, the pages left open and the sections built ahead.
+// YouTube's app starts only when needed (a film, or a video nothing else plays: readyForFilms, own.onFallback), since
+// its warm-up video holds the TV's video decoder
 whenScreenRests(function () {
-    // Not during a cast in the app's player: the warm-up would take the decoder (the next video starts it)
-    if (prefs().player !== 'bolli' && !own.busy) {
-        mark('tvStart');
-        tv.start();
-    }
     // Start the cast receiver once the first screen shows
     cast.start();
     openPages();

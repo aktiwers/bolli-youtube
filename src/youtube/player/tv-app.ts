@@ -382,9 +382,11 @@ export class TvApp {
     /** A video stopped by the app going to the background, played again when it comes back */
     private resume: Want | null = null;
     private page: TvPage | null = null;
-    /** Warming: command handler hooked; warm-up video loaded */
+    /** Warming: command handler hooked; warm-up video loaded (home: loaded on YouTube's Home instead, where its newer
+     * app starts whatever the address asks) */
     private hooked = false;
     private warm = false;
+    private home = false;
     /** When OK was pressed; whether the video began loading; its first deadline passed */
     private askedAt = 0;
     private loading = false;
@@ -575,8 +577,9 @@ export class TvApp {
         if (this.phase === 'warming' && type === 'loadstart' && this.loader && this.want && m.route.indexOf('v=' + this.want.id) >= 0) {
             this.loader.step(WAIT_ASKED);
         }
-        if (this.phase === 'warming' && type === 'loadedmetadata' && m.route.indexOf('v=' + this.startedOn) >= 0) {
+        if (this.phase === 'warming' && type === 'loadedmetadata') {
             this.warm = true;
+            this.home = m.route.indexOf('v=' + this.startedOn) < 0;
             this.warmedUp();
         } else if (this.phase === 'idle' && type === 'loadstart') {
             // Something loads with no video wanted (a late start after Back): empty it
@@ -680,6 +683,7 @@ export class TvApp {
         this.phase = 'warming';
         this.hooked = false;
         this.warm = false;
+        this.home = false;
         this.deadline(WARMING_MS, 'warming');
         // Full animation, as YouTube AdFree starts it (YouTube reads env_forceFullAnimation from the URL)
         if (want && want.film) {
@@ -704,6 +708,10 @@ export class TvApp {
     /** Warm once the command handler is hooked and the start video has loaded: the wanted video shows as it is;
      * otherwise idle, and a waiting video opens */
     private warmedUp(): void {
+        if (this.home) {
+            // Not on the start video: the wanted one is opened by command (so the handler must be hooked)
+            this.startedFor = '';
+        }
         var started = !!this.want && this.want.id === this.startedFor;
         // Started on the wanted video: shown once loaded, without waiting for the command handler (else it plays on
         // unseen until that is found)

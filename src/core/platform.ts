@@ -19,6 +19,10 @@ export interface AndroidShell {
     /** The display's maximum height in lines (its largest mode: 1080 on an
      * HD Chromecast) */
     screenHeight(): number;
+    /** Whether a decoder here plays this video codec (avc1, vp9, av01) at
+     * this size and frame rate (0: any); AV1 only in hardware. Missing in
+     * shells built before it */
+    decodes?(codec: string, width: number, height: number, fps: number): boolean;
 }
 
 /** The Android app around the page, or null (webOS, a browser) */

@@ -283,6 +283,12 @@ html, body { background: #0f0f0f; }
 
 /* Toasts, as YouTube's: a dark box with round corners at the top right, a white icon
    before light text */
+/* The phone's volume while casting, as Apple TV shows a volume: a dark capsule top right, a speaker and a level bar */
+.by-volume { top: 32px; right: 40px; height: 44px; padding: 0 20px 0 16px; border-radius: 22px; background: rgba(44, 44, 46, .92);
+             box-shadow: 0 8px 28px rgba(0, 0, 0, .45); }
+.by-volume-icon { width: 24px; height: 24px; margin-right: 14px; color: #fff; }
+.by-volume-track { width: 150px; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .28); }
+.by-volume-fill { border-radius: 3px; background: #fff; -webkit-transition: width .15s ease-out; }
 .by-toast { top: 48px; right: 48px; max-width: 640px; padding: 22px 16px 22px 24px; border-radius: 12px; background: #181818; }
 .by-toast-icon { width: 24px; height: 24px; margin-right: 22px; color: #fff; }
 .by-toast-text { font-size: 19px; line-height: 24px; font-weight: 500; color: #fff; white-space: normal; }

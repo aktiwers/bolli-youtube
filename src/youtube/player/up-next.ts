@@ -55,6 +55,11 @@ export class UpNext {
         return !!this.video;
     }
 
+    /** The video counted down to (null: hidden) */
+    get counting(): Video | null {
+        return this.video;
+    }
+
     /** Starts the countdown to video (seconds), focus on Play now */
     show(video: Video, seconds: number): void {
         this.video = video;

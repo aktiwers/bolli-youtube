@@ -5,8 +5,10 @@
 // keys at once. Playback is reported to History (api/stats.ts). Down opens
 // the watch page (watch-page.ts): quality, subtitles, audio track, repeat,
 // autoplay, stats; no speed control, as the TV's Media Source plays only at
-// 1x. Videos it cannot play go to YouTube's player (onFallback). A casting
-// phone (cast.ts) drives it through its public methods and onChange.
+// 1x. A video that does not play tries its other codecs, then the other way
+// of getting its streams (as a guest or by SABR), and only then YouTube's
+// player (onFallback). A casting phone (cast.ts) drives it through its
+// public methods and onChange.
 
 import { h, setShown, toggleClass } from '../../core/dom.js';
 import { KEY } from '../../core/keys.js';
@@ -27,6 +29,7 @@ import { noAnswer } from '../api/youtube.js';
 import { AudioTrack, AUTO_LINES, base, Caption, captionList, forgetStreams, Format, kindOf, NoStreams, pickFormat, playableStreams, sabrStreams, streams, Streams } from '../api/streams.js';
 import { channelPicture, watchInfo, WatchInfo } from '../api/watch.js';
 import { FillLoader } from '../ui/fill-loader.js';
+import { icon, setIcon } from '../ui/icons.js';
 import { PanelLine } from '../ui/side-panel.js';
 import { CAPTION_STYLES, Captions, loadCaptions, translationsRefused } from './captions.js';
 import { bufferedEnd, DashEngine, dropAhead, Engine, lengthOf } from './dash.js';
@@ -70,6 +73,10 @@ var LEFT_MS = 60000;
 var AUDIO_SWITCH_S = 2;
 /** A skip segment ending this close to the video's end (s) counts as reaching the end */
 var END_SKIP_S = 1;
+/** The TV's pipeline may stop at a video's very end without ending it (seen where the picture track ends a little
+ * before the sound): the time standing this near the end this long ends it here */
+var END_STUCK_S = 0.5;
+var END_STUCK_MS = 1500;
 /** The next video is preloaded this long before the end (s) */
 var NEXT_AHEAD_S = 30;
 /** Previous this far into a video restarts it instead */
@@ -91,6 +98,8 @@ function keysLine(chapters: boolean): string {
 }
 /** How often a preview's fading sound steps down (ms) */
 var FADE_STEP_MS = 100;
+/** How long the volume shows after the phone changes it */
+var VOLUME_SHOWN_MS = 1500;
 /** How long a start waits for DeArrow's title of a video no tile asked it for (ms) */
 var DEARROW_START_MS = 5000;
 /** The keys line while the chapter row is open */
@@ -159,6 +168,8 @@ export class OwnPlayer {
      * again when the row closes without a pick) */
     private chapterRow: ChapterRow;
     private chapterPaused = false;
+    /** The codecs tried for this video by the method playing (otherCodec) */
+    private triedKinds: { [kind: string]: boolean } = {};
     /** YouTube's most replayed graph over the info bar's progress bar, and the video's (null: none) */
     private osdReplays: ReplayGraph;
     private replays: Replays | null = null;
@@ -186,6 +197,9 @@ export class OwnPlayer {
     private report: WatchReport | null = null;
     /** The reported video's duration (s; for the progress) */
     private watchLength = 0;
+    /** The ended video's length (s), told while Up next's video is loaded in its place; the stuck-end check */
+    private endLength = 0;
+    private endTimer = 0;
     /** The subtitles shown (null: none) and their cues */
     private caption: Caption | null = null;
     private track: Captions | null = null;
@@ -234,6 +248,10 @@ export class OwnPlayer {
     /** The player's volume (0-1: setVolume), and the preview's fade out (0: none) */
     private volume = 1;
     private fadeTimer = 0;
+    /** The volume as the phone set it, shown for a moment as Apple TV shows it: a speaker and a level bar (null: not
+     * shown yet) */
+    private volumeShown: { el: HTMLElement; icon: HTMLElement; fill: HTMLElement } | null = null;
+    private volumeTimer = 0;
     private peek: Taken | null = null;
     /** Called when the preview stops by itself (failed or ended) */
     private peekEnded: () => void = function () { return undefined; };
@@ -281,8 +299,9 @@ export class OwnPlayer {
         // The subtitles go under the watch page (themes: .by-player--watch)
         this.watch.onShown = function (shown) { toggleClass(self.el, 'by-player--watch', shown); };
         this.upNext = new UpNext(this.el, {
-            play: function (video: Video) { self.switchTo(video, true); },
+            play: function (video: Video) { self.playNext(video); },
             cancel: function () {
+                self.onChange();
                 self.dropPrimed();
                 // The ended video was released for the next one: reload it paused at its start (Play replays it)
                 if (!self.engine && self.want && self.format) {
@@ -532,6 +551,11 @@ export class OwnPlayer {
         if (!want) {
             return null;
         }
+        // Ended, Up next's video loaded in its place: this one's end
+        if (this.upNext.shown) {
+            var end = this.endLength;
+            return { id: want.id, t: end, duration: end, loaded: end, ended: true, waiting: false, paused: false };
+        }
         var t = this.position();
         // A live stream: within its window
         var w = this.window();
@@ -585,11 +609,37 @@ export class OwnPlayer {
         }
     }
 
-    /** Volume (0-100) and mute of this player (not the TV's) */
-    setVolume(level: number, muted: boolean): void {
-        this.volume = Math.max(0, Math.min(1, level / 100));
+    /** Volume (0-100) and mute of this player (not the TV's), the level cubed as an audio control's curve (a linear
+     * one changes little near the top: each of the phone's steps of 3 is heard alike); shown: the level shows for a
+     * moment */
+    setVolume(level: number, muted: boolean, shown?: boolean): void {
+        var l = Math.max(0, Math.min(100, level)) / 100;
+        this.volume = l * l * l;
         this.video.volume = this.volume;
         this.video.muted = muted;
+        if (shown) {
+            this.showVolume(Math.round(level), muted);
+        }
+    }
+
+    /** The volume's speaker and level bar, for VOLUME_SHOWN_MS (fading in and out) */
+    private showVolume(level: number, muted: boolean): void {
+        var shown = this.volumeShown;
+        if (!shown) {
+            var el = h('div', 'by-volume');
+            var track = h('div', 'by-volume-track');
+            shown = this.volumeShown = { el: el, icon: icon('volume', 'by-volume-icon'), fill: h('div', 'by-volume-fill') };
+            track.appendChild(shown.fill);
+            el.appendChild(shown.icon);
+            el.appendChild(track);
+            this.el.appendChild(el);
+        }
+        setIcon(shown.icon, muted || !level ? 'volumeoff' : 'volume');
+        shown.fill.style.width = (muted ? 0 : level) + '%';
+        toggleClass(shown.el, 'by-volume--shown', true);
+        clearTimeout(this.volumeTimer);
+        var box = shown.el;
+        this.volumeTimer = setTimeout(function () { toggleClass(box, 'by-volume--shown', false); }, VOLUME_SHOWN_MS) as unknown as number;
     }
 
     /** Fades the preview's sound out over ms, reaching silence as it ends (down a curve: steeper at the end, as the
@@ -874,10 +924,26 @@ export class OwnPlayer {
         }
     }
 
-    /** At the end: replay (repeat), the next in the queue, the next video after "Up next" (autoplay), else close */
+    /** What Autoplay plays after this video (null: the queue goes on, repeat, Autoplay off, or none known) */
+    get autoplayNext(): Video | null {
+        return this.loop || this.queue && this.queue.peek() || !prefs().autoplay ? null : this.watch.upcoming();
+    }
+
+    /** Up next's video while it counts down (null: none) */
+    get upNextVideo(): Video | null {
+        return this.upNext.counting;
+    }
+
+    /** At the end: replay (repeat), else the queue's next or YouTube's as the Autoplay setting says (at once, or after
+     * "Up next"; off: close) */
     private ended(): void {
-        var next = this.watch.upcoming();
-        var queued = this.loop ? null : this.queue && this.queue.next();
+        clearTimeout(this.endTimer);
+        // Counting down already (an end found by the stuck-end check, then the pipeline's own)
+        if (this.upNext.shown) {
+            return;
+        }
+        this.endLength = lengthOf(this.video);
+        var next = this.queue && this.queue.peek() || this.watch.upcoming();
         if (this.loop && this.format) {
             // Repeat: seek to the start in place (the buffer refills from there); SABR restarts
             this.skipped = {};
@@ -887,18 +953,30 @@ export class OwnPlayer {
             } else {
                 this.playFormat(this.format, this.pastSkipped(0));
             }
-        } else if (queued) {
-            this.switchTo(queued, false);
         } else if (prefs().autoplay && next && !prefs().autoplayWait) {
             // Autoplay without a wait (Settings): no "Up next"
-            this.switchTo(next, true);
+            this.playNext(next);
         } else if (prefs().autoplay && next) {
             this.watch.hide();
             this.osd.hide();
             this.upNext.show(next, prefs().autoplayWait);
             this.prime(next);
+            this.onChange();
         } else {
             this.stop();
+        }
+    }
+
+    /** Play the next video: the queue's moves the queue on (Previous walks it back), YouTube's is remembered for
+     * Previous */
+    private playNext(video: Video): void {
+        var q = this.queue;
+        var queued = q && q.peek();
+        if (q && queued && queued.id === video.id) {
+            q.next();
+            this.switchTo(video, false);
+        } else {
+            this.switchTo(video, true);
         }
     }
 
@@ -940,6 +1018,7 @@ export class OwnPlayer {
         this.renewed = false;
         this.inPlaceTried = false;
         this.switched = false;
+        this.triedKinds = {};
         this.loop = !!want.loop;
         this.upNext.hide();
         (window as any).__bolli.steps = {};
@@ -1183,11 +1262,12 @@ export class OwnPlayer {
             if (gen !== self.gen || self.moving || self.held) {
                 return;
             }
-            // No streams yet: YouTube has not answered (network down), so its player could not play it either
+            // No streams yet: YouTube has not answered (network down), so its player could not play it either; else the
+            // other codecs and the other method before YouTube's player
             if (!self.streams) {
                 self.offline();
             } else {
-                self.fallback('it did not start');
+                self.failed('it did not start');
             }
         }, START_GIVE_UP_MS) as unknown as number;
     }
@@ -1244,7 +1324,16 @@ export class OwnPlayer {
             this.renewInPlace(want);
             return;
         }
-        // The other method: once, and not if it already failed for this video
+        // Another codec of the same streams first: where a decoder or a format fails, another may play (not for the
+        // network: no codec helps there)
+        var other = !renew && why !== 'network' && want && s && this.format ? this.otherCodec(s) : null;
+        if (other && want) {
+            note('codec', why + ': ' + kindOf((this.format as Format).mime) + ' -> ' + kindOf(other.mime));
+            want.t = this.position();
+            this.playFormat(other, want.t);
+            return;
+        }
+        // The other method: once, and not if it already failed for this video; YouTube's player only after all
         if (!want || !s || !renew && (this.switched || s.only)) {
             this.fallback(why);
             return;
@@ -1265,8 +1354,16 @@ export class OwnPlayer {
             this.load(s.sabr ? sabrStreams(want.id) : streams(want.id));
         } else {
             this.switched = true;
+            this.triedKinds = {};
             this.load(s.sabr ? streams(want.id) : sabrStreams(want.id), why);
         }
+    }
+
+    /** A video format of a codec not tried yet for this video (the one playing counts as tried; null: none left) */
+    private otherCodec(s: Streams): Format | null {
+        var tried = this.triedKinds;
+        tried[kindOf((this.format as Format).mime)] = true;
+        return pickFormat(s.videos.filter(function (f) { return !tried[kindOf(f.mime)]; }), prefs().quality || AUTO_LINES);
     }
 
     /** New URLs for the formats playing (both tracks may fail, so requested once). If the formats differ or are
@@ -1325,6 +1422,7 @@ export class OwnPlayer {
      * it played (with position and details), or null. */
     private reset(keep?: boolean): Want | null {
         this.showPaid(false);
+        clearTimeout(this.endTimer);
         var was = this.want;
         // Drop the primed video and the poster over it, unless it is being taken over
         if (!keep) {
@@ -1426,6 +1524,8 @@ export class OwnPlayer {
                 self.watch.setInfo(info);
                 // Chapters on the bar
                 self.drawParts();
+                // A casting phone is told what Autoplay plays next
+                self.onChange();
             }
         }, function () {
             if (self.want === want) {
@@ -1788,14 +1888,25 @@ export class OwnPlayer {
         } else if (this.report && !v.paused) {
             this.report.at(v.currentTime);
         }
-        // Preload the next video near the end (the queue's next, else YouTube's with Autoplay on; none with repeat)
+        // Preload the next video near the end with Autoplay on (the queue's next, else YouTube's; none with repeat)
         var length = lengthOf(v);
         if (this.report && length > 0) {
             this.watchLength = length;
         }
+        // Stuck at the very end (the time stands): ended here
+        if (this.moving && length > 0 && length - v.currentTime < END_STUCK_S && !v.paused) {
+            clearTimeout(this.endTimer);
+            var stood = v.currentTime;
+            this.endTimer = setTimeout(function () {
+                if (self.want === want && !v.ended && !v.paused && Math.abs(v.currentTime - stood) < 0.05) {
+                    note('end', 'stood at ' + stood.toFixed(2) + ' of ' + length.toFixed(2));
+                    self.ended();
+                }
+            }, END_STUCK_MS) as unknown as number;
+        }
         if (this.moving && !this.aheadTold && length > 0 && length - v.currentTime < NEXT_AHEAD_S) {
             this.aheadTold = true;
-            var coming = this.loop ? null : this.queue && this.queue.peek() || (prefs().autoplay ? this.watch.upcoming() : null);
+            var coming = this.loop || !prefs().autoplay ? null : this.queue && this.queue.peek() || this.watch.upcoming();
             if (coming) {
                 this.onAhead(coming, true);
             }

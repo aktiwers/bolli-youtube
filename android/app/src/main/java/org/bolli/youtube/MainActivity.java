@@ -16,6 +16,8 @@ import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
 import android.graphics.Point;
 import android.hardware.display.DisplayManager;
+import android.media.MediaCodecInfo;
+import android.media.MediaCodecList;
 import android.os.Build;
 import android.os.Bundle;
 import android.speech.RecognizerIntent;
@@ -194,6 +196,15 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** A decoder in hardware: Android 10 says so; before, Android's own software decoders are known by name */
+    private static boolean inHardware(MediaCodecInfo info) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            return info.isHardwareAccelerated();
+        }
+        String name = info.getName().toLowerCase();
+        return !name.startsWith("omx.google.") && !name.startsWith("c2.android.") && !name.contains(".sw.");
+    }
+
     /** The page's calls (src/core/platform.ts: AndroidShell); they come on a thread of their own */
     private class Shell {
         @JavascriptInterface
@@ -245,6 +256,30 @@ public class MainActivity extends Activity {
                 getWindow().setAttributes(lp);
             });
             return true;
+        }
+
+        /** Whether a decoder here plays this video codec (an MSE codec: avc1, vp9, av01) at this size and frame rate
+         * (0: any); AV1 only in hardware (in software it is too slow for a TV box) */
+        @JavascriptInterface
+        public boolean decodes(String codec, int width, int height, double fps) {
+            String mime = codec.startsWith("av01") ? "video/av01" : codec.startsWith("vp9") || codec.startsWith("vp09")
+                    ? "video/x-vnd.on2.vp9" : "video/avc";
+            boolean hardware = mime.equals("video/av01");
+            for (MediaCodecInfo info : new MediaCodecList(MediaCodecList.REGULAR_CODECS).getCodecInfos()) {
+                if (info.isEncoder() || hardware && !inHardware(info)) {
+                    continue;
+                }
+                for (String type : info.getSupportedTypes()) {
+                    if (!type.equalsIgnoreCase(mime)) {
+                        continue;
+                    }
+                    MediaCodecInfo.VideoCapabilities caps = info.getCapabilitiesForType(type).getVideoCapabilities();
+                    if (caps != null && (fps > 0 ? caps.areSizeAndRateSupported(width, height, fps) : caps.isSizeSupported(width, height))) {
+                        return true;
+                    }
+                }
+            }
+            return false;
         }
 
         @JavascriptInterface

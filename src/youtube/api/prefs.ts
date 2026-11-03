@@ -2,7 +2,6 @@
 // skip: SponsorBlock categories to skip (api/sponsorblock.ts PARTS; empty: off).
 // quality: start height (0: Auto, HIGHEST: the most a video has).
 // preload: prepare the focused tile's video (player/preload.ts).
-// player: 'bolli' (own-player.ts, default) or 'youtube' (player/tv-app.ts).
 // history: report watched videos to YouTube (api/stats.ts).
 // captions: subtitle language turned on by default ('' none).
 // startSign: show the loading sign on start.
@@ -15,7 +14,6 @@ export interface Prefs {
     startPage: string;
     quality: number;
     preload: boolean;
-    player: string;
     history: boolean;
     autoplay: boolean;
     /** Seconds "Up next" counts down before autoplay (0: at once) */
@@ -45,7 +43,7 @@ export interface Prefs {
 export var HIGHEST = 4320;
 
 var KEY = 'youtube.prefs';
-var DEFAULTS: Prefs = { skip: ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'music_offtopic'], theme: 'youtube', startPage: 'home', quality: 0, preload: true, player: 'bolli', history: true, autoplay: true, autoplayWait: 10, stableVolume: false, previews: 'sound', captions: '', captionStyle: 'words', captionLanguages: [], startSign: true, sabr: false, pictures: 'sharpest', replays: true, dearrow: '',
+var DEFAULTS: Prefs = { skip: ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'music_offtopic'], theme: 'youtube', startPage: 'home', quality: 0, preload: true, history: true, autoplay: true, autoplayWait: 10, stableVolume: false, previews: 'sound', captions: '', captionStyle: 'words', captionLanguages: [], startSign: true, sabr: false, pictures: 'sharpest', replays: true, dearrow: '',
     dearrowOptions: ['thumbnails', 'frames', 'tidy'] };
 
 /** Read once (they are read on every key) and updated by setPref. Only changed settings are stored, so a new
@@ -63,6 +61,8 @@ export function prefs(): Prefs {
         stored.skip = [];
     }
     delete stored.sponsorBlock;
+    // The choice of player is gone: the app's own plays all (YouTube's films, and what nothing else plays)
+    delete stored.player;
     // Migrate DeArrow's list of parts to its mode and options
     if (stored.dearrow instanceof Array) {
         var parts = stored.dearrow as string[];
