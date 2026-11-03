@@ -33,12 +33,16 @@ export class TilePreview {
     private gen = 0;
     /** Where the last preview stopped */
     private left: { id: string; t: number; at: number } | null = null;
+    /** Called once the current preview stops */
+    private done: (() => void) | null = null;
 
     constructor(private player: OwnPlayer) {}
 
-    /** Previews video id in frame (a tile's picture box), with sound if sound */
-    show(id: string, frame: HTMLElement, sound: boolean): void {
+    /** Previews video id in frame (a tile's picture box), with sound if sound; square: no rounded corners (a channel's
+     * banner); done: called once it stops */
+    show(id: string, frame: HTMLElement, sound: boolean, square?: boolean, done?: () => void): void {
         this.stop();
+        this.done = done || null;
         var gen = this.gen;
         var self = this;
         Promise.all<any>([streams(id), segments(id, prefs().skip)]).then(function (got) {
@@ -57,7 +61,7 @@ export class TilePreview {
                 if (gen === self.gen) {
                     self.stop();
                 }
-            });
+            }, square);
             // Until PREVIEW_MS, or the video's end if that comes first, the sound fading out over the last FADE_MS
             var left = format.duration > 0 ? (format.duration - pastParts(got[1], 0)) * 1000 : 0;
             var length = left > 0 ? Math.min(PREVIEW_MS, left) : PREVIEW_MS;
@@ -81,6 +85,11 @@ export class TilePreview {
      * video) */
     stop(): void {
         this.gen++;
+        var done = this.done;
+        this.done = null;
+        if (done) {
+            done();
+        }
         clearTimeout(this.timer);
         clearTimeout(this.fadeTimer);
         var t = this.player.peekStop();

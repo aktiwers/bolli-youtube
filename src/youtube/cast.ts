@@ -182,11 +182,16 @@ export class Cast {
             case 'getSubtitlesTrack':
                 this.tellSubtitles();
                 break;
-            case 'getPlaybackSpeed':
             case 'setPlaybackRate':
             case 'setPlaybackSpeed':
-                // The TV's Media Source plays at 1x only
-                this.lounge.send('onPlaybackSpeedChanged', { playbackSpeed: '1' });
+                // Where the TV plays only at normal speed, the player stays at 1 (told below)
+                if (+(f.playbackSpeed || f.playbackRate) > 0) {
+                    p.setSpeed(+(f.playbackSpeed || f.playbackRate));
+                }
+                this.tellSpeed();
+                break;
+            case 'getPlaybackSpeed':
+                this.tellSpeed();
                 break;
             case 'dpadCommand':
                 if (KEYS[f.key]) {
@@ -270,6 +275,14 @@ export class Cast {
             this.stateChange();
         }
         this.tellAutoplayNext();
+        if (this.player.playbackSpeed !== this.told.speed) {
+            this.tellSpeed();
+        }
+    }
+
+    private tellSpeed(): void {
+        this.told.speed = this.player.playbackSpeed;
+        this.lounge.send('onPlaybackSpeedChanged', { playbackSpeed: String(this.told.speed) });
     }
 
     /** What Autoplay plays next, and its countdown starting or dismissed (as YouTube's TV app tells the phone) */
@@ -397,9 +410,9 @@ function stateOf(now: Playing): number {
     return now.ended ? 0 : now.waiting ? 3 : now.paused ? 2 : 1;
 }
 
-/** Nothing told yet: no video, no state, no Autoplay video or countdown */
-function nothingTold(): { id: string; cpn: string; state: number; duration: number; next: string; counting: string } {
-    return { id: '', cpn: '', state: -2, duration: 0, next: '', counting: '' };
+/** Nothing told yet: no video, no state, no Autoplay video or countdown, normal speed */
+function nothingTold(): { id: string; cpn: string; state: number; duration: number; next: string; counting: string; speed: number } {
+    return { id: '', cpn: '', state: -2, duration: 0, next: '', counting: '', speed: 1 };
 }
 
 /** The extra fields YouTube sent with the phone's list (echoed back in nowPlaying) */

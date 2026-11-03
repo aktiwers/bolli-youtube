@@ -38,8 +38,10 @@ export interface Video {
     round?: boolean;
     /** Drawn as a stack (a playlist, a mix): edge colours, nearest first */
     stack?: string[];
-    /** YouTube's tile style ('square', 'game'; '' the usual) */
+    /** YouTube's tile style ('square', 'game'; '' the usual); newStyle: one the app does not know yet (as YouTube
+     * names it), noted so it can be drawn as YouTube does */
     style?: string;
+    newStyle?: string;
     /** Music (YouTube shows a note by its length) */
     audio?: boolean;
     /** Live now */
@@ -506,6 +508,8 @@ function argb(n: number): string {
 /** Overlay iconTypes mapped to the label icons the theme draws on a tile's picture */
 var LABEL_ICONS: { [iconType: string]: string } = { LIVE: 'live', PLAYLISTS: 'playlist', MIX: 'mix' };
 
+/** YouTube's tile styles drawn as the usual tile */
+var PLAIN_STYLES: { [style: string]: boolean } = { TILE_STYLE_YTLR_DEFAULT: true, TILE_STYLE_YTLR_CAROUSEL: true };
 /** YouTube's tile styles that change a tile's shape */
 var TILE_STYLES: { [style: string]: string } = { TILE_STYLE_YTLR_SQUARE: 'square', TILE_STYLE_YTLR_GAME: 'game', TILE_STYLE_YTLR_VERTICAL_LIST: 'list',
     TILE_STYLE_YTLR_ROUND: 'round' };
@@ -534,7 +538,11 @@ function fromTile(tile: any): Video | null {
         watched = watched || +get(o, 'thumbnailOverlayResumePlaybackRenderer', 'percentDurationWatched') || 0;
     });
     var style = TILE_STYLES[tile.style] || '';
-    if (tile.contentType !== 'TILE_CONTENT_TYPE_VIDEO') {
+    // A video tile may open a page instead: a film's (MV…, played by YouTube's player), or a show's (a podcast's
+    // playlist, with no length: opened as a page, as YouTube's app does); one with a length plays as a video
+    var browse = get(tile, 'onSelectCommand', 'browseEndpoint');
+    var film = !!browse && /^MV/.test(browse.browseId || '');
+    if (tile.contentType !== 'TILE_CONTENT_TYPE_VIDEO' || browse && !film && !duration(badge)) {
         var opens = pageOf(tile.onSelectCommand);
         // Library's own tiles have their name over the picture, not under it
         var name = get(meta, 'title') || get(overlays[0], 'tileMetadataRenderer', 'title');
@@ -587,9 +595,10 @@ function fromTile(tile: any): Video | null {
     }
     if (style) {
         video.style = style;
+    } else if (tile.style && !PLAIN_STYLES[tile.style]) {
+        video.newStyle = tile.style;
     }
-    // The tile opens the film's page, not a video
-    if (get(tile, 'onSelectCommand', 'browseEndpoint')) {
+    if (film) {
         video.movie = true;
     }
     // A poster tile (YouTube Movies), with a wide picture for when it is focused

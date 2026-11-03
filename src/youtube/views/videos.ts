@@ -11,6 +11,7 @@ import { h, LAYOUT_HEIGHT, LAYOUT_WIDTH, setShown, setText, toggleClass, transla
 import { KEY } from '../../core/keys.js';
 import { canListen } from '../../core/platform.js';
 import { mark } from '../../core/perf.js';
+import { load, save } from '../../core/store.js';
 import { clock } from '../../core/time.js';
 import { View } from '../../core/view.js';
 import { RowStack } from '../../ui/row-stack.js';
@@ -281,6 +282,18 @@ function lengthOf(id: string): Promise<string> {
     return lengths[id];
 }
 
+/** Tile styles the app does not draw yet, each kept with a shelf that had it (to draw them as YouTube does) */
+var NEW_STYLES_KEY = 'youtube.newStyles';
+
+function noteNewStyles(shelf: Shelf): void {
+    var v = shelf.videos.filter(function (x) { return !!x.newStyle; })[0];
+    var seen = v ? load<{ [style: string]: string }>(NEW_STYLES_KEY) || {} : null;
+    if (v && seen && !seen[v.newStyle as string]) {
+        seen[v.newStyle as string] = shelf.title + ': ' + v.title;
+        save(NEW_STYLES_KEY, seen);
+    }
+}
+
 /** A tile's label: LIVE, else the length (with a note for audio) */
 function labelOf(v: Video): string {
     return v.live ? 'LIVE' : v.audio && v.length ? '\u266a ' + v.length : v.length;
@@ -322,6 +335,7 @@ export class VideoTiles {
             layout = layoutWith(layout, { rowGap: lines.pitch - layout.head - m.tile.h - layout.under });
         }
         return shelves.map(function (shelf) {
+            noteNewStyles(shelf);
             // Square tiles (podcasts, releases) or game boxes, as tall as the others (rows keep one height); posters
             // (Movies) with the focused one wide
             var shape = shelf.style === 'square' || shelf.style === 'round' ? m.square : shelf.style === 'game' ? m.game : shelf.style === 'poster' ? m.poster : m.tile;

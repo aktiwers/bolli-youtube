@@ -193,6 +193,19 @@ export class ChannelView implements View {
     }
 
     /** The focused tile's video (null while focus is in the header) */
+    /** Play mix's preview while the focus rests on it, played in the banner after its delay, as YouTube's (null:
+     * none) */
+    headerPreview(): { id: string; frame: HTMLElement; delay: number; sound: boolean } | null {
+        var c = this.channel;
+        var p = c && c.mix && c.mixPreview;
+        return p && this.focused && this.at === 'buttons' && this.buttons.at === 0 ? { id: p.id, frame: this.banner, delay: p.delay, sound: p.sound } : null;
+    }
+
+    /** The header over the player's preview (its name, buttons and search bar on the video, as YouTube's) */
+    previewing(on: boolean): void {
+        toggleClass(this.el, 'by-channel--preview', on);
+    }
+
     focusedVideo(): Video | null {
         return this.at === 'rows' ? this.feed.focusedVideo() : null;
     }

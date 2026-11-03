@@ -87,6 +87,16 @@ export class Rail implements KeyHandler {
         this.mark();
     }
 
+    /** Renames item id (YouTube's guide names) */
+    setLabel(id: string, label: string): void {
+        for (var i = 0; i < this.items.length; i++) {
+            if (this.items[i].id === id) {
+                this.items[i].label = label;
+                setText(this.els[i].querySelector('.by-rail-label') as HTMLElement, label);
+            }
+        }
+    }
+
     /** Marks the section shown when switched from elsewhere (Back to Subscriptions; Settings: no rail item) */
     select(id: string): void {
         clearTimeout(this.restTimer);

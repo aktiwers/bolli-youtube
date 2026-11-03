@@ -197,6 +197,9 @@
 .by-suggestion-icon, .by-suggestion-picture { position: absolute; line-height: 0; }
 .by-search--rows .bd-keyboard, .by-search--rows .by-suggestions { visibility: hidden; }
 .by-search-bar, .by-search-mic { position: absolute; }
+/* Play mix's preview plays in a channel's banner: its shade, name, buttons and search bar over the player's video */
+.by-channel--preview .by-channel-shade, .by-channel--preview .by-channel-head, .by-channel--preview .by-search-bar,
+.by-channel--preview .by-search-mic { z-index: 45; }
 .by-feed-top { position: absolute; left: 0; top: 0; width: 1280px; }
 .by-search-top { position: absolute; left: 0; top: 0; width: 1280px; }
 .bd-search-query { position: absolute; }

@@ -8,9 +8,9 @@ import { load, save } from '../../core/store.js';
 import { Rows } from './feed.js';
 
 var KEY = 'youtube.rows.';
-/** Bumped when Rows change shape, so rows kept by an older build are not drawn; kept channel pages use it too
- * (api/channel.ts) */
-export var VERSION = 2;
+/** Bumped when kept Rows would come out different (their shape, or how tiles are read), so rows kept by an older
+ * build are not drawn; kept channel pages use it too (api/channel.ts) */
+export var VERSION = 4;
 
 export interface Kept {
     rows: Rows;

@@ -23,6 +23,7 @@ import { saveAvatars } from './api/avatars.js';
 import { channelAhead, isChannel } from './api/channel.js';
 import { dearrowFetch, dearrowOn, saveDearrow, Wanted } from './api/dearrow.js';
 import { first, get, home, keptPage, page, Page, PageButton, pageAhead as fetchPageAhead, Rows, searchAhead as fetchSearchAhead, sized, SubChannel, subscriptions, tapAhead, text, Video } from './api/feed.js';
+import { freshGuideNames, guideNames } from './api/guide.js';
 import { forgetKept } from './api/kept-pages.js';
 import { prefs, reloadPrefs, setPref } from './api/prefs.js';
 import { forgetStreams, streams } from './api/streams.js';
@@ -74,6 +75,11 @@ var BROWSE: { [id: string]: { label: string; browseId: string } } = {
     movies: { label: 'Movies', browseId: 'FEtopics_movies' },
     sports: { label: 'Sports', browseId: 'FEtopics_sports' }
 };
+// YouTube's own names for them, as its guide gave them last (Films, Sport where it says so)
+var named = guideNames();
+for (var browsed in BROWSE) {
+    BROWSE[browsed].label = named[BROWSE[browsed].browseId] || BROWSE[browsed].label;
+}
 // As the TV app's rail: sections, a divider, topics, Settings at the bottom
 var RAIL: RailItem[] = [
     { id: 'search', label: 'Search', icon: 'search' },
@@ -120,6 +126,8 @@ var lastKeyAt = 0;
  * this app's thread) */
 var PRELOAD_REST_MS = 1500;
 var preloadTimer = 0;
+/** A channel page's Play mix preview waits out YouTube's own delay (from the focus's rest) */
+var headerTimer = 0;
 /** With the app's player, YouTube's TV app (kept for films) is released once focus has been off films this long (not
  * while it starts: an aborted start costs the whole page load again) */
 var FILMS_LEFT_MS = 30000;
@@ -759,9 +767,28 @@ function play(video: Video): void {
 /** Preloads the focused tile's video for a faster start, and shows its preview */
 function preloadFocused(): void {
     clearTimeout(preloadTimer);
+    clearTimeout(headerTimer);
     preloadTimer = setTimeout(function () {
         var p = prefs();
         if (own.busy || tv.busy || document.hidden) {
+            return;
+        }
+        // A channel's Play mix: its preview in the banner after YouTube's delay, the header over it, as YouTube's
+        var view = screen();
+        var header = view instanceof ChannelView ? view.headerPreview() : null;
+        if (header) {
+            var channel = view as ChannelView;
+            var wanted = header;
+            if (p.previews !== 'off' && !tv.warming) {
+                headerTimer = setTimeout(function () {
+                    if (own.busy || tv.busy || document.hidden || screen() !== channel || !channel.headerPreview()) {
+                        return;
+                    }
+                    tv.shutDown();
+                    channel.previewing(true);
+                    preview.show(wanted.id, wanted.frame, p.previews === 'sound' && wanted.sound, true, function () { channel.previewing(false); });
+                }, Math.max(0, wanted.delay - PRELOAD_REST_MS)) as unknown as number;
+            }
             return;
         }
         var tile = focusedTile();
@@ -1241,6 +1268,16 @@ whenScreenRests(function () {
     cast.start();
     openPages();
     prepareSections(['subscriptions', 'library']);
+    // The rail's names as YouTube's guide gives them now (asked once a week)
+    freshGuideNames().then(function (names) {
+        for (var id in BROWSE) {
+            var name = names[BROWSE[id].browseId];
+            if (name && name !== BROWSE[id].label) {
+                BROWSE[id].label = name;
+                menu.setLabel(id, name);
+            }
+        }
+    }, function () { return undefined; });
 });
 
 /** Sections built ahead (prepareSections); their account is not checked until they show */

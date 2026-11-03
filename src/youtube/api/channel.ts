@@ -32,8 +32,10 @@ export interface Channel {
     /** About: the full description and its facts ("Joined May 29, 2008", "1,594 videos") */
     about: string;
     facts: string[];
-    /** Play mix: its first video (null: none) */
+    /** Play mix: its first video (null: none), and the preview YouTube plays in the banner while the focus rests on it
+     * (after delay ms; sound: not muted) */
     mix: Video | null;
+    mixPreview?: { id: string; delay: number; sound: boolean } | null;
     subscribe: Subscribe | null;
     pages: { title: string; page: Page }[];
     rows: Rows;
@@ -156,6 +158,8 @@ export function channelOf(reply: any, id: string): Channel {
         return b && get(b, 'navigationEndpoint', 'watchEndpoint', 'videoId');
     })[0];
     var title = text(header.title);
+    var inline = get(mix, 'onFocusCommand', 'startInlinePlaybackCommand');
+    var inlineId = get(inline, 'playbackEndpoint', 'watchEndpoint', 'videoId');
     return {
         title: title,
         subtitle: lineText(header.subtitle),
@@ -166,6 +170,7 @@ export function channelOf(reply: any, id: string): Channel {
         facts: (about.infoRows || []).map(function (r: any) { return text(r.label); }).filter(function (t: string) { return t; }),
         mix: mix ? { id: get(mix, 'navigationEndpoint', 'watchEndpoint', 'videoId'), title: text(mix.text) + ': ' + title, channel: title, length: '', info: '',
             list: idsOf(get(mix, 'navigationEndpoint', 'watchEndpoint', 'params')) } : null,
+        mixPreview: inlineId ? { id: inlineId, delay: +inline.delayMs || 0, sound: !inline.muted } : null,
         subscribe: subscribeOf(all(header.buttons, 'subscribeButtonRenderer')[0]),
         pages: pages,
         rows: rows

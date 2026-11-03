@@ -93,11 +93,16 @@ var FILLS: { [step: string]: number } = { start: 0.2, streams: 0.45, loadedmetad
 var WARM_S = 3;
 var FULL_S = 0.4;
 function keysLine(chapters: boolean): string {
-    return 'OK pause  ·  Left / Right jump 10 s (twice: chapter)  ·  Up ' + (chapters ? 'chapters and ' : '') + 'the description  ·  ' +
-        'Down related videos, subtitles and more';
+    return 'OK pause  ·  Left / Right jump 10 s (twice: chapter)  ·  ' + (chapters ? 'Up chapters  ·  ' : '') +
+        'Down the description, related videos, subtitles and more';
 }
 /** How often a preview's fading sound steps down (ms) */
 var FADE_STEP_MS = 100;
+/** Playback speeds, as YouTube's player offers them (and 3x); a new speed is checked to really play this long after
+ * it is set (the TV's Media Source may ignore it), and whether the TV plays other speeds is kept */
+var SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 3];
+var SPEED_CHECK_MS = 1500;
+var SPEED_KEY = 'youtube.speed';
 /** How long the volume shows after the phone changes it */
 var VOLUME_SHOWN_MS = 1500;
 /** How long a start waits for DeArrow's title of a video no tile asked it for (ms) */
@@ -245,6 +250,11 @@ export class OwnPlayer {
     private captionAsked = false;
     /** A tile preview playing in this player's video (small, at the tile; the app keeps the keys). OK on the tile
      * takes it over as it plays, then switches to the target format. */
+    /** The playback speed (kept for the next videos while the player is open); whether the TV plays other speeds
+     * (null: not known yet) */
+    private speed = 1;
+    private speedWorks: boolean | null = load<boolean>(SPEED_KEY);
+    private speedTimer = 0;
     /** The player's volume (0-1: setVolume), and the preview's fade out (0: none) */
     private volume = 1;
     private fadeTimer = 0;
@@ -395,7 +405,8 @@ export class OwnPlayer {
     /** Preview id in this player's video at rect (the tile's picture box) from (s), with or without sound. target: the
      * player's format (same codec, so a take-over switches in place); stopped: called on failure. Ignored while a
      * video is active. */
-    peekStart(id: string, s: Streams, video: Format, target: Format, audio: AudioTrack, from: number, rect: ClientRect, sound: boolean, stopped: () => void): void {
+    peekStart(id: string, s: Streams, video: Format, target: Format, audio: AudioTrack, from: number, rect: ClientRect, sound: boolean, stopped: () => void,
+        square?: boolean): void {
         if (this.want) {
             return;
         }
@@ -425,7 +436,7 @@ export class OwnPlayer {
         this.video.style.display = 'none';
         this.video.muted = !sound;
         toggleClass(this.el, 'by-player--peek', true);
-        toggleClass(this.ring, 'by-peek-ring--on', true);
+        toggleClass(this.ring, 'by-peek-ring--on', !square);
         setShown(this.el, true);
         engine.load(video, audioOf(audio), from, true);
         playVideo(this.video);
@@ -703,7 +714,7 @@ export class OwnPlayer {
                 this.jump(code === KEY.LEFT ? -JUMP_S : JUMP_S);
                 return true;
             case KEY.UP:
-                // The description, with the chapters to pick from; Up again closes it (back to the picture alone)
+                // The bar, with the chapters to pick from; Up again closes it (back to the picture alone)
                 if (this.osd.asked) {
                     this.osd.hide();
                 } else {
@@ -720,7 +731,7 @@ export class OwnPlayer {
     }
 
     /** The chapter row's keys: Left/Right the chapter before or after, OK plays from the selected one; Up, Down and Back
-     * close the row and the description (the next Down opens the watch page) */
+     * close the row and the bar (the next Down opens the watch page) */
     private chapterKey(code: number): void {
         switch (code) {
             case KEY.LEFT:
@@ -1180,7 +1191,8 @@ export class OwnPlayer {
         }
     }
 
-    /** Show the title, channel and description from the streams */
+    /** Show the title and channel from the streams; the description only on the watch page (Down), as in YouTube's
+     * player */
     private showDetails(s: Streams, want: Want): void {
         // The most replayed graph (a live stream has none)
         var self = this;
@@ -1196,7 +1208,6 @@ export class OwnPlayer {
         this.watch.setPaid(s.paid ? s.paid.text : '');
         this.osd.setHead('', s.channel || want.channel);
         this.osd.setTitle(dearrowTitle(want.id, s.title || want.title));
-        this.osd.setDescription(s.description);
         this.watch.setTitle(s.title || want.title);
         this.watch.setDescription(s.description);
     }
@@ -1473,6 +1484,8 @@ export class OwnPlayer {
     /** Release and hide (Back, the end, fallback, the background); returns the video it played, or null */
     private close(keep?: boolean): Want | null {
         var was = this.reset(keep);
+        // Previews play in the same video, at normal speed
+        this.setSpeed(1);
         this.loader.hide();
         this.upNext.hide();
         this.watch.clear();
@@ -1561,11 +1574,59 @@ export class OwnPlayer {
                     self.pickAudio(track as AudioTrack);
                 });
             }
+            if (self.speedWorks !== false && !(s && s.live)) {
+                opens('Speed', speedName(self.speed), function () { return self.speedLines(); });
+            }
             flips('Repeat', self.loop, function () { self.loop = !self.loop; });
             flips('Autoplay', prefs().autoplay, function () { setPref('autoplay', !prefs().autoplay); });
             flips('Stats for nerds', self.stats.shown, function () { self.stats.show(!self.stats.shown); });
             return lines;
         }, 0);
+    }
+
+    /** The playback speeds, Normal among them */
+    private speedLines(): PanelLine[] {
+        var self = this;
+        return SPEEDS.map(function (rate) {
+            return { label: speedName(rate), chosen: self.speed === rate, action: function () { self.setSpeed(rate); } };
+        });
+    }
+
+    /** The playback speed (1: normal) */
+    get playbackSpeed(): number {
+        return this.speed;
+    }
+
+    /** Sets the playback speed; a first speed other than 1 is checked to really change the pace, else it goes back to
+     * normal and is not offered again on this TV */
+    setSpeed(rate: number): void {
+        var v = this.video;
+        clearTimeout(this.speedTimer);
+        if (this.speedWorks === false || this.streams && this.streams.live) {
+            rate = 1;
+        }
+        this.speed = rate;
+        v.defaultPlaybackRate = v.playbackRate = rate;
+        if (rate === 1 || this.speedWorks !== null) {
+            return;
+        }
+        var from = v.currentTime;
+        var at = Date.now();
+        var self = this;
+        this.speedTimer = setTimeout(function () {
+            // Not measurable now (paused, seeking): checked the next time
+            if (v.paused || v.seeking || self.speed !== rate) {
+                return;
+            }
+            var pace = (v.currentTime - from) / ((Date.now() - at) / 1000);
+            self.speedWorks = Math.abs(pace - rate) < Math.abs(pace - 1);
+            save(SPEED_KEY, self.speedWorks);
+            if (!self.speedWorks) {
+                self.setSpeed(1);
+                toast('This TV plays videos only at normal speed', 'info');
+            }
+            self.onChange();
+        }, SPEED_CHECK_MS) as unknown as number;
     }
 
     /** The subtitle tracks, Off first; the chosen language turns on automatically in the next videos */
@@ -2062,6 +2123,11 @@ function audioOf(track: AudioTrack): Format {
 }
 
 /** "1080p60", "2160p", as YouTube names its qualities */
+/** A speed as YouTube's player names it: Normal, else the factor */
+function speedName(rate: number): string {
+    return rate === 1 ? 'Normal' : String(rate);
+}
+
 function qualityName(f: Format): string {
     return f.height + 'p' + (f.fps > 30 ? f.fps : '');
 }
