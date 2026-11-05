@@ -70,7 +70,7 @@ function ask(id: string, kinds: string[]): Promise<Segment[]> {
 }
 
 /** The skip segments of video id in the service's reply, in order */
-export function segmentsOf(videos: Reply[] | null, id: string): Segment[] {
+function segmentsOf(videos: Reply[] | null, id: string): Segment[] {
     var video = (videos || []).filter(function (v) { return !!v && v.videoID === id; })[0];
     var out: Segment[] = [];
     ((video && video.segments) || []).forEach(function (s) {

@@ -1,246 +1,104 @@
 // DASH engine of the player: plays a video's separate video and audio formats (api/streams.ts: MP4 with a sidx
 // index, WebM with Cues) through Media Source. Each track first fetches its head (init and index, plus the first
 // piece of media when starting at 0, saving a round trip), then its segments in ~1 s ranged requests (YouTube
-// throttles one long request), up to AHEAD s / AHEAD_MB ahead. Data behind is trimmed at segment starts and only
+// throttles one long request), up to AHEAD s / AHEAD_MB ahead; media the player will skip (skips: SponsorBlock's)
+// is not loaded, the time and bytes ahead count on past it. Data behind is trimmed at segment starts and only
 // between segments: a trim with a segment half appended makes the TV's Media Source drop the rest of it.
 // Jumps land on keyframes (segment starts): the TV's decoder decodes from the previous keyframe at ~2.3x speed.
 // Seeks wait while a buffer updates; no trim runs during a seek (it hangs). A 403 fails as 'expired' (renew
-// continues with new URLs), other errors as 'network' after retries. prefetchHeads fetches heads ahead.
+// continues with new URLs); a request that gets no data for a while, or no answer, goes at once to another of the
+// video's networks while there is one (networks.ts); other errors fail as 'network' after retries. prefetchHeads
+// fetches heads ahead. A start tells the TV the video ends at most WINDOW_S after it and loads no further until it
+// plays: this TV's browser waits for ~3 s of fed video before playing (~1.5 s more of decoding), but not within 10 s
+// of the end; then the real length comes back and the audio segment the window cut is appended again past the cut.
 
 import { Format } from '../api/streams.js';
-import { keepPipeline, openPipeline, Pipeline, setLength, spoilingFail } from './pipeline.js';
+import { parseCues, parseSidx, Segment } from './containers.js';
+import { AHEAD_MB, BEHIND_MB, BEHIND_S, bufferedEnd, Engine, hopHole, jumpTarget, KEYFRAME_IN, MB, RETRIES, seekNudged, Skip, STILL_AHEAD, TICK_MS, TIMEOUT_MS } from './engine.js';
+import { networkFailed, onNetwork, stallWatch } from './networks.js';
+import { growLength, keepPipeline, openPipeline, Pipeline, setLength, spoilingFail } from './pipeline.js';
 
-/** Buffer up to this far ahead of the playhead (s, and MB per track); keep up to this much behind it, so a
- * jump back stays buffered */
+/** A start's window (windowEnd): the TV is told the video ends at most this far after the start (s) */
+var WINDOW_S = 9.5;
+/** Buffer up to this far ahead of the playhead (s; and up to AHEAD_MB per track); BEHIND_S, BEHIND_MB are kept behind
+ * it, so a jump back stays buffered */
 var AHEAD = 30;
-var AHEAD_MB = 32;
-var BEHIND = 20;
-var BEHIND_MB = 16;
 /** A request fetches about CHUNK_S of the format (CHUNK_MIN to CHUNK_MAX bytes); the first after a start or a
  * seek a third of that, for a faster first frame */
 var CHUNK_S = 1.2;
 var CHUNK_MIN = 1024 * 1024;
 var CHUNK_MAX = 4 * 1024 * 1024;
 var FIRST_MIN = 384 * 1024;
-var MB = 1024 * 1024;
-var TICK_MS = 500;
-/** A jump lands this far after the keyframe (s): inside the buffer, not just before its first frame (that seek never ends) */
-var KEYFRAME_IN = 0.05;
-/** A hole this short just ahead of the playhead is hopped over (s) */
-var HOLE_S = 1;
 /** A format switch (switchVideo, switchAudio) takes effect about this far ahead of the playhead (s); video never
  * nearer than SWITCH_MIN_S (removing what the TV's decoder already holds, ~3 s, breaks playback), retried every
  * SWITCH_RETRY_MS until the buffer reaches that far */
 var SWITCH_S = 3;
 var SWITCH_MIN_S = 4;
 var SWITCH_RETRY_MS = 1000;
-/** A seek still not done after this is nudged on a little */
-var SEEK_STUCK_MS = 5000;
-var NUDGE_S = 0.1;
-var RETRIES = 3;
-var TIMEOUT_MS = 20000;
-/** Downloads keep being retried while this much is still buffered ahead (seconds) */
-var STILL_AHEAD = 3;
+/** A part the player skips (SponsorBlock) is not loaded from this far into it on (s; its start stays, so the jump
+ * comes before the gap), and parts this close after each other are one jump (the player's jumps too) */
+var SKIP_IN_S = 1;
+export var SKIP_CHAIN_S = 0.5;
 
-/** What the player needs from an engine (this one, and player/sabr-engine.ts for SABR) */
-export interface Engine {
-    /** preview: a tile's preview (an engine may then use what was fetched ahead differently) */
-    load(video: Format, audio: Format, startAt: number, preview?: boolean): void;
-    seek(t: number): void;
-    jump(to: number, from: number): void;
-    /** Stops; the pipeline is kept, paused, for the next video (player/pipeline.ts) */
-    stop(): void;
-    /** Takes new URLs for the playing formats (the old ones expired) and continues in place, keeping the buffer;
-     * false if the formats differ (or the engine does not support it) */
-    renew?(video: Format, audio: Format): boolean;
+/** The skips in order, those that follow each other at once joined */
+export function joinedSkips(skips: Skip[]): Skip[] {
+    var out: Skip[] = [];
+    skips.slice().sort(function (a, b) { return a.start - b.start; }).forEach(function (s) {
+        var last = out[out.length - 1];
+        if (last && s.start <= last.end + SKIP_CHAIN_S) {
+            last.end = Math.max(last.end, s.end);
+        } else {
+            out.push({ start: s.start, end: s.end });
+        }
+    });
+    return out;
 }
 
-/** A segment: its times (s) and its bytes (inclusive) */
-export interface Segment {
-    start: number;
-    end: number;
-    from: number;
-    to: number;
+/** Where loading goes on instead of media segment i: past a skip it lies in (from SKIP_IN_S into the skip, after the
+ * playhead at now), at the segment the jump lands in; else i */
+export function pastSkip(segments: Segment[], i: number, skips: Skip[], now: number): number {
+    var seg = segments[i];
+    for (var k = 0; seg && seg.start > now && k < skips.length; k++) {
+        if (seg.start >= skips[k].start + SKIP_IN_S && seg.end <= skips[k].end) {
+            var to = segmentAt(segments, skips[k].end);
+            // Not one to the end (an outro): the stream would end early, and the video's length shrink to it
+            return to < segments.length ? Math.max(i + 1, to) : i;
+        }
+    }
+    return i;
 }
 
-/** The segments of an MP4 file, from its first bytes (up to the end of its sidx box); [] without one */
-export function parseSidx(data: ArrayBuffer): Segment[] {
-    var view = new DataView(data);
-    var box = findBox(view, 0, data.byteLength, 'sidx');
-    return box ? sidxSegments(view, box.at, box.size) : [];
+/** Seconds buffered ahead of now, going on past the parts of skips not loaded (the player jumps over them; skips in
+ * order) */
+export function aheadOf(b: TimeRanges, now: number, skips: Skip[]): number {
+    var end = bufferedEnd(b, now);
+    var ahead = end - now;
+    for (var k = 0; k < skips.length; k++) {
+        if (skips[k].start < end && end < skips[k].end) {
+            var after = bufferedEnd(b, skips[k].end);
+            ahead += after - skips[k].end;
+            end = after;
+        }
+    }
+    return ahead;
 }
 
-/** The MP4 box of this type among the boxes from from to to: its offset and size (null: none) */
-export function findBox(view: DataView, from: number, to: number, type: string): { at: number; size: number } | null {
-    var at = from;
-    while (at + 8 <= to) {
-        var size = view.getUint32(at);
-        if (size === 1 && at + 16 <= to) {
-            size = u64(view, at + 8);
-        }
-        if (size < 8) {
-            return null;
-        }
-        if (String.fromCharCode(view.getUint8(at + 4), view.getUint8(at + 5), view.getUint8(at + 6), view.getUint8(at + 7)) === type) {
-            return { at: at, size: size };
-        }
-        at += size;
+/** The first segment ending past t (or the last) */
+function segmentAcross(segments: Segment[], t: number): number {
+    var i = 0;
+    while (i < segments.length - 1 && segments[i].end <= t) {
+        i++;
     }
-    return null;
+    return i;
 }
 
-export function u64(view: DataView, at: number): number {
-    return view.getUint32(at) * 4294967296 + view.getUint32(at + 4);
-}
-
-function sidxSegments(view: DataView, box: number, size: number): Segment[] {
-    var p = box + 8;
-    var version = view.getUint8(p);
-    p += 8;
-    var timescale = view.getUint32(p);
-    p += 4;
-    var time = version ? u64(view, p) : view.getUint32(p);
-    var first = version ? u64(view, p + 8) : view.getUint32(p + 4);
-    p += version ? 16 : 8;
-    var count = view.getUint16(p + 2);
-    p += 4;
-    // Offsets count from the first byte after the box
-    var offset = box + size + first;
-    var segments: Segment[] = [];
-    for (var i = 0; i < count && p + 12 <= view.byteLength; i++, p += 12) {
-        var bytes = view.getUint32(p) & 0x7fffffff;
-        var duration = view.getUint32(p + 4);
-        segments.push({ start: time / timescale, end: (time + duration) / timescale, from: offset, to: offset + bytes - 1 });
-        offset += bytes;
-        time += duration;
+/** Resets a buffer's parser (it may be mid-segment) and its append window */
+function resetParser(sb: SourceBuffer): void {
+    try {
+        sb.abort();
+    } catch (e) {
+        // Source no longer open: stop is near
     }
-    return segments;
-}
-
-/** An EBML number at at: its value and its length; an id keeps its marker bit. Null past the data. */
-function vint(view: DataView, at: number, id: boolean): { value: number; length: number } | null {
-    if (at >= view.byteLength) {
-        return null;
-    }
-    var first = view.getUint8(at);
-    var length = 1;
-    var mask = 0x80;
-    while (length <= 8 && !(first & mask)) {
-        length++;
-        mask >>= 1;
-    }
-    if (length > 8 || at + length > view.byteLength) {
-        return null;
-    }
-    var value = id ? first : first & (mask - 1);
-    var all = value === mask - 1;
-    for (var i = 1; i < length; i++) {
-        var b = view.getUint8(at + i);
-        all = all && b === 0xff;
-        value = value * 256 + b;
-    }
-    // All ones: unknown size (a Segment written while streaming)
-    return { value: !id && all ? Infinity : value, length: length };
-}
-
-function uint(view: DataView, at: number, size: number): number {
-    var value = 0;
-    for (var i = 0; i < size; i++) {
-        value = value * 256 + view.getUint8(at + i);
-    }
-    return value;
-}
-
-/** A WebM file's start (s): its first Cluster's Timecode by the TimecodeScale of its Info (a live segment, which
- * carries its own header); NaN if not found */
-export function webmStart(data: ArrayBuffer): number {
-    var view = new DataView(data);
-    var SEGMENT = 0x18538067, INFO = 0x1549A966, SCALE = 0x2AD7B1, CLUSTER = 0x1F43B675, TIMECODE = 0xE7;
-    var scale = 1000000;
-    var at = 0;
-    while (at < data.byteLength) {
-        var id = vint(view, at, true);
-        var size = id ? vint(view, at + id.length, false) : null;
-        if (!id || !size) {
-            return NaN;
-        }
-        var start = at + id.length + size.length;
-        // Into these: their children follow
-        if (id.value === SEGMENT || id.value === INFO || id.value === CLUSTER) {
-            at = start;
-            continue;
-        }
-        if (id.value === SCALE) {
-            scale = uint(view, start, size.value);
-        } else if (id.value === TIMECODE) {
-            return uint(view, start, size.value) * scale / 1e9;
-        }
-        if (size.value === Infinity) {
-            return NaN;
-        }
-        at = start + size.value;
-    }
-    return NaN;
-}
-
-/** The segments (clusters, from the Cues) of a WebM file, from its first bytes up to the end of the Cues;
- * length: the file size (end of the last cluster), duration (s): end time of the last one */
-export function parseCues(data: ArrayBuffer, length: number, duration: number): Segment[] {
-    var view = new DataView(data);
-    var SEGMENT = 0x18538067, INFO = 0x1549A966, SCALE = 0x2AD7B1, CUES = 0x1C53BB6B, POINT = 0xBB, TIME = 0xB3,
-        POSITIONS = 0xB7, CLUSTER = 0xF1;
-    var scale = 1000000;
-    var segmentStart = -1;
-    var cues: { time: number; pos: number }[] = [];
-    var at = 0;
-    var end = data.byteLength;
-    while (at < end) {
-        var id = vint(view, at, true);
-        var size = id ? vint(view, at + id.length, false) : null;
-        if (!id || !size) {
-            break;
-        }
-        var start = at + id.length + size.length;
-        if (id.value === SEGMENT) {
-            // Descend into the Segment: its children follow
-            segmentStart = start;
-            at = start;
-            continue;
-        }
-        if (id.value === INFO || id.value === CUES || id.value === POINT || id.value === POSITIONS) {
-            // Descend into these too; their children are read in turn
-            if (id.value === POINT) {
-                cues.push({ time: 0, pos: -1 });
-            }
-            at = start;
-            continue;
-        }
-        if (start + size.value > end && id.value !== CLUSTER) {
-            break;
-        }
-        if (id.value === SCALE) {
-            scale = uint(view, start, size.value);
-        } else if (id.value === TIME && cues.length) {
-            cues[cues.length - 1].time = uint(view, start, size.value);
-        } else if (id.value === CLUSTER && cues.length && cues[cues.length - 1].pos < 0) {
-            cues[cues.length - 1].pos = uint(view, start, size.value);
-        }
-        at = start + size.value;
-    }
-    var segments: Segment[] = [];
-    if (segmentStart < 0) {
-        return segments;
-    }
-    for (var i = 0; i < cues.length; i++) {
-        var next = cues[i + 1];
-        segments.push({
-            start: cues[i].time * scale / 1e9,
-            end: next ? next.time * scale / 1e9 : duration,
-            from: segmentStart + cues[i].pos,
-            to: (next ? segmentStart + next.pos : length) - 1
-        });
-    }
-    return segments;
 }
 
 /** Index of the segment playing at time t (past the end: their count) */
@@ -253,27 +111,15 @@ export function segmentAt(segments: Segment[], t: number): number {
     return segments.length;
 }
 
-/** The end of the buffered part that t is in (within slack), else t */
-export function bufferedEnd(b: TimeRanges, t: number, slack?: number): number {
-    for (var i = 0; i < b.length; i++) {
-        if (b.start(i) <= t + (slack || 0.25) && b.end(i) >= t) {
-            return b.end(i);
-        }
-    }
-    return t;
-}
-
-/** A video's length when it is known (else 0) */
-export function lengthOf(v: HTMLVideoElement): number {
-    return v.duration > 0 && isFinite(v.duration) ? v.duration : 0;
-}
-
-/** Bytes from..to of url; a failure rejects with the HTTP status (0: none, 'timeout') */
+/** Bytes from..to of url, from its network that has not failed lately (onNetwork); a failure rejects with the HTTP
+ * status (0: no answer or aborted, 'timeout'), or 'moved' when no answer or no data came and the video's next network
+ * is left for the next request */
 function fetchBytes(url: string, from: number, to: number): { xhr: XMLHttpRequest; done: Promise<ArrayBuffer> } {
     var xhr = new XMLHttpRequest();
+    var used = onNetwork(url);
     var done = new Promise<ArrayBuffer>(function (resolve, reject) {
         // Range as a URL parameter, as YouTube's player does: no Range header, so no CORS preflight
-        xhr.open('GET', url + '&range=' + from + '-' + to, true);
+        xhr.open('GET', used + '&range=' + from + '-' + to, true);
         xhr.responseType = 'arraybuffer';
         xhr.timeout = TIMEOUT_MS;
         xhr.onload = function () {
@@ -283,12 +129,20 @@ function fetchBytes(url: string, from: number, to: number): { xhr: XMLHttpReques
                 reject(xhr.status);
             }
         };
-        xhr.onerror = xhr.onabort = function () {
+        var lost = function (stalled: boolean): void {
+            reject(networkFailed(used, stalled) ? 'moved' : 0);
+        };
+        xhr.onerror = function () {
+            lost(false);
+        };
+        // (a stalled one rejects before its abort)
+        xhr.onabort = function () {
             reject(0);
         };
         xhr.ontimeout = function () {
             reject('timeout');
         };
+        stallWatch(xhr, function () { lost(true); });
         xhr.send();
     });
     return { xhr: xhr, done: done };
@@ -314,6 +168,9 @@ class Track {
     waiting: ArrayBuffer | null = null;
     full = false;
     failures = 0;
+    /** A failed request's wait (1 s more per failure in a row, up to 5 s): no request meanwhile, not even from the
+     * tick; it pumps at its end (also when paused: no tick then) */
+    retryTimer = 0;
     /** Count of switches requested (a later one cancels one still waiting for its place) */
     switchAsked = 0;
     /** A format switch waiting for its buffer (switchTrack): from segment index, cut at from (s); removed: the old
@@ -321,14 +178,11 @@ class Track {
     switching: { format: Format; segments: Segment[]; init: ArrayBuffer; index: number; from: number; removed?: boolean } | null = null;
     /** Append window start for a switched audio track's first segment (s; -1: none) */
     cut = -1;
+    /** The segment across the start's window (-1: none) */
+    windowCut = -1;
 
     constructor(public format: Format) {
         this.chunk = chunkOf(format);
-    }
-
-    /** Bytes of the first request after a start or a seek */
-    firstPiece(): number {
-        return pieceOf(this.chunk);
     }
 
     /** Moves to the start of segment i */
@@ -336,6 +190,13 @@ class Track {
         this.next = i;
         this.pos = i < this.segments.length ? this.segments[i].from : 0;
         this.fresh = true;
+    }
+
+    /** No wait after failures: the next request goes at once, its failures counted anew */
+    retryNow(): void {
+        clearTimeout(this.retryTimer);
+        this.retryTimer = 0;
+        this.failures = 0;
     }
 
     /** The first byte of the segment playing at t */
@@ -356,7 +217,7 @@ function pieceOf(chunk: number): number {
 }
 
 /** Heads fetched ahead (prefetchHeads), by URL and range */
-var ahead: { [key: string]: { xhr: XMLHttpRequest; done: Promise<ArrayBuffer> } } = {};
+var ahead: { [key: string]: { xhr: XMLHttpRequest; done: Promise<ArrayBuffer>; read?: boolean } } = {};
 
 /** End byte of the first request of a start at startAt (s): the head; when starting at 0 also the first piece of
  * media, which follows the index */
@@ -373,8 +234,9 @@ function headKey(f: Format, end: number): string {
 export function prefetchHeads(video: Format, audio: Format, startAt: number): void {
     var next: typeof ahead = {};
     [video, audio].forEach(function (f) {
-        var key = headKey(f, headEnd(f, startAt));
-        var got = next[key] = ahead[key] || fetchBytes(f.url, 0, headEnd(f, startAt));
+        var end = headEnd(f, startAt);
+        var key = headKey(f, end);
+        var got = next[key] = ahead[key] || fetchBytes(f.url, 0, end);
         delete ahead[key];
         got.done.then(null, function () {
             if (ahead[key] === got) {
@@ -386,10 +248,13 @@ export function prefetchHeads(video: Format, audio: Format, startAt: number): vo
     ahead = next;
 }
 
-/** Aborts and drops prefetched heads not taken by a start */
-export function dropAhead(): void {
+/** Aborts and drops prefetched heads not taken by a start (takeOver: a start takes a preview over, whose engine
+ * waits on the heads it reads: those are left to finish) */
+export function dropAhead(takeOver?: boolean): void {
     for (var key in ahead) {
-        ahead[key].xhr.abort();
+        if (!(takeOver && ahead[key].read)) {
+            ahead[key].xhr.abort();
+        }
     }
     ahead = {};
 }
@@ -398,7 +263,9 @@ export function dropAhead(): void {
 function head(f: Format, end: number, read: boolean): Promise<ArrayBuffer> {
     var key = headKey(f, end);
     var had = ahead[key];
-    if (!read) {
+    if (read && had) {
+        had.read = true;
+    } else {
         delete ahead[key];
     }
     return had ? had.done : fetchBytes(f.url, 0, end).done;
@@ -418,9 +285,18 @@ export class DashEngine implements Engine {
     /** A seek waiting for the buffers to finish updating (-1: none), and the watchdog of the running seek */
     private pending = -1;
     private stuckTimer = 0;
+    /** At most this far ahead (s; 0: AHEAD): hold */
+    private most = 0;
+    /** The start's window: the length the TV is told until the video plays (s; 0: none), the real length, and where
+     * the window ended once lifted */
+    private window = 0;
+    private length = 0;
+    private cutAt = 0;
 
     /** onFail: 'expired' (the URLs expired), 'media' (Media Source or the decoder), 'network', 'stream' (no index) */
     private onFail: (why: string) => void;
+    /** The parts the player will skip (SponsorBlock's, not skipped yet): their media is not loaded, what follows is */
+    skips: () => Skip[] = function () { return []; };
 
     constructor(private video: HTMLVideoElement, onFail: (why: string) => void) {
         // A pipeline whose decoder failed is not kept for the next video
@@ -439,7 +315,7 @@ export class DashEngine implements Engine {
         tracks[0].format = video;
         tracks[1].format = audio;
         for (var i = 0; i < tracks.length; i++) {
-            tracks[i].failures = 0;
+            tracks[i].retryNow();
             this.pump(tracks[i]);
         }
         return true;
@@ -447,21 +323,18 @@ export class DashEngine implements Engine {
 
     /** Seeks to t (s): now, or once no buffer is updating */
     seek(t: number): void {
+        this.widen();
         this.pending = t;
         this.settle();
     }
 
     /** Jumps from from towards to (s): to the nearest keyframe (a video segment's start) on that side of from */
     jump(to: number, from: number): void {
-        var segments = this.tracks.length ? this.tracks[0].segments : [];
-        var best = -1;
-        for (var i = 0; i < segments.length; i++) {
-            var s = segments[i].start;
-            if ((to > from ? s > from + 1 : s < from - 1) && (best < 0 || Math.abs(s - to) < Math.abs(best - to))) {
-                best = s;
-            }
-        }
-        this.seek(best < 0 ? to : best + KEYFRAME_IN);
+        this.seek(jumpTarget((this.tracks.length ? this.tracks[0].segments : []).map(function (s) { return s.start; }), to, from));
+    }
+
+    seekTarget(): number {
+        return this.pending;
     }
 
     /** Plays the formats from startAt (s); preview: prefetched heads are only read, left for the player's start */
@@ -472,7 +345,18 @@ export class DashEngine implements Engine {
         // Fetch the heads while Media Source opens
         var heads = Promise.all(tracks.map(function (track) {
             var f = track.format;
-            return head(f, headEnd(f, startAt), !!preview).then(function (data) {
+            var end = headEnd(f, startAt);
+            var tried = false;
+            var again = function (e: unknown): Promise<ArrayBuffer> {
+                // Once more, as segments are (a passing error), and again while another network is left; not for
+                // expired URLs nor once stopped
+                if (e === 403 || self.stopped || tried && e !== 'moved') {
+                    throw e;
+                }
+                tried = true;
+                return fetchBytes(f.url, 0, end).done.then(null, again);
+            };
+            return head(f, end, !!preview).then(null, again).then(function (data) {
                 var parts = headParts(f, data);
                 track.segments = parts.segments;
                 if (!track.segments.length) {
@@ -581,6 +465,7 @@ export class DashEngine implements Engine {
 
     stop(): void {
         this.stopped = true;
+        this.window = 0;
         clearInterval(this.timer);
         clearTimeout(this.stuckTimer);
         for (var event in this.listeners) {
@@ -608,10 +493,16 @@ export class DashEngine implements Engine {
                 var keys = tracks[0].segments;
                 startAt = keys[Math.min(segmentAt(keys, startAt), keys.length - 1)].start + KEYFRAME_IN;
             }
-            setLength(pipe, Math.max(tracks[0].segments[tracks[0].segments.length - 1].end, tracks[1].segments[tracks[1].segments.length - 1].end));
+            this.length = Math.max(tracks[0].segments[tracks[0].segments.length - 1].end, tracks[1].segments[tracks[1].segments.length - 1].end);
+            this.window = windowEnd(tracks[0].segments, startAt, this.length);
             for (var i = 0; i < tracks.length; i++) {
                 var track = tracks[i];
                 track.sb = pipe.buffers[i];
+                // The audio cut at the window, also what came with its head
+                if (this.window && i > 0) {
+                    track.sb.appendWindowEnd = this.window;
+                    track.windowCut = segmentAcross(track.segments, this.window);
+                }
                 track.at(segmentAt(track.segments, startAt));
                 if (track.started && !track.next) {
                     // Media came with the head: continue after it (a short first segment may be complete)
@@ -620,6 +511,23 @@ export class DashEngine implements Engine {
                     while (track.next < track.segments.length && track.pos > track.segments[track.next].to) {
                         track.next++;
                     }
+                    // Not the video past the start's window: the length set back to the window (as the TV puts the
+                    // previous video's back) removes it, and the rest of its segment cannot be decoded without it
+                    var after = i === 0 && this.window ? segmentAcross(track.segments, this.window) : -1;
+                    if (after >= 0 && track.pos > track.segments[after].from) {
+                        var head = track.init as ArrayBuffer;
+                        var past = track.pos - track.segments[after].from;
+                        track.init = head.slice(0, head.byteLength - past);
+                        track.started -= past;
+                        track.next = after;
+                        track.pos = track.segments[after].from;
+                    }
+                } else if (track.started) {
+                    // A seek before the open moved the start (a segment skipped at once): the head's media, the first
+                    // segment's start, is not appended (before another segment it broke the stream: a media error)
+                    var init = track.init as ArrayBuffer;
+                    track.init = init.slice(0, init.byteLength - track.started);
+                    track.started = 0;
                 }
             }
             pipe.onUpdate = function (i) {
@@ -630,6 +538,8 @@ export class DashEngine implements Engine {
                     self.pump(track);
                 }
             };
+            // Last: a kept pipeline's longer length shortened removes the data past it, the buffers updating meanwhile
+            setLength(pipe, this.window || this.length);
         } catch (e) {
             this.onFail('media');
             return;
@@ -638,7 +548,10 @@ export class DashEngine implements Engine {
         this.on('seeked', function () { clearTimeout(self.stuckTimer); });
         this.on('waiting', function () { self.hop(); });
         this.on('pause', function () { self.rest(); });
-        this.on('playing', function () { self.arm(); });
+        this.on('playing', function () {
+            self.widen();
+            self.arm();
+        });
         this.on('error', function () { self.onFail('media'); });
         if (startAt > 0) {
             // Seek once the metadata is in (not possible before); requests start from there meanwhile
@@ -692,34 +605,27 @@ export class DashEngine implements Engine {
             }
         }
         var t = this.pending;
-        var v = this.video;
         this.pending = -1;
-        v.currentTime = t;
         clearTimeout(this.stuckTimer);
-        this.stuckTimer = setTimeout(function () {
-            if (v.seeking) {
-                v.currentTime = v.currentTime + NUDGE_S;
-            }
-        }, SEEK_STUCK_MS) as unknown as number;
+        this.stuckTimer = seekNudged(this.video, t);
     }
 
     /** Moves a stalled playhead over a short hole just before buffered data */
     private hop(): void {
-        var v = this.video;
-        if (this.pending >= 0 || v.readyState > 2 || !this.tracks.length) {
+        if (this.pending < 0 && this.video.readyState <= 2 && this.tracks.length) {
+            hopHole(this.video);
+        }
+    }
+
+    /** The start's window lifted (the video plays, or a seek moves it): the real length again, loading past it */
+    private widen(): void {
+        if (!this.window || !this.pipe) {
             return;
         }
-        var t = v.currentTime;
-        var b = v.buffered;
-        for (var i = 0; i < b.length; i++) {
-            if (b.start(i) <= t && t < b.end(i)) {
-                return;
-            }
-            if (b.start(i) > t && b.start(i) - t < HOLE_S) {
-                v.currentTime = b.start(i) + 0.01;
-                return;
-            }
-        }
+        this.cutAt = this.window;
+        this.window = 0;
+        growLength(this.pipe, this.length);
+        this.pumpAll();
     }
 
     private pumpAll(): void {
@@ -728,10 +634,30 @@ export class DashEngine implements Engine {
         }
     }
 
+    hold(s: number): void {
+        this.most = s;
+        this.pumpAll();
+    }
+
     private pump(track: Track): void {
         var sb = track.sb;
-        if (this.stopped || !sb || sb.updating || track.xhr) {
+        if (this.stopped || !sb || sb.updating || track.xhr || track.retryTimer) {
             return;
+        }
+        // The start's window lifted (widen): the segment it cut loaded again, its frames before the cut dropped (as a
+        // switched audio track's first segment), if any of it went in
+        if (track.windowCut >= 0 && !this.window) {
+            var c = track.windowCut;
+            track.windowCut = -1;
+            sb.appendWindowEnd = Infinity;
+            if (track.next > c || track.next === c && track.pos > track.segments[c].from) {
+                // (the parser may be mid-segment: reset first, as for a switch)
+                resetParser(sb);
+                track.waiting = null;
+                track.at(c);
+                track.cut = this.cutAt;
+                sb.appendWindowStart = this.cutAt;
+            }
         }
         // A format switch: remove the old format's data from the switch point, then load the new one from there
         // (not during a seek: seeked() applies it at the new place)
@@ -747,11 +673,7 @@ export class DashEngine implements Engine {
             this.takeSwitch(track);
             track.at(sw.index);
             // The parser may be mid-segment of the old format: reset it before the new init
-            try {
-                sb.abort();
-            } catch (e) {
-                // Source no longer open: stop is near
-            }
+            resetParser(sb);
             if (sw.from > sw.segments[sw.index].start + 0.01) {
                 track.cut = sw.from;
                 sb.appendWindowStart = sw.from;
@@ -785,15 +707,26 @@ export class DashEngine implements Engine {
         // The playhead, or the target of the start's seek (a start from a resume point, not from 0)
         var now = this.pending >= 0 ? this.pending : this.video.currentTime;
         var segments = track.segments;
+        var skips = joinedSkips(this.skips());
+        // Media the player will skip is not loaded: on from where its jump lands (it lands in loaded media)
+        if (track.next < segments.length && track.pos === segments[track.next].from) {
+            var past = pastSkip(segments, track.next, skips, now);
+            if (past !== track.next) {
+                track.at(past);
+            }
+        }
         if (track.next >= segments.length) {
             this.endIfDone();
             return;
         }
-        if (bufferedEnd(sb.buffered, now) - now > AHEAD || track.pos - track.byteAt(now) > AHEAD_MB * MB) {
+        if (aheadOf(sb.buffered, now, skips) > (this.most || AHEAD) || this.bytesAhead(track, now, skips) > AHEAD_MB * MB) {
             return;
         }
         var segment = segments[track.next];
-        var to = Math.min(segment.to, track.pos + (track.fresh ? track.firstPiece() : track.chunk) - 1);
+        if (this.window && segment.start >= this.window) {
+            return;
+        }
+        var to = Math.min(segment.to, track.pos + (track.fresh ? pieceOf(track.chunk) : track.chunk) - 1);
         var self = this;
         var gen = track.gen;
         var req = fetchBytes(track.format.url, track.pos, to);
@@ -822,17 +755,42 @@ export class DashEngine implements Engine {
                 self.onFail('expired');
                 return;
             }
+            // No answer or no data: at once from the next network (both tracks go there)
+            if (e === 'moved') {
+                self.pump(track);
+                return;
+            }
             // While the buffer still plays, a short network drop is waited out
             var ahead = bufferedEnd(self.video.buffered, self.video.currentTime) - self.video.currentTime;
             if (++track.failures > RETRIES && ahead < STILL_AHEAD) {
                 self.onFail('network');
                 return;
             }
-            setTimeout(function () { self.pump(track); }, 1000 * Math.min(track.failures, 5));
+            track.retryTimer = setTimeout(function () {
+                track.retryTimer = 0;
+                self.pump(track);
+            }, 1000 * Math.min(track.failures, 5)) as unknown as number;
         });
     }
 
-    /** Trims data more than BEHIND s or BEHIND_MB behind the playhead to half that, at a segment start (a keyframe).
+    /** Bytes loaded (or asked for) ahead of the playhead at now, not counting the media of skips left out */
+    private bytesAhead(track: Track, now: number, skips: Skip[]): number {
+        var bytes = track.pos - track.byteAt(now);
+        var segments = track.segments;
+        if (!skips.length) {
+            return bytes;
+        }
+        var b = (track.sb as SourceBuffer).buffered;
+        for (var k = segmentAt(segments, now); k < track.next && k < segments.length; k++) {
+            // (one loaded before the skip was known stays counted)
+            if (pastSkip(segments, k, skips, now) !== k && bufferedEnd(b, segments[k].start, 0) <= segments[k].start) {
+                bytes -= segments[k].to - segments[k].from + 1;
+            }
+        }
+        return bytes;
+    }
+
+    /** Trims data more than BEHIND_S or BEHIND_MB behind the playhead to half that, at a segment start (a keyframe).
      * Not during a seek, nor with a segment half appended unless the buffer is full. True when a trim began. */
     private trim(track: Track): boolean {
         var v = this.video;
@@ -843,11 +801,11 @@ export class DashEngine implements Engine {
         }
         var now = v.currentTime;
         var playing = track.byteAt(now);
-        if (now - b.start(0) <= BEHIND && playing - track.byteAt(b.start(0)) <= BEHIND_MB * MB) {
+        if (now - b.start(0) <= BEHIND_S && playing - track.byteAt(b.start(0)) <= BEHIND_MB * MB) {
             return false;
         }
         for (var i = segmentAt(segments, b.start(0)) + 1; i < segments.length && segments[i].from < playing; i++) {
-            if (now - segments[i].start <= BEHIND / 2 && playing - segments[i].from <= BEHIND_MB * MB / 2) {
+            if (now - segments[i].start <= BEHIND_S / 2 && playing - segments[i].from <= BEHIND_MB * MB / 2) {
                 break;
             }
         }
@@ -878,7 +836,7 @@ export class DashEngine implements Engine {
         track.gen++;
         track.waiting = null;
         track.full = false;
-        track.failures = 0;
+        track.retryNow();
         if (track.xhr) {
             track.xhr.abort();
             track.xhr = null;
@@ -923,20 +881,26 @@ export class DashEngine implements Engine {
             if (!sb) {
                 continue;
             }
-            // Continue from the segment at the end of what is buffered at the new time; a segment already in
-            // flight there is kept
-            var next = segmentAt(track.segments, bufferedEnd(sb.buffered, t, 0.04));
-            if (next === track.next) {
-                continue;
+            // Continue from the segment at the end of what is buffered at the new time (a segment already in flight
+            // there is kept, as is one loaded but still appending: not in buffered yet), asked for now: paused, the
+            // tick rests until it plays, which needs it
+            var end = bufferedEnd(sb.buffered, t, 0.04);
+            var next = segmentAt(track.segments, end);
+            // Still appending (or waiting to): the segment the last answer since a move completed (the track is at the
+            // next one's start), right after what is buffered at t
+            var appending = (sb.updating || !!track.waiting) && !track.fresh && end > t && next === track.next - 1 &&
+                track.pos === (track.next < track.segments.length ? track.segments[track.next].from : 0);
+            // During the start's window, loaded up to it is all there is to load
+            var loaded = this.window > 0 && end >= this.window - 0.05;
+            if (next !== track.next && !appending && !loaded) {
+                this.drop(track);
+                // The parser may be mid-segment: reset it, as the new segment starts afresh (the window's cut again)
+                resetParser(sb);
+                if (this.window && track.windowCut >= 0) {
+                    sb.appendWindowEnd = this.window;
+                }
+                track.at(next);
             }
-            this.drop(track);
-            // The parser may be mid-segment: reset it, as the new segment starts afresh
-            try {
-                sb.abort();
-            } catch (e) {
-                // Source no longer open: stop is near
-            }
-            track.at(next);
             this.pump(track);
         }
     }
@@ -953,4 +917,18 @@ export class DashEngine implements Engine {
             this.pipe.source.endOfStream();
         }
     }
+}
+
+/** Where a start's window ends: the end of the last video segment ending within WINDOW_S of startAt (a video segment
+ * cut would lose its frames after the cut until the next keyframe; 0: none: a video ending near there anyway, or a
+ * first segment longer than that) */
+export function windowEnd(video: Segment[], startAt: number, length: number): number {
+    if (length - startAt <= WINDOW_S + 1) {
+        return 0;
+    }
+    var end = 0;
+    for (var i = Math.max(0, segmentAt(video, startAt)); i < video.length && video[i].end <= startAt + WINDOW_S; i++) {
+        end = video[i].end;
+    }
+    return end;
 }

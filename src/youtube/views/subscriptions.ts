@@ -5,13 +5,13 @@
 // openSubChannel). Up from the first row focuses the pills, then the channels; further down the header slides
 // away. The rows' top comes from the theme (metrics.subscriptionsTop), the look from themes/<id>.css (by-subs).
 
-import { h, setShown, setSrc, setText, toggleClass, translate } from '../../core/dom.js';
+import { h, releaseImages, restoreImages, setShown, setSrc, setText, toggleClass, translate } from '../../core/dom.js';
 import { KEY } from '../../core/keys.js';
 import { View } from '../../core/view.js';
 import { Rows, SubChannel, Video } from '../api/feed.js';
 import { Pills } from '../ui/pills.js';
 import { metrics } from '../ui/theme.js';
-import { FeedOptions, FeedTexts, FeedView } from './videos.js';
+import { FeedHost, FeedOptions, FeedTexts, FeedView } from './videos.js';
 
 /** Focus resting this long on a channel prefetches its page. YouTube's reply takes 0.7-1 s, so a longer delay leaves
  * a quick OK waiting; the reply is parsed off the main thread (api/off-thread.ts) */
@@ -29,12 +29,11 @@ var PILLS: { label: string; keep: ((v: Video) => boolean) | null }[] = [
 /** Where the focus is: the channels, the pills or the rows */
 type Place = 'channels' | 'pills' | 'rows';
 
-export class SubscriptionsView implements View {
+export class SubscriptionsView extends FeedHost implements View {
     el: HTMLElement;
     private head: HTMLElement;
     private strip: HTMLElement;
     private rowsBox: HTMLElement;
-    private feed: FeedView;
     private channelPills = new Pills('by-subs-channel--focused');
     private pills = new Pills('by-subs-pill--focused');
     private pillEls: HTMLElement[] = [];
@@ -61,6 +60,7 @@ export class SubscriptionsView implements View {
     constructor(load: () => Promise<Rows | null>, texts: FeedTexts, open: (video: Video) => void, opts: FeedOptions,
         private openChannel: (c: SubChannel) => void, private openAll: (channels: SubChannel[]) => void,
         private ahead: (c: SubChannel) => void) {
+        super();
         var self = this;
         this.el = h('div', 'by-subs');
         this.rowsBox = h('div', 'by-subs-rows');
@@ -116,21 +116,20 @@ export class SubscriptionsView implements View {
         this.place();
     }
 
-    get settled(): boolean {
-        return this.feed.settled;
-    }
-
     show(rest?: boolean): void {
         this.shown = true;
         setShown(this.el, true);
+        restoreImages(this.strip);
         this.feed.show(rest);
     }
 
+    /** Hidden: the channels' pictures are let go too (the rows let go of theirs) */
     hide(): void {
         this.shown = false;
         setShown(this.el, false);
         this.feed.hide();
         this.putChannels();
+        releaseImages(this.strip);
     }
 
     cover(covered: boolean): void {
@@ -140,29 +139,9 @@ export class SubscriptionsView implements View {
         }
     }
 
-    renewIfOld(): void {
-        this.feed.renewIfOld();
-    }
-
-    prepare(): void {
-        this.feed.prepare();
-    }
-
     putFresh(): void {
         this.feed.putFresh();
         this.putChannels();
-    }
-
-    setProgress(id: string, progress: number): void {
-        this.feed.setProgress(id, progress);
-    }
-
-    removeVideo(id: string): void {
-        this.feed.removeVideo(id);
-    }
-
-    retry(quiet?: boolean): boolean {
-        return this.feed.retry(quiet);
     }
 
     setFocused(focused: boolean): void {
@@ -189,35 +168,24 @@ export class SubscriptionsView implements View {
             }
             return false;
         }
-        var row = this.at === 'channels' ? this.channelPills : this.pills;
-        switch (code) {
-            case KEY.LEFT:
-            case KEY.RIGHT:
-                // Left past the first goes to the rail
-                if (row.move(code === KEY.LEFT ? -1 : 1)) {
-                    this.scroll();
-                    this.restSoon();
-                    return true;
-                }
-                return code === KEY.RIGHT;
-            case KEY.OK:
-                row.press();
-                return true;
-            case KEY.DOWN:
-                if (this.at === 'channels') {
-                    this.go('pills');
-                } else if (this.feed.hasRows) {
-                    this.go('rows');
-                }
-                return true;
-            case KEY.UP:
-                if (this.at === 'pills' && this.channelPills.count) {
-                    this.go('channels');
-                    this.restSoon();
-                }
-                return true;
-        }
-        return false;
+        var self = this;
+        return (this.at === 'channels' ? this.channelPills : this.pills).key(code, { up: function () {
+            if (self.at === 'pills' && self.channelPills.count) {
+                self.go('channels');
+                self.restSoon();
+            }
+            return true;
+        }, down: function () {
+            if (self.at === 'channels') {
+                self.go('pills');
+            } else if (self.feed.focusable) {
+                self.go('rows');
+            }
+            return true;
+        }, moved: function () {
+            self.scroll();
+            self.restSoon();
+        } });
     }
 
     private go(at: Place): void {
@@ -288,7 +256,12 @@ export class SubscriptionsView implements View {
         row.forEach(function (c) {
             var el = h('div', 'by-subs-channel');
             var picture = h('img', 'by-subs-picture') as HTMLImageElement;
-            setSrc(picture, c.picture);
+            if (self.shown || !c.picture) {
+                setSrc(picture, c.picture);
+            } else {
+                // Hidden: loaded once shown (restoreImages)
+                picture.setAttribute('data-src', c.picture);
+            }
             el.appendChild(picture);
             if (c.fresh) {
                 el.appendChild(h('div', 'by-subs-dot'));
@@ -318,9 +291,7 @@ export class SubscriptionsView implements View {
 
     /** Scrolls the channel row so the focused one is in view */
     private scroll(): void {
-        var step = metrics().subscriptionsStep;
-        var inView = Math.floor((1280 - metrics().rows.pad) / step);
-        translate(this.strip, -Math.max(0, this.channelPills.at - inView + 1) * step, 0);
+        this.channelPills.slide(this.strip, metrics().subscriptionsStep);
     }
 
     /** Fetches the rows anew, replacing these (account change) */

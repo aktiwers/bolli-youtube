@@ -10,7 +10,7 @@
 // read in slices with a pause between them, leaving room for appends and frames.
 
 import { getText } from '../../core/http.js';
-import { cleanText, Cue, parseVtt, SubtitleTrack } from '../../player/subtitles.js';
+import { cleanText, Cue, parseVtt, pieceAt, SubtitleTrack } from '../../player/subtitles.js';
 import { prefs } from '../api/prefs.js';
 import { note } from './play-log.js';
 
@@ -64,20 +64,31 @@ export function loadCaptions(url: string, still: () => boolean, translated: bool
     return getText(url).then(null, function (e) {
         // Retry once: translated subtitles sometimes fail once and then load (the reason goes to the play log)
         note('subtitles failed', String(e && (e.message || e.status) || e));
-        if (e && e.status === 429 && translated) {
-            refusedAt = Date.now();
+        if (refusal(e, translated)) {
             throw e;
         }
         return new Promise<string>(function (resolve, reject) {
             setTimeout(function () {
                 if (still()) {
-                    getText(url).then(resolve, reject);
+                    getText(url).then(resolve, function (again) {
+                        refusal(again, translated);
+                        reject(again);
+                    });
                 } else {
                     resolve('');
                 }
             }, AGAIN_MS);
         });
     }).then(function (vtt) { return still() ? captionsOf(vtt, prefs().captionStyle) : null; });
+}
+
+/** Whether e is YouTube refusing a translation (429); if so, none is asked for REFUSED_MS (also after a retry) */
+function refusal(e: any, translated: boolean): boolean {
+    var refused = !!e && e.status === 429 && translated;
+    if (refused) {
+        refusedAt = Date.now();
+    }
+    return refused;
 }
 
 /** YouTube's WebVTT as a track: with word times, word by word ('words') or two lines at a time ('lines'); without
@@ -104,6 +115,10 @@ function readCue(lines: string[], i: number, reader: Reader, cues: Cue[]): numbe
     reader.cue(seconds(m[1]), seconds(m[2]), text.join('\n'), cues);
     return i;
 }
+
+/** Entities or line breaks: a line that needs the full cleaning (one RegExp for all words: in ES5 a literal is a new
+ * one each time) */
+var NEEDS_CLEANING = /[&\n]/;
 
 /** Word by word: one cue per word time with the words so far (the line above is cleaned once, the current line's
  * words as they come) */
@@ -134,7 +149,7 @@ class WordByWord implements Reader {
 
 function add(cues: Cue[], start: number, end: number, above: string, line: string): void {
     // Entities or multiple lines need the full cleaning
-    var said = /[&\n]/.test(line) ? cleanText(line) : line.trim();
+    var said = NEEDS_CLEANING.test(line) ? cleanText(line) : line.trim();
     var text = above && said ? above + '\n' + said : above || said;
     if (end > start && text) {
         cues.push({ start: start, end: end, text: text });
@@ -199,12 +214,8 @@ class SpeechTrack implements Captions {
         if (!starts.length || !(t >= starts[0]) || t >= this.end) {
             return null;
         }
-        var k = this.last;
-        if (!inPiece(starts, k, t)) {
-            k = inPiece(starts, k + 1, t) ? k + 1 : findPiece(starts, t);
-            this.last = k;
-        }
-        return this.texts[k];
+        this.last = pieceAt(starts, this.last, t);
+        return this.texts[this.last];
     }
 
     /** Stop parsing (other subtitles, another style, or the player closed) */
@@ -257,26 +268,6 @@ class SpeechTrack implements Captions {
         this.starts.push(start);
         this.texts.push(text);
     }
-}
-
-/** Whether t falls in piece k */
-function inPiece(starts: number[], k: number, t: number): boolean {
-    return k < starts.length && starts[k] <= t && (k + 1 === starts.length || t < starts[k + 1]);
-}
-
-/** The last piece starting at or before t (starts[0] <= t) */
-function findPiece(starts: number[], t: number): number {
-    var lo = 0;
-    var hi = starts.length - 1;
-    while (lo < hi) {
-        var mid = (lo + hi + 1) >> 1;
-        if (starts[mid] <= t) {
-            lo = mid;
-        } else {
-            hi = mid - 1;
-        }
-    }
-    return lo;
 }
 
 /** Seconds of "hh:mm:ss.mmm" or "mm:ss.mmm" (minutes from the digits and one parseFloat, as splitting each time

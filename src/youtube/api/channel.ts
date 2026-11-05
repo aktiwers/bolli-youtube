@@ -57,6 +57,9 @@ var fromTV: { [key: string]: boolean } = {};
 /** Prefetched pages, stored persistently only once opened (pages merely passed by do not push out opened ones) */
 var unopened: { key: string; keep: () => void }[] = [];
 var UNOPENED_MAX = 4;
+/** Per page, the count of its fetches from YouTube, and the one stored last: an older one is not stored over it */
+var fetches: { [key: string]: number } = {};
+var storedSeq: { [key: string]: number } = {};
 
 /** A channel page from the memory cache, a prefetch, or the persistent store, as how asks */
 export function keptChannel(p: Page, how?: Wanted): Promise<Channel> {
@@ -71,14 +74,32 @@ export function keptChannel(p: Page, how?: Wanted): Promise<Channel> {
     });
 }
 
+/** Loads a prefetched channel's banner into the browser's cache (made on first use) */
+var bannerAhead: HTMLImageElement | null = null;
+
 /** Prefetches a channel page (its avatar is focused; fresh: YouTube marks new videos, so skip the persistent copy),
- * so keptChannel has it at once */
+ * so keptChannel has it at once, with its banner (one picture, no request to YouTube's API) */
 export function channelAhead(p: Page, fresh?: boolean): void {
     var key = pageKey(p);
     if (fresh && fromTV[key]) {
         channels.drop(key);
     }
-    channels.aheadJson(key, function () { return asked(p, !!fresh, false); });
+    channels.aheadJson(key, function () {
+        return asked(p, !!fresh, false).then(function (json) {
+            var url = bannerIn(json);
+            if (url) {
+                bannerAhead = bannerAhead || new Image();
+                bannerAhead.src = url;
+            }
+            return json;
+        });
+    });
+}
+
+/** The banner of a channel page as JSON ('' none), read without parsing all of it (it is one of the first fields) */
+export function bannerIn(json: string): string {
+    var m = /"banner":"((?:[^"\\]|\\.)*)"/.exec(json);
+    return m ? JSON.parse('"' + m[1] + '"') : '';
 }
 
 /** p's page as JSON: from YouTube when fresh, else the account's persistent copy if any (old rows are refreshed
@@ -95,18 +116,21 @@ function asked(p: Page, fresh: boolean, open: boolean): Promise<string> {
                 return page.json;
             }
             delete fromTV[key];
+            var seq = fetches[key] = (fetches[key] || 0) + 1;
             return offThreadJson(browseText(p), 'channel', madeChannel, p.browseId).then(function (json) {
                 var at = Date.now();
                 var keep = function (): void {
-                    if (store && pagesForgotten() === forgets) {
+                    if (store && pagesForgotten() === forgets && seq > (storedSeq[key] || 0)) {
+                        storedSeq[key] = seq;
                         storePage(store, json, at);
                     }
                 };
+                // This fetch replaces one prefetched before (stored after it, the older one would overwrite it)
+                unopened = unopened.filter(function (u) { return u.key !== key; });
                 if (open) {
                     // After it is drawn, to stay out of its way
                     setTimeout(keep, 0);
                 } else {
-                    unopened = unopened.filter(function (u) { return u.key !== key; });
                     unopened.push({ key: key, keep: keep });
                     if (unopened.length > UNOPENED_MAX) {
                         unopened.shift();
@@ -198,8 +222,5 @@ export function idsOf(params: string | undefined): string[] {
 
 /** The banner URL: the smallest at least BANNER_W wide, else the largest ('' none) */
 function banner(thumbs: any): string {
-    var list: any[] = (thumbs && thumbs.thumbnails || []).slice();
-    list.sort(function (a, b) { return (a.width || 0) - (b.width || 0); });
-    var pick = list.filter(function (t) { return (t.width || 0) >= BANNER_W; })[0] || list[list.length - 1];
-    return pick ? picture({ thumbnails: [pick] }) : '';
+    return picture(thumbs, undefined, BANNER_W);
 }

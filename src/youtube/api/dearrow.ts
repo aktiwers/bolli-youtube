@@ -55,14 +55,15 @@ export interface BrandingReply {
     casualVotes?: { id: string; count: number; title?: string }[];
 }
 
-/** Known branding by video id, oldest first in order (stored ones are read once, when first needed), and when DeArrow
- * failed for a video (not kept: asked again after RETRY_MS) */
+/** Known branding by video id, oldest first in order (stored ones are read once, when first needed), when DeArrow
+ * failed for a video (not kept: asked again after RETRY_MS), and when those were last swept */
 var known: { [id: string]: Branding } | null = null;
 var order: string[] = [];
 var failed: { [id: string]: number } = {};
+var swept = 0;
 var storeTimer = 0;
 /** The titles shown, by video id, with what they were made from (cleared when the settings change) */
-var shown: { [id: string]: { from: string; title: string } } = {};
+var shown: { [id: string]: { own: boolean; chosen: string; title: string } } = {};
 var shownCount = 0;
 var shownAs = '';
 /** Waiting to be asked (with the video's length, for a random frame), and how many are being asked */
@@ -77,9 +78,16 @@ export function dearrowOn(): boolean {
     return prefs().dearrow !== '';
 }
 
+/** dearrowSettings' text, and the mode and options list it was made from (Settings sets a new list on a change) */
+var settings = { mode: '', options: [] as string[], text: '' };
+
 /** DeArrow's settings as one text (tiles made with other ones are made again) */
 export function dearrowSettings(): string {
-    return prefs().dearrow + ' ' + prefs().dearrowOptions.join();
+    var p = prefs();
+    if (settings.mode !== p.dearrow || settings.options !== p.dearrowOptions) {
+        settings = { mode: p.dearrow, options: p.dearrowOptions, text: p.dearrow + ' ' + p.dearrowOptions.join() };
+    }
+    return settings.text;
 }
 
 /** One of DeArrow's options is on: 'thumbnails', 'frames', 'tidy' */
@@ -145,26 +153,30 @@ export function dearrowTitle(id: string, title: string): string {
         return title;
     }
     var b = knownBranding()[id];
-    var lower = title.trim().toLowerCase();
-    var own = !b || !b.title || prefs().dearrow === 'casual' && b.casual.some(function (t) { return !t || t === lower; });
+    var own = !b || !b.title || prefs().dearrow === 'casual' && votedFine(b, title);
     var chosen = own ? title : b!.title;
     // Tidied once per title (the formatter is long for the TV)
-    var settings = dearrowSettings();
-    if (settings !== shownAs || shownCount > KEPT) {
+    var now = dearrowSettings();
+    if (now !== shownAs || shownCount > KEPT) {
         shown = {};
         shownCount = 0;
-        shownAs = settings;
+        shownAs = now;
     }
-    var from = (own ? '0' : '1') + chosen;
     var had = shown[id];
-    if (had && had.from === from) {
+    if (had && had.own === own && had.chosen === chosen) {
         return had.title;
     }
     // (A submitted title's > marks only keep a word's case; YouTube's own > are its title's)
     var result = option('tidy') ? tidyTitle(chosen, !own) : own ? chosen : unmark(chosen);
-    shown[id] = { from: from, title: result };
+    shown[id] = { own: own, chosen: chosen, title: result };
     shownCount++;
     return result;
+}
+
+/** Casual mode: DeArrow's users voted YouTube's title fine (a vote without a title fits any) */
+function votedFine(b: Branding, title: string): boolean {
+    var lower = title.trim().toLowerCase();
+    return b.casual.some(function (t) { return !t || t === lower; });
 }
 
 /** A video's picture: DeArrow's frame where thumbnails (or random frames) are on and it has one, else youtube (also
@@ -263,7 +275,17 @@ function ask(job: { id: string; length: number }): void {
         if (b) {
             keep(job.id, b);
         } else {
-            failed[job.id] = Date.now();
+            // (only failures within RETRY_MS are kept, swept once per RETRY_MS: DeArrow down a while fails every tile)
+            var now = Date.now();
+            if (now - swept >= RETRY_MS) {
+                swept = now;
+                for (var id in failed) {
+                    if (now - failed[id] >= RETRY_MS) {
+                        delete failed[id];
+                    }
+                }
+            }
+            failed[job.id] = now;
         }
         asking--;
         delete queued[job.id];
@@ -306,5 +328,5 @@ export function saveDearrow(): void {
 
 /** A length as "1:02:03" in seconds (0: none) */
 function seconds(length: string): number {
-    return /^\d+(:\d\d)+$/.test(length || '') ? length.split(':').reduce(function (s, part) { return s * 60 + +part; }, 0) : 0;
+    return /^\d+(:\d\d)+$/.test(length) ? length.split(':').reduce(function (s, part) { return s * 60 + +part; }, 0) : 0;
 }

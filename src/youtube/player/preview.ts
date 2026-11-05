@@ -1,6 +1,7 @@
 // Previews in the focused tile (Settings: Previews), as in YouTube's TV app: the
 // video plays at 480p in the tile's picture, with or without sound, from its
-// start (past a SponsorBlock segment at the start). It plays in the player's own
+// start (past a SponsorBlock segment at the start; a video the rest loaded
+// ahead from where OK would start it, switched down to 480p in place). It plays in the player's own
 // video (own-player.ts peekStart: small at the tile, the app keeping the keys),
 // so OK takes it over full screen without reloading, then switches quality in
 // place; hence the preview uses the codec the player would pick (VP9 or H.264).
@@ -11,10 +12,8 @@
 // stops, or when a player shows; its position is kept a while so the opened
 // video resumes there. Fails quietly (the picture stays).
 
-import { prefs } from '../api/prefs.js';
-import { segments } from '../api/sponsorblock.js';
-import { kindOf, pickFormat, Streams, streams } from '../api/streams.js';
-import { OwnPlayer, pastParts, startFormats } from './own-player.js';
+import { kindOf, pickFormat, streams } from '../api/streams.js';
+import { OwnPlayer, startOf } from './own-player.js';
 
 var HEIGHT = 480;
 /** How long a preview plays at most, and how long its sound fades out before it stops */
@@ -45,25 +44,30 @@ export class TilePreview {
         this.done = done || null;
         var gen = this.gen;
         var self = this;
-        Promise.all<any>([streams(id), segments(id, prefs().skip)]).then(function (got) {
-            var s = got[0] as Streams;
-            var chosen = startFormats(s);
+        startOf(streams(id), id, 0).then(function (start) {
+            var s = start.streams;
+            var chosen = start.formats;
             // The codec the player would play (VP9 or H.264), so a take-over switches to its format in place
             var kind = chosen ? kindOf(chosen.video.mime) : '';
             var format = chosen && pickFormat(s.videos.filter(function (f) { return kindOf(f.mime) === kind; }), HEIGHT);
             // Only if the tile is still in the page (its row may have been rebuilt meanwhile)
+            if (gen !== self.gen || !chosen || !format || !document.body.contains(frame)) {
+                return;
+            }
             var at = frame.getBoundingClientRect();
-            if (gen !== self.gen || !chosen || !format || !document.body.contains(frame) || !at.width || !at.height) {
+            if (!at.width || !at.height) {
                 return;
             }
             self.id = id;
-            self.player.peekStart(id, s, format, chosen.video, s.audios[0], pastParts(got[1], 0), at, sound, function () {
+            // (the tile's picture, laid over the video until it moves)
+            var picture = (frame.tagName === 'IMG' ? frame : frame.querySelector('.bd-tile-img')) as HTMLImageElement | null;
+            self.player.peekStart(id, s, format, chosen.video, s.audios[0], start.t, at, sound, function () {
                 if (gen === self.gen) {
                     self.stop();
                 }
-            }, square);
+            }, square, picture && picture.getAttribute('src') || '');
             // Until PREVIEW_MS, or the video's end if that comes first, the sound fading out over the last FADE_MS
-            var left = format.duration > 0 ? (format.duration - pastParts(got[1], 0)) * 1000 : 0;
+            var left = format.duration > 0 ? (format.duration - start.t) * 1000 : 0;
             var length = left > 0 ? Math.min(PREVIEW_MS, left) : PREVIEW_MS;
             self.fadeTimer = setTimeout(function () { self.player.peekFade(Math.min(FADE_MS, length)); }, Math.max(0, length - FADE_MS)) as unknown as number;
             self.timer = setTimeout(function () { self.stop(); }, length) as unknown as number;

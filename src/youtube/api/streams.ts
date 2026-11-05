@@ -138,6 +138,9 @@ export interface Storyboard {
     interval: number;
     /** The sheet's name, $M for its number ("M$M") */
     name: string;
+    /** A blurrier level whose sheets each cover much more of the video (one comes quickly for a far jump: its frame
+     * shows while the sharp sheet loads); only on the sharpest level */
+    coarse?: Storyboard;
     sigh: string;
 }
 
@@ -156,6 +159,9 @@ export interface Sabr {
     /** /player's videoPlaybackUstreamerConfig */
     config: string;
     client: SabrClient;
+    /** The token SABR's server gave with a reload request: the renewal's /player request sends it, else the server goes
+     * on asking for a reload and sends no media */
+    reloadToken?: string;
 }
 
 /** Why there are no streams: YouTube's reason, or what failed */
@@ -168,19 +174,30 @@ export interface NoStreams {
 
 /** The visitor id: the stored one while recent (unless fresh), else a new one */
 function visitor(fresh: boolean): Promise<string> {
-    var kept = load<{ id: string; at: number }>(VISITOR_KEY);
-    if (!fresh && kept && kept.id && Date.now() - kept.at < VISITOR_DAYS * 24 * 3600 * 1000) {
-        return Promise.resolve(kept.id);
+    var stored = load<{ id: string; at: number }>(VISITOR_KEY);
+    if (!fresh && stored && stored.id && Date.now() - stored.at < VISITOR_DAYS * 24 * 3600 * 1000) {
+        return Promise.resolve(stored.id);
     }
-    return getText(VISITOR).then(function (text) {
-        var id = (/"(Cg[A-Za-z0-9_%-]{20,})"/.exec(text) || [])[1];
-        if (!id) {
-            throw { status: 'NO_VISITOR', reason: 'YouTube gave no visitor id' } as NoStreams;
-        }
-        save(VISITOR_KEY, { id: id, at: Date.now() });
-        return id;
-    });
+    // (asked once for starts and preloads at the same time)
+    if (!visiting) {
+        var asked = visiting = getText(VISITOR).then(function (text) {
+            var id = (/"(Cg[A-Za-z0-9_%-]{20,})"/.exec(text) || [])[1];
+            if (!id) {
+                throw { status: 'NO_VISITOR', reason: 'YouTube gave no visitor id' } as NoStreams;
+            }
+            save(VISITOR_KEY, { id: id, at: Date.now() });
+            return id;
+        });
+        var done = function (): void {
+            if (visiting === asked) {
+                visiting = null;
+            }
+        };
+        asked.then(done, done);
+    }
+    return visiting;
 }
+var visiting: Promise<string> | null = null;
 
 /** Recently fetched streams (preloaded, or reopened), cached for KEEP_MS. Their URLs last ~6 h; expired ones are
  * fetched again (own-player.ts failed). */
@@ -195,32 +212,80 @@ export function streams(id: string): Promise<Streams> {
     return keep(id, false, function () { return ask(id, false); });
 }
 
-/** A video's streams as the account, via SABR (cached like streams); rejects with NoStreams */
-export function sabrStreams(id: string): Promise<Streams> {
-    return keep(id, true, function () { return askSabr(id); });
+/** A video's streams as the account, via SABR (cached like streams; reloadToken: a reload's, Sabr.reloadToken); rejects
+ * with NoStreams */
+export function sabrStreams(id: string, reloadToken?: string): Promise<Streams> {
+    return keep(id, true, function () { return askSabr(id, reloadToken || ''); });
+}
+
+/** The method that worked lately where the other failed for reasons not the video's own (SABR or as a guest): it goes
+ * first until LEARNED_MS later, then the Settings choice again */
+var learned: { sabr: boolean; at: number } | null = null;
+var LEARNED_MS = 30 * 60 * 1000;
+
+/** Whether SABR goes first now: the method that worked lately, else sabrFirst (Settings) */
+export function sabrFirstNow(sabrFirst: boolean): boolean {
+    return learned && Date.now() - learned.at < LEARNED_MS ? learned.sabr : sabrFirst;
+}
+
+/** The method (sabr or as a guest) played where the other failed (why: the other's reason, if known); unless that was
+ * about the video itself, it goes first for a while */
+export function learnMethod(sabr: boolean, why?: NoStreams): void {
+    if (!why || !aboutTheVideo(why)) {
+        learned = { sabr: sabr, at: Date.now() };
+    }
+}
+
+/** A failure that is about the video, not the method: an age check, members only, private, paid, region, no SABR
+ * stream (a live stream), removed (not the player script failing for SABR: SABR_SCRIPT) */
+export function aboutTheVideo(e: NoStreams): boolean {
+    return e.status === 'NO_SABR' || noneCanPlay(e) || /\b(age|members?|private|premium|purchase|rent(al|ed)?|country)\b/i.test(e.reason || '');
+}
+
+/** Removed, or a live stream not live yet: no method plays it, nor YouTube's player */
+export function noneCanPlay(e: NoStreams): boolean {
+    return e.status === 'ERROR' || e.status === 'LIVE_STREAM_OFFLINE';
 }
 
 /** A video's streams for the own player: as a guest, else via SABR (age check, members only); sabrFirst reverses
- * the order. If both fail, rejects with the first reason (and the other's). */
+ * the order, as does the method that worked lately (sabrFirstNow). If both fail, rejects with the first reason (and the
+ * other's). */
 export function playableStreams(id: string, sabrFirst: boolean): Promise<Streams> {
-    var first = sabrFirst ? sabrStreams(id) : streams(id);
+    var sabr = sabrFirstNow(sabrFirst);
+    var first = sabr ? sabrStreams(id) : streams(id);
     return first.then(null, function (e: NoStreams) {
         // Removed, an upcoming live stream, or no network: the other method cannot play it either
-        if (e.status === 'ERROR' || e.status === 'LIVE_STREAM_OFFLINE' || noAnswer(e)) {
+        if (noneCanPlay(e) || noAnswer(e)) {
             throw e;
         }
-        return (sabrFirst ? streams(id) : sabrStreams(id)).then(function (s) {
-            s.only = true;
-            return s;
+        return (sabr ? streams(id) : sabrStreams(id)).then(function (s) {
+            learnMethod(!sabr, e);
+            // A copy is marked: the kept one serves later plays, which try the first method again
+            var only = {} as Streams;
+            for (var name in s) {
+                (only as any)[name] = (s as any)[name];
+            }
+            only.only = true;
+            return only;
         }, function (other: NoStreams) {
-            throw { status: e.status, reason: e.reason + (other.reason ? ' (' + (sabrFirst ? 'as a guest' : 'SABR') + ': ' + other.reason + ')' : '') } as NoStreams;
+            throw { status: e.status, reason: e.reason + (other.reason ? ' (' + (sabr ? 'as a guest' : 'SABR') + ': ' + other.reason + ')' : '') } as NoStreams;
         });
     });
 }
 
+/** Whether a video's streams are kept (by this method: asking for them makes no request to YouTube) */
+export function streamsKept(id: string, sabr: boolean): boolean {
+    return !!keptOf(id, sabr, Date.now());
+}
+
+/** A video's streams kept by this method, still fresh at now */
+function keptOf(id: string, sabr: boolean, now: number): typeof kept[0] | undefined {
+    return kept.filter(function (k) { return k.id === id && k.sabr === sabr && now - k.at < KEEP_MS; })[0];
+}
+
 function keep(id: string, sabr: boolean, asking: () => Promise<Streams>): Promise<Streams> {
     var now = Date.now();
-    var had = kept.filter(function (k) { return k.id === id && k.sabr === sabr && now - k.at < KEEP_MS; })[0];
+    var had = keptOf(id, sabr, now);
     if (had) {
         return had.streams;
     }
@@ -230,6 +295,15 @@ function keep(id: string, sabr: boolean, asking: () => Promise<Streams>): Promis
         kept = kept.filter(function (k) { return k.streams !== asked; });
     });
     return asked;
+}
+
+/** A SABR /player request's playback context: the player script's signature timestamp, and a reload's token if any */
+export function sabrPlayback(sts: number, reloadToken: string): { [name: string]: unknown } {
+    var playback: { [name: string]: unknown } = { contentPlaybackContext: { html5Preference: 'HTML5_PREF_WANTS', signatureTimestamp: sts } };
+    if (reloadToken) {
+        playback.reloadPlaybackContext = { reloadPlaybackParams: { token: reloadToken } };
+    }
+    return playback;
 }
 
 /** Drop cached streams so they are fetched again (their URLs expired) */
@@ -248,15 +322,15 @@ export function takeTracking(id: string, token: string): any {
     return t && t.id === id && t.token === token && Date.now() - t.at < TRACKING_MS ? t.tracking : null;
 }
 
-/** /player as the signed-in TV client, with the player script's signature timestamp: the formats, the SABR URL
- * (n transformed by that script) and the client details SABR requests send */
-function askSabr(id: string): Promise<Streams> {
+/** /player as the signed-in TV client, with the player script's signature timestamp (and a reload's token, '' none):
+ * the formats, the SABR URL (n transformed by that script) and the client details SABR requests send */
+function askSabr(id: string, reloadToken: string): Promise<Streams> {
     return playerScript().then(function (script) {
         return Promise.all<any>([tvClient(), freshSignIn(), innertube('player', {
             videoId: id,
             contentCheckOk: true,
             racyCheckOk: true,
-            playbackContext: { contentPlaybackContext: { html5Preference: 'HTML5_PREF_WANTS', signatureTimestamp: script.sts } }
+            playbackContext: sabrPlayback(script.sts, reloadToken)
         })]).then(function (got) {
             var reply = got[2] || {};
             var playable = reply.playabilityStatus || {};
@@ -270,11 +344,7 @@ function askSabr(id: string): Promise<Streams> {
                 throw { status: 'NO_SABR', reason: 'no SABR stream' } as NoStreams;
             }
             var n = (/[?&]n=([^&]*)/.exec(url) || [])[1];
-            // The transform may still be starting, or fail now: SABR is then unavailable
-            var transformed = n ? script.n(decodeURIComponent(n)).then(null, function (e: Error) {
-                throw { status: 'NO_SABR', reason: e.message } as NoStreams;
-            }) : Promise.resolve('');
-            return transformed.then(function (changed) {
+            return (n ? script.n(decodeURIComponent(n)) : Promise.resolve('')).then(function (changed) {
                 if (n) {
                     url = url.replace(/([?&]n=)[^&]*/, '$1' + encodeURIComponent(changed));
                 }
@@ -287,13 +357,21 @@ function askSabr(id: string): Promise<Streams> {
                     client: { version: c.clientVersion || '', osName: c.osName || '', osVersion: c.osVersion || '', make: c.deviceMake || '', model: c.deviceModel || '', hl: c.hl || 'en' }
                 };
                 return s;
+            }, function (e: Error) {
+                // The transform may still be starting, or fail now: SABR is then unavailable
+                throw { status: 'SABR_SCRIPT', reason: e.message } as NoStreams;
             });
         });
     }, function (e: Error) {
-        throw { status: 'NO_SABR', reason: e.message } as NoStreams;
+        throw { status: 'SABR_SCRIPT', reason: e.message } as NoStreams;
     }).then(null, function (e: NoStreams | Error) {
-        throw (e as NoStreams).reason !== undefined ? e : { status: 'HTTP', reason: (e as Error).message } as NoStreams;
+        throw noStreams(e);
     });
+}
+
+/** A failure as NoStreams: an HTTP or other error gets status HTTP and its message */
+function noStreams(e: NoStreams | { message: string }): NoStreams {
+    return (e as NoStreams).reason !== undefined ? e as NoStreams : { status: 'HTTP', reason: (e as { message: string }).message };
 }
 
 /** Fetch a video's streams (again: retry with a new visitor id after a bot check) */
@@ -321,7 +399,7 @@ function ask(id: string, again: boolean): Promise<Streams> {
         }
         throw { status: playable.status || 'NO_REPLY', reason: playable.reason || '', length: +(reply && reply.videoDetails && reply.videoDetails.lengthSeconds) || undefined } as NoStreams;
     }, function (e: HttpError | NoStreams) {
-        throw (e as NoStreams).reason !== undefined ? e : { status: 'HTTP', reason: (e as HttpError).message } as NoStreams;
+        throw noStreams(e);
     });
 }
 
@@ -332,7 +410,9 @@ export function streamsOf(reply: any, sabr?: boolean): Streams {
     // A live stream's formats are numbered segments (no index)
     var live = !!details.isLive && !sabr ? formats.filter(function (f) { return f.targetDurationSec; })[0] : null;
     var playable = formats.filter(function (f) {
-        return (f.url || sabr) && (live ? f.targetDurationSec : f.initRange && f.indexRange) &&
+        // (a WebM video needs its length: its last segment ends there; a live stream's segments are numbered, SABR's
+        // come whole)
+        return (f.url || sabr) && (live ? f.targetDurationSec : f.initRange && f.indexRange && (sabr || !/webm/.test(f.mimeType || '') || +f.contentLength > 0)) &&
             /^((video|audio)\/mp4;|video\/webm; codecs="vp9")/.test(f.mimeType || '') && shown(f) && supported(f);
     });
     // VP9 before AV1 before H.264 at the same height and frame rate: VP9 goes up to 4K, so most videos use one codec
@@ -377,13 +457,10 @@ function audioTracks(formats: any[]): AudioTrack[] {
             track = tracks[id] = { id: id, name: about.displayName || 'Original', original: !f.audioTrack || !!about.audioIsDefault, format: null as unknown as Format, stable: null };
         }
         var format = formatOf(f);
-        var had = f.isDrc ? track.stable : track.format;
+        var slot: 'stable' | 'format' = f.isDrc ? 'stable' : 'format';
+        var had = track[slot];
         if (!had || format.bitrate > had.bitrate) {
-            if (f.isDrc) {
-                track.stable = format;
-            } else {
-                track.format = format;
-            }
+            track[slot] = format;
         }
     });
     var list = ids.map(function (id) { return tracks[id]; }).filter(function (t) { return t.format; });
@@ -397,8 +474,8 @@ function audioTracks(formats: any[]): AudioTrack[] {
     return list;
 }
 
-/** Media Source support per MIME type (checked once per type: a video with dubs has ~100 formats of a few types) */
-/** Media Source's answers by codec, height and frame rate */
+/** Media Source's answers by codec, height and frame rate (asked once each: a video with dubs has ~100 formats of a
+ * few kinds) */
 var SUPPORTED: { [key: string]: boolean } = {};
 /** Whether Media Source here checks a video's size and frame rate (webOS does; elsewhere they are ignored; null: not
  * asked yet) */
@@ -415,7 +492,7 @@ function supported(f: any): boolean {
         sized = MediaSource.isTypeSupported('video/mp4; codecs="avc1.4d401e"; width=640; height=360; framerate=30') &&
             !MediaSource.isTypeSupported('video/mp4; codecs="avc1.4d401e"; width=30000; height=20000; framerate=30');
     }
-    var key = f.mimeType + ' ' + (f.height || 0) + ' ' + (f.fps || 0);
+    var key = f.mimeType + ' ' + (f.width || 0) + 'x' + (f.height || 0) + ' ' + (f.fps || 0);
     if (SUPPORTED[key] === undefined) {
         var asked = MediaSource.isTypeSupported(f.mimeType + (sized && f.width && f.height ? '; width=' + f.width + '; height=' + f.height +
             (f.fps ? '; framerate=' + f.fps : '') : ''));
@@ -444,23 +521,40 @@ function shown(f: any): boolean {
 }
 
 /** The sharpest storyboard level of a /player reply's storyboards (spec: "base|w#h#count#cols#rows#interval#name#sigh|..."),
- * null when there is none with frames over time */
-export function storyboardOf(boards: any): Storyboard | null {
+ * with the one whose sheets cover the most time as its coarse level; null when there is none with frames over time */
+function storyboardOf(boards: any): Storyboard | null {
     var spec: string = boards && boards.playerStoryboardSpecRenderer && boards.playerStoryboardSpecRenderer.spec || '';
     var parts = spec.split('|');
     var best: Storyboard | null = null;
+    var widest: Storyboard | null = null;
     for (var i = 1; i < parts.length; i++) {
         var f = parts[i].split('#');
         var level: Storyboard = { base: parts[0], level: i - 1, w: +f[0], h: +f[1], count: +f[2], cols: +f[3], rows: +f[4], interval: +f[5], name: f[6] || '', sigh: f[7] || '' };
-        if (level.interval > 0 && level.w > 0 && level.cols > 0 && level.rows > 0 && (!best || level.w > best.w)) {
-            best = level;
+        if (level.interval > 0 && level.w > 0 && level.cols > 0 && level.rows > 0) {
+            best = !best || level.w > best.w ? level : best;
+            widest = !widest || sheetSeconds(level) > sheetSeconds(widest) ? level : widest;
         }
+    }
+    if (best && widest && sheetSeconds(widest) > sheetSeconds(best)) {
+        best.coarse = widest;
     }
     return best;
 }
 
-/** Where the frame at t (s) is: its sheet's address and its column and row there */
-export function storyboardFrame(sb: Storyboard, t: number): { url: string; col: number; row: number } {
+/** How long one of sb's sheets covers (s) */
+export function sheetSeconds(sb: Storyboard): number {
+    return sb.cols * sb.rows * sb.interval / 1000;
+}
+
+/** A frame of a storyboard: its sheet's address and its column and row there */
+export interface StoryboardFrame {
+    url: string;
+    col: number;
+    row: number;
+}
+
+/** Where the frame at t (s) is */
+export function storyboardFrame(sb: Storyboard, t: number): StoryboardFrame {
     var index = Math.max(0, Math.min(sb.count - 1, Math.floor(t * 1000 / sb.interval)));
     var per = sb.cols * sb.rows;
     var at = index % per;
@@ -522,8 +616,15 @@ export function captionList(s: Streams): Caption[] {
 }
 
 /** Whether language matches code: equal, or code has no region ("en") and language is a regional variant ("en-GB") */
-export function sameLanguage(language: string, code: string): boolean {
+function sameLanguage(language: string, code: string): boolean {
     return language === code || code.indexOf('-') < 0 && base(language) === code;
+}
+
+/** Subtitles in a language: exact match, else the same base language ("pt-PT": "pt"); uploaded first, as captionList
+ * orders them ('' or none: null) */
+export function captionIn(captions: Caption[], language: string): Caption | null {
+    return language ? captions.filter(function (c) { return c.language === language; })[0] ||
+        captions.filter(function (c) { return base(c.language) === base(language); })[0] || null : null;
 }
 
 /** "en" of "en-GB" */

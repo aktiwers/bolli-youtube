@@ -2,9 +2,11 @@
 // 1 the most), the heights YouTube draws it between, and its "Most replayed" label at the peak. YouTube's TV client is
 // not sent it; the mobile site's watch reply carries it (heatmapRenderer), so that is asked for as a guest (no
 // account), and only that part of the reply is read. Its scores are raw shares, spread from 0 to 1 here as the
-// website's come. Videos with few views have none.
+// website's come. Videos with few views have none. A failed request is noted (api/failures.ts): YouTube refusing the
+// mobile site's client, whose version is fixed here, would otherwise only show as graphs gone missing.
 
-import { postText } from '../../core/http.js';
+import { HttpError, postText } from '../../core/http.js';
+import { noteFailed } from './failures.js';
 import { get, text } from './feed.js';
 import { Keeper } from './kept-pages.js';
 import { objectAt } from './youtube.js';
@@ -29,7 +31,10 @@ var kept = new Keeper<Replays | null>(30 * 60 * 1000, 3, false, false);
 export function replays(id: string): Promise<Replays | null> {
     return kept.get(id, function () {
         return postText(NEXT, { context: { client: CLIENT }, videoId: id },
-            { 'X-YouTube-Client-Name': CLIENT_NAME, 'X-YouTube-Client-Version': CLIENT.clientVersion }).then(replaysOf);
+            { 'X-YouTube-Client-Name': CLIENT_NAME, 'X-YouTube-Client-Version': CLIENT.clientVersion }).then(replaysOf, function (e: HttpError) {
+            noteFailed('replays', e);
+            throw e;
+        });
     });
 }
 

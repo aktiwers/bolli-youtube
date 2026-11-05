@@ -18,14 +18,21 @@ body { font-family: 'Roboto', 'Inter', sans-serif; }
 html, body { background: #0f0f0f; }
 
 /* The rail, as YouTube's: the logo, the sections' icons (grey; the current one white), Settings at the foot; with
-   focus their names, a line under Library (the entries above move up for it), the screen pushed right */
-.by-rail-shade { width: 104px; -webkit-transition: width .2s ease; }
-.by-rail--open .by-rail-shade { width: 270px; background-color: #0f0f0f; }
-.by-app--rail .bd-stage { -webkit-transform: translateX(188px); }
+   focus their names, a line under Library (the entries above move up for it), the screen pushed right. Only moves,
+   fades and the shade's scale animate (a changing width or colour made the TV paint the rail on every frame): the
+   entries' pills and colours change at once */
+.by-rail-shade { width: 104px; -webkit-transform-origin: 0 0; -webkit-transition: -webkit-transform .2s ease; }
+.by-rail--open .by-rail-shade { -webkit-transform: scaleX(2.596); background-color: #0f0f0f; }
+.by-app--rail .bd-stage { -webkit-transform: translate3d(188px, 0, 0); }
+/* A section's rows (main.ts by-section; they start at the rail's edge) are cut off 98 px from the left, 6 short of their
+   margin (a focused first tile's ring), so a tile moving past it goes out of sight there instead of fading out (each
+   fade made the TV paint the tile on a layer of its own) */
+.by-section .bd-row { margin-left: 98px; width: 1182px; }
+.by-section .bd-row-title, .by-section .bd-row-strip { margin-left: -98px; }
+.by-section .bd-tile--gone { opacity: 1; }
 .by-rail-logo { left: 16px; top: 30px; width: 72px; height: 60px; border-radius: 10px; }
 .by-rail-logo--focused { box-shadow: 0 0 0 4px #f1f1f1; }
-.by-rail-item { left: 22px; width: 60px; height: 52px; border-radius: 12px; color: #b7b7b7;
-                -webkit-transition: width .2s ease, background-color .15s ease, color .15s ease, -webkit-transform .2s ease; }
+.by-rail-item { left: 22px; width: 60px; height: 52px; border-radius: 12px; color: #b7b7b7; -webkit-transition: -webkit-transform .2s ease; }
 .by-rail-item--selected { color: #f1f1f1; }
 .by-rail--open .by-rail-item { width: 226px; color: #f1f1f1; }
 .by-rail--open .by-rail-item--top { -webkit-transform: translateY(-27px); }
@@ -66,13 +73,14 @@ html, body { background: #0f0f0f; }
 /* Scaled without the smooth filter: with it the TV takes ~700 ms to draw a screen's pictures, ~250 ms without (640 px
    pictures shrink a little; the difference shows only in fine text) */
 .bd-tile-img { object-fit: cover; background: #212121; image-rendering: -webkit-optimize-contrast; }
-.bd-tile--focused .bd-tile-frame, .bd-tile--focused .bd-tile-under { -webkit-transform: none; }
 .bd-tile--focused .bd-tile-frame { box-shadow: 0 0 0 6px #f1f1f1; }
+/* OK down on a video tile (main.ts pressTile): it gives a little at once (not animated: a layer of its own for that) */
+.by-tile--pressed { -webkit-transform: scale(.97); -webkit-transition: none; }
 /* A tile's preview: the focus ring over the video's corners (the TV's video layer draws them square) */
 .by-peek-ring { border-radius: 12px; box-shadow: 0 0 0 6px #f1f1f1; }
-.bd-tile-title { margin-top: 16px; font-size: 24px; font-weight: 700; line-height: 32px; color: #ababab; opacity: 1;
-                 white-space: normal; text-overflow: clip; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; max-height: 64px; }
-.bd-tile--focused .bd-tile-title { -webkit-transform: none; color: #f3f3f3; }
+.bd-tile-title { margin-top: 16px; font-size: 24px; font-weight: 700; line-height: 32px; color: #ababab; overflow: hidden;
+                 display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; max-height: 64px; }
+.bd-tile--focused .bd-tile-title { color: #f3f3f3; }
 .bd-tile-line { font-size: 16px; line-height: 24px; color: #aaa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* YouTube's chips before the views ("4K", "New") */
 .bd-tile-chip { display: inline-block; margin-right: 6px; padding: 0 5px; border-radius: 4px; background: #303030; font-size: 14px;
@@ -85,7 +93,8 @@ html, body { background: #0f0f0f; }
 .bd-tile--round .bd-tile-title, .bd-tile--round .bd-tile-line { text-align: center; }
 .bd-tile--round .bd-tile-line { font-size: 15px; }
 .bd-tile-label, .by-chapter-time { padding: 0 4px; border-radius: 4px; background: rgba(6, 6, 6, .85); font-weight: 700; color: #f1f1f1; }
-.bd-tile-label { left: auto; top: auto; right: 8px; bottom: 8px; height: 22px; line-height: 22px; background-image: none; font-size: 16px; }
+.bd-tile-label { position: absolute; right: 8px; bottom: 8px; height: 22px; line-height: 22px; font-size: 16px; white-space: nowrap;
+                 overflow: hidden; text-overflow: ellipsis; }
 /* YouTube's icons before the word on a tile's picture (as in its overlay): a live stream's broadcast icon on
    YouTube's red, a playlist's lines, a mix's */
 .bd-tile-label--live, .bd-tile-label--playlist, .bd-tile-label--mix { padding-left: 24px; }
@@ -135,7 +144,7 @@ html, body { background: #0f0f0f; }
 /* A page with chips (Library's Music): its name bigger and lower, the chips beside it (as YouTube's) */
 .bd-page--tabs .by-heading { padding-top: 12px; font-size: 28px; }
 /* Moves up with the grid, at its pace */
-.bd-page--page .by-heading, .bd-page--page .by-page-buttons { -webkit-transition: -webkit-transform .3s ease; }
+.bd-page--page .by-heading, .bd-page--page .by-page-buttons { -webkit-transition: -webkit-transform .25s cubic-bezier(.2, .7, .3, 1); }
 .by-page-buttons { right: 72px; top: 45px; }
 .by-page-button { margin-left: 17px; height: 44px; line-height: 44px; padding: 0 20px; border-radius: 22px; background: #303030;
                   font-size: 16px; font-weight: 500; color: #f1f1f1; }
@@ -162,22 +171,22 @@ html, body { background: #0f0f0f; }
    search), YouTube's keyboard under it (plain letters, the focused one on a light square; Delete as
    its icon; Space, Clear and Search as grey keys), its suggestions left of it (what is typed plain, the rest bold),
    the results under them */
-.bd-search-query { left: 104px; top: 44px; margin: 0; width: 676px; height: 48px; line-height: 48px; padding: 0 20px;
-                   border-radius: 24px; background: #303030; font-size: 24px; font-weight: 700; color: #f1f1f1; }
+.bd-search-query { left: 104px; top: 44px; width: 676px; height: 48px; line-height: 48px; padding: 0 20px; border-radius: 24px;
+                   background: #303030; font-size: 24px; font-weight: 700; color: #f1f1f1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bd-search-query--empty { color: #8a8a8a; }
 .by-search-top { height: 112px; background: #0f0f0f; }
 .bd-keyboard { margin: 116px 0 0 480px; }
-.bd-keyboard-line { height: 44px; margin-bottom: 0; }
+.bd-keyboard-line { height: 44px; white-space: nowrap; font-size: 0; }
 .bd-key { width: 44px; height: 44px; line-height: 44px; margin: 0; border-radius: 8px; background: transparent;
           font-size: 24px; font-weight: 400; color: #f1f1f1; text-transform: uppercase; }
-.bd-key--focused { background: #f1f1f1; color: #0f0f0f; -webkit-transform: none; }
-.bd-key--wide2, .bd-key--wide3 { width: 88px; height: 36px; line-height: 36px; margin: 12px 8px 0 0; background: #303030;
+.bd-key--focused { background: #f1f1f1; color: #0f0f0f; }
+.bd-key--wide2 { width: 88px; height: 36px; line-height: 36px; margin: 12px 8px 0 0; background: #303030;
                                  font-size: 16px; font-weight: 700; }
 .bd-keyboard-line:last-child .bd-key:first-child { margin-left: 10px; }
 .bd-keyboard-line:first-child .bd-key:last-child { width: 64px; color: #f1f1f1; }
 .bd-keyboard-line:first-child .bd-key--focused:last-child { color: #0f0f0f; }
 .bd-key-icon { display: inline-block; width: 28px; height: 28px; vertical-align: middle; }
-.bd-search-status { margin: 24px 0 0 104px; color: #aaa; }
+.bd-search-status { margin: 24px 0 0 104px; height: 28px; line-height: 28px; font-size: 19px; color: #aaa; }
 .by-suggestions { left: 104px; top: 112px; width: 360px; }
 .by-suggestion { height: 44px; line-height: 44px; padding: 0 12px 0 46px; border-radius: 8px; font-size: 20px; color: #f1f1f1; }
 .by-suggestion--focused { background: #f1f1f1; color: #0f0f0f; }
@@ -224,7 +233,7 @@ html, body { background: #0f0f0f; }
 .by-settings-line { left: 393px; top: 128px; bottom: 0; width: 1px; background: #303030; }
 .by-settings-panel { left: 394px; }
 .by-settings-body { width: 712px; margin: 0 auto; padding: 122px 0 24px; }
-.by-settings-picture { width: 150px; height: 150px; margin: 0 auto 16px; }
+.by-settings-picture { width: 150px; height: 150px; margin: 0 auto 16px; object-fit: contain; }
 .by-settings-heading { font-size: 40px; line-height: 48px; font-weight: 700; color: #f1f1f1; }
 .by-settings-summary { margin-top: 8px; font-size: 20px; line-height: 28px; color: #aaa; }
 .by-settings-buttons { margin-top: 56px; }
@@ -234,6 +243,10 @@ html, body { background: #0f0f0f; }
 /* After the item's and button's own colours, which it replaces */
 .by-settings-item--focused, .by-settings-button--focused { background: #f1f1f1; color: #0f0f0f; }
 .by-settings-note { margin-top: 27px; font-size: 17px; line-height: 24px; color: #aaa; }
+/* About's lines, under its description */
+.by-settings-info { margin: 40px auto 0; max-width: 620px; font-size: 20px; line-height: 28px; color: #aaa; }
+.by-settings-fact { margin-bottom: 14px; }
+.by-settings-fact:first-child { font-size: 24px; color: #f1f1f1; }
 .by-settings-body--steps, .by-settings-body--code { padding-top: 126px; }
 .by-settings-link { width: 400px; margin-top: 22px; }
 .by-settings-steps { margin: 0; padding-left: 32px; font-size: 20px; line-height: 28px; color: #aaa; }
@@ -312,6 +325,17 @@ html, body { background: #0f0f0f; }
 .by-comment-button--focused { background: #f1f1f1; color: #0f0f0f; }
 .by-comments-note { padding: 16px; font-size: 17px; color: #aaa; }
 
+/* A live stream's chat beside the picture (player/chat-view.ts; placed in app.css); the subtitles make room */
+.by-chat { top: 120px; right: 40px; bottom: 170px; width: 420px; }
+.by-chat-line { margin-top: 8px; padding: 8px 14px; border-radius: 12px; background: rgba(15, 15, 15, .72); color: #fff;
+                font-size: 20px; line-height: 28px; word-wrap: break-word; }
+.by-chat-line--paid { background: rgba(255, 78, 69, .85); }
+.by-chat-author { margin-right: 10px; font-weight: 500; color: #aaa; }
+.by-chat-line--paid .by-chat-author { color: #fff; }
+.by-chat-amount { margin-right: 10px; font-weight: 700; }
+.by-chat-emoji { width: 24px; height: 24px; margin: 0 2px; vertical-align: -5px; }
+.by-player--chat .vod-subtitles { right: 520px; }
+
 /* The phone's volume while casting, as Apple TV shows a volume: a dark capsule top right, a speaker and a level bar */
 .by-volume { top: 32px; right: 40px; height: 44px; padding: 0 20px 0 16px; border-radius: 22px; background: rgba(44, 44, 46, .92);
              box-shadow: 0 8px 28px rgba(0, 0, 0, .45); }
@@ -375,7 +399,7 @@ html, body { background: #0f0f0f; }
 /* In the related videos a flat dark layer fades in over the shade (its opacity: no repaint over the video) */
 .by-watch-dim { background: rgba(15, 15, 15, .85); opacity: 0; -webkit-transition: opacity .3s ease; }
 .by-watch--related .by-watch-dim { opacity: 1; }
-.by-watch-body { -webkit-transition: -webkit-transform .3s ease; }
+.by-watch-body { -webkit-transition: -webkit-transform .25s cubic-bezier(.2, .7, .3, 1); }
 .by-watch-top, .by-watch-controls { -webkit-transition: opacity .3s ease; }
 .by-watch--related .by-watch-top, .by-watch--related .by-watch-controls { opacity: 0; }
 .by-watch-related .bd-row { -webkit-transition: opacity .3s ease; }
@@ -422,18 +446,14 @@ html, body { background: #0f0f0f; }
 .by-line--choice { padding-right: 56px; }
 .by-line-label { font-size: 18px; font-weight: 500; line-height: 26px; white-space: pre-line; word-wrap: break-word; }
 .by-line--plain .by-line-label { font-size: 16px; font-weight: 400; line-height: 24px; }
-.by-line-over, .by-line-under { font-size: 14px; line-height: 20px; color: #aaa; }
-.by-line-over { margin-bottom: 4px; font-weight: 500; color: #ddd; }
+.by-line-under { font-size: 14px; line-height: 20px; color: #aaa; }
 .by-line-under { margin-top: 4px; }
 .by-check { right: 16px; top: 50%; width: 24px; height: 24px; margin-top: -12px; }
 .by-check svg { display: block; }
 .by-line--focused { background: #f1f1f1; color: #0f0f0f; }
-.by-line--focused .by-line-over, .by-line--focused .by-line-under { color: #555; }
+.by-line--focused .by-line-under { color: #555; }
 .by-line--plain.by-line--focused { background: rgba(255, 255, 255, .12); color: #f1f1f1; }
-.by-line--plain.by-line--focused .by-line-over { color: #ddd; }
 .by-line--plain.by-line--focused .by-line-under { color: #aaa; }
-.by-watch-subscribe--on { background: #373737; color: #f1f1f1; }
-.by-watch-subscribe--on.by-watch-button--focused { background: #f1f1f1; color: #0f0f0f; }
 
 /* SponsorBlock segments on both bars, in SponsorBlock's own colours */
 .by-sb { opacity: .9; }
@@ -443,6 +463,8 @@ html, body { background: #0f0f0f; }
 .by-sb--intro { background: #00ffff; }
 .by-sb--outro { background: #0202ed; }
 .by-sb--music_offtopic { background: #ff9900; }
+.by-sb--preview { background: #008fd6; }
+.by-sb--filler { background: #7300ff; }
 .by-player .osd-bar .by-bar-marks { border-radius: 3px; overflow: hidden; }
 /* The bar cut into its chapters (YouTube's: a small gap where each begins) */
 .by-chapter-gap { width: 4px; margin-left: -2px; background: rgba(15, 15, 15, .9); }
@@ -478,9 +500,9 @@ html, body { background: #0f0f0f; }
 .by-channel--rows .by-channel-banner, .by-channel--rows .by-channel-shade { opacity: 0; }
 .by-channel-top { left: 0; top: 0; width: 1280px; height: 112px; background: #0f0f0f; opacity: 0; -webkit-transition: opacity .3s ease; }
 .by-channel--rows .by-channel-top { opacity: 1; }
-.by-channel-head { left: 64px; top: 300px; width: 1100px; -webkit-transition: -webkit-transform .3s ease, opacity .3s ease; }
+.by-channel-head { left: 64px; top: 300px; width: 1100px; -webkit-transition: -webkit-transform .25s cubic-bezier(.2, .7, .3, 1), opacity .3s ease; }
 .by-channel--rows .by-channel-head { opacity: 0; }
-.by-channel-rows { -webkit-transition: -webkit-transform .3s ease; }
+.by-channel-rows { -webkit-transition: -webkit-transform .25s cubic-bezier(.2, .7, .3, 1); }
 .by-channel-rows .bd-row-title { padding-left: 64px; }
 .by-channel-named { white-space: nowrap; }
 .by-channel-avatar { display: inline-block; vertical-align: middle; width: 48px; height: 48px; border-radius: 24px; background: #272727; }

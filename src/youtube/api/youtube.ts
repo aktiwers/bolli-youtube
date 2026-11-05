@@ -69,6 +69,9 @@ export interface TvClient {
 
 var page: Promise<Window> | null = null;
 var tv: Promise<TvPage> | null = null;
+/** When the /tv page (and so the client details in use) was fetched (a run of days asks again after CLIENT_FRESH_MS:
+ * the player version and client version move on) */
+var tvAt = 0;
 var client: Promise<Client> | null = null;
 /** client came from the cache */
 var clientKept = false;
@@ -139,7 +142,7 @@ function loaded(frame: HTMLIFrameElement): Promise<Window> {
 }
 
 /** frame's window when it holds youtube.com's robots.txt with storage (null: not, or not yet) */
-function usable(frame: HTMLIFrameElement): Window | null {
+export function usable(frame: HTMLIFrameElement): Window | null {
     var w = frame.contentWindow as Window;
     try {
         if (w.location.pathname === '/robots.txt' && w.localStorage) {
@@ -152,9 +155,18 @@ function usable(frame: HTMLIFrameElement): Window | null {
     return null;
 }
 
-/** YouTube's /tv page, fetched once (again after a failure); its client details are cached */
+/** YouTube's /tv page dropped, so the next use fetches it again (one without what was looked for in it) */
+export function forgetTvPage(): void {
+    tv = null;
+}
+
+/** YouTube's /tv page, fetched once (again after a failure, or once a day old); its client details are cached */
 export function tvPage(): Promise<TvPage> {
+    if (tv && Date.now() - tvAt > CLIENT_FRESH_MS) {
+        tv = null;
+    }
     if (!tv) {
+        tvAt = Date.now();
         tv = youtubePage().then(function (w) {
             return send(w, 'GET', '/tv', null, {});
         }).then(function (html) {
@@ -165,12 +177,14 @@ export function tvPage(): Promise<TvPage> {
             }
             context.client.hl = english();
             mark('tvPage');
-            var got: TvPage = { html: html, context: context, apiKey: key[1], oauth: [oauthClient(html, 0), oauthClient(html, 1)] };
-            save(CLIENT_KEY, { context: got.context, apiKey: got.apiKey, oauth: got.oauth, at: Date.now() });
-            // Later requests use these, so a long-running app does not keep a cached client for days
-            client = Promise.resolve(got);
+            var before = load<Partial<Client>>(CLIENT_KEY);
+            var details: Client = { context: context, apiKey: key[1], oauth: oauthClients(html, before && before.oauth) };
+            save(CLIENT_KEY, { context: details.context, apiKey: details.apiKey, oauth: details.oauth, at: Date.now() });
+            // Later requests use these, so a long-running app does not keep a cached client for days (not the page's
+            // HTML: kept only while the page is)
+            client = Promise.resolve(details);
             clientKept = false;
-            return got;
+            return { html: html, context: details.context, apiKey: details.apiKey, oauth: details.oauth };
         });
         tv.then(null, function () {
             tv = null;
@@ -188,8 +202,8 @@ export function tvClient(): Promise<Client> {
         if (clientKept) {
             kept!.context.client.hl = english();
             client = Promise.resolve(kept as Client);
-            if (age > CLIENT_FRESH_MS) {
-                tvPage().then(null, function () { return undefined; });
+            if (!tv) {
+                tvAt = kept!.at;
             }
         } else {
             client = tvPage();
@@ -197,6 +211,11 @@ export function tvClient(): Promise<Client> {
                 client = null;
             });
         }
+    }
+    // A day old (kept, or this run's): the /tv page again in the background, which updates it (tvPage starts the day
+    // anew, also if that fails)
+    if (tvAt && Date.now() - tvAt > CLIENT_FRESH_MS) {
+        tvPage().then(null, function () { return undefined; });
     }
     return client;
 }
@@ -209,17 +228,19 @@ function english(): string {
     return /^en(-|$)/.test(tvs) ? tvs : 'en';
 }
 
-/** Drops cached client details YouTube refused; the next request fetches the /tv page */
+/** Drops cached client details YouTube refused; the next request fetches the /tv page (the OAuth clients stay for
+ * it: tvClient takes no record without the rest) */
 function forgetClient(): void {
     client = null;
-    save(CLIENT_KEY, null);
+    // (and the page they came from: else the same details come back)
+    tv = null;
+    var kept = load<Partial<Client>>(CLIENT_KEY);
+    save(CLIENT_KEY, kept && kept.oauth ? { oauth: kept.oauth } : null);
 }
 
 /** POST youtubei/v1/<endpoint> as the TV client, signed in when the YouTube TV app is */
 export function innertube(endpoint: string, body: { [key: string]: unknown }): Promise<unknown> {
-    return innertubeText(endpoint, body).then(function (text) {
-        return JSON.parse(text);
-    });
+    return innertubeText(endpoint, body).then(JSON.parse);
 }
 
 /** innertube's reply as text, so parts can be read without parsing it all (objectAt) */
@@ -229,7 +250,7 @@ export function innertubeText(endpoint: string, body: { [key: string]: unknown }
 
 /** innertube with a given token (an account just signed in, before it is stored) */
 export function innertubeToken(token: string, endpoint: string, body: { [key: string]: unknown }): Promise<unknown> {
-    return ask(endpoint, body, function () { return Promise.resolve({ token: token, channel: '' }); }).then(function (text) { return JSON.parse(text); });
+    return ask(endpoint, body, function () { return Promise.resolve({ token: token, channel: '' }); }).then(JSON.parse);
 }
 
 /** POST to Google's OAuth service from youtube.com, as YouTube's TV app sends it: with one of its OAuth clients (an
@@ -264,16 +285,21 @@ export function oauth(path: string, fields: { [key: string]: string }, secret: b
 /** innertube as another signed-in account (its token renewed first if expired; rejects without a sign-in) */
 export function innertubeAs(identity: Identity, endpoint: string, body: { [key: string]: unknown }): Promise<unknown> {
     return ask(endpoint, body, function () {
-        return youtubePage().then(function (w) { return signInOf(w, identity as unknown as { [field: string]: unknown }) || renew(w, identity); }).then(function (sign) {
+        return youtubePage().then(function (w) {
+            var last = identity as unknown as { [field: string]: unknown };
+            return signInFor(w, last) || renew(w, identity);
+        }).then(function (sign) {
             if (!sign) {
                 throw new Error('no sign-in');
             }
             return sign;
         });
-    }).then(function (text) { return JSON.parse(text); });
+    }).then(JSON.parse);
 }
 
-function ask(endpoint: string, body: { [key: string]: unknown }, signedIn: () => Promise<{ token: string; channel: string } | null>): Promise<string> {
+/** An InnerTube request signed in as signedIn gives; renewed: asked again already after a refused token */
+function ask(endpoint: string, body: { [key: string]: unknown }, signedIn: () => Promise<{ token: string; channel: string } | null>,
+    renewed?: boolean): Promise<string> {
     var asked = tvClient();
     var kept = clientKept;
     return asked.then(function (t) {
@@ -293,11 +319,24 @@ function ask(endpoint: string, body: { [key: string]: unknown }, signedIn: () =>
             return send(w, 'POST', '/youtubei/v1/' + endpoint + '?key=' + t.apiKey + '&prettyPrint=false', JSON.stringify(body), headers).then(null, function (e) {
                 // A cached client refused (YouTube changed it): retry with fresh details from the /tv page. Every
                 // refused request retries; the first also drops the cache.
-                if (kept && /answered 400/.test(String(e))) {
+                if (kept && answeredWith(e, 400)) {
                     if (client === asked) {
                         forgetClient();
                     }
-                    return ask(endpoint, body, signedIn);
+                    return ask(endpoint, body, signedIn, renewed);
+                }
+                // A token refused before its time: renewed (or the token a renewal since brought), then asked again, once
+                if (sign && refusedToken(sign, e) && !renewed) {
+                    var token = sign.token;
+                    return signedIn().then(function (fresh) {
+                        if (!fresh || fresh.token === token) {
+                            throw e;
+                        }
+                        return ask(endpoint, body, signedIn, true);
+                    }, function () {
+                        // (no sign-in: the refusal is the reason)
+                        throw e;
+                    });
                 }
                 throw e;
             });
@@ -312,9 +351,36 @@ export function report(path: string): Promise<boolean> {
         return Promise.all<any>([youtubePage(), freshSignIn()]).then(function (got) {
             var w = got[0] as Window;
             var sign = got[1] as { token: string; channel: string } | null;
-            return sign ? send(w, 'POST', path, null, authHeaders(t, sign)).then(function () { return true; }) : false;
+            return sign ? send(w, 'POST', path, null, authHeaders(t, sign)).then(function () { return true; }, function (e) {
+                // (the next request renews it)
+                refusedToken(sign as { token: string }, e);
+                throw e;
+            }) : false;
         });
     });
+}
+
+/** Tokens YouTube refused before their time (revoked, or the TV's clock off after power-on): taken as expired, so the
+ * first request after renews them and the rest find the new one. Only one such renewal per REFUSED_AGAIN_MS: YouTube
+ * refusing the new token too is not about the token's age, and renewing on each request would not help. */
+var refused: { [token: string]: boolean } = {};
+var refusedAt = 0;
+var REFUSED_AGAIN_MS = 5 * 60 * 1000;
+
+/** Whether e is YouTube refusing sign's token (401); if so, the token is not used again (unless one was refused
+ * lately) */
+function refusedToken(sign: { token: string }, e: unknown): boolean {
+    var is = answeredWith(e, 401);
+    if (is && !refused[sign.token] && Date.now() - refusedAt > REFUSED_AGAIN_MS) {
+        refused[sign.token] = true;
+        refusedAt = Date.now();
+    }
+    return is;
+}
+
+/** Whether e is YouTube answering a request with status (send) */
+function answeredWith(e: unknown, status: number): boolean {
+    return !!e && (e as { status?: unknown }).status === status;
 }
 
 /** Renewals in progress (by account), and failed ones (by refresh token) with the time they may be retried
@@ -327,6 +393,8 @@ var aheadTimer = 0;
 var aheadFor = 0;
 /** An early renewal that failed while the token is still valid is retried after this */
 var RETRY_AHEAD_MS = 60 * 1000;
+/** A renewal that got no answer at all (the network: a TV just switched on) is retried after this */
+var NO_ANSWER_MS = 5000;
 
 /** The last-used account seen (its key; '' a guest; null: none yet), and the callback for when another is used
  * (e.g. picked in YouTube AdFree, which shares the accounts, while this app was hidden) */
@@ -346,9 +414,12 @@ export function freshSignIn(): Promise<{ token: string; channel: string } | null
             setTimeout(accountTold, 0);
         }
         seenAccount = key;
-        var sign = signIn(w);
+        // (the token's entry read once: its end too)
+        var fields = last as { [field: string]: unknown } | null;
+        var entry = tokenOf(w, fields);
+        var sign = signInOf(fields, entry);
         // A token from elsewhere (an account picked in YouTube's app): schedule its early renewal too
-        if (sign && signInEnds(w) !== aheadFor) {
+        if (sign && entry!.ends !== aheadFor) {
             renewAhead(w);
         }
         return sign || renew(w);
@@ -368,7 +439,7 @@ function renew(w: Window, identity?: Identity): Promise<{ token: string; channel
     }
     var account = identityKey(last as Identity);
     var isCurrent = !!current && identityKey(current) === account;
-    var signedIn = function (): boolean { return !!identitiesKept(w).owners[last!.ownerObfuscatedGaiaId]; };
+    var signedIn = function (): boolean { return !!ownersKept(w)[last!.ownerObfuscatedGaiaId]; };
     var wasSignedIn = signedIn();
     if (!renewing[account]) {
         var asked = renewing[account] = oauth('/o/oauth2/token', { refresh_token: refresh, grant_type: 'refresh_token' }, true, credentials.clientIdName).then(function (r) {
@@ -379,7 +450,7 @@ function renew(w: Window, identity?: Identity): Promise<{ token: string; channel
             var got = r.status === 200 ? r.reply : null;
             if (!got || !got.access_token) {
                 // Refused only on invalid_grant (the sign-in was revoked); a 401 more likely means a stale OAuth client
-                renewFailed(w, refresh, r.status === 400 && !!r.reply && r.reply.error === 'invalid_grant');
+                renewFailed(w, refresh, r.status === 400 && !!r.reply && r.reply.error === 'invalid_grant', false);
                 return null;
             }
             keepToken(w, last!, got.access_token, (+got.expires_in || 3600) * 1000);
@@ -387,10 +458,10 @@ function renew(w: Window, identity?: Identity): Promise<{ token: string; channel
             if (isCurrent) {
                 renewAhead(w);
             }
-            return signInOf(w, last);
+            return signInFor(w, last);
         });
-        asked.then(null, function () {
-            renewFailed(w, refresh, false);
+        asked.then(null, function (e) {
+            renewFailed(w, refresh, false, noAnswer(e));
         });
         var done = function (): void {
             if (renewing[account] === asked) {
@@ -402,14 +473,26 @@ function renew(w: Window, identity?: Identity): Promise<{ token: string; channel
     return renewing[account].then(null, function () { return null; });
 }
 
-/** Records a failed renewal: refused, never retried for that refresh token; otherwise retried after RENEW_AGAIN_MS,
- * or after RETRY_AHEAD_MS while the token is still valid, so it is renewed before it expires */
-function renewFailed(w: Window, refresh: string, refused: boolean): void {
+/** How long a failed renewal waits before another is tried: refused (the sign-in revoked), for ever; no answer at all,
+ * NO_ANSWER_MS (the network: else a token run out overnight left every screen a guest's for minutes); otherwise
+ * RETRY_AHEAD_MS while the token still holds (holding), RENEW_AGAIN_MS once it has run out */
+export function renewWait(refused: boolean, unanswered: boolean, holding: boolean): number {
+    if (refused) {
+        return Infinity;
+    }
+    if (unanswered) {
+        return NO_ANSWER_MS;
+    }
+    return holding ? RETRY_AHEAD_MS : RENEW_AGAIN_MS;
+}
+
+/** Records a failed renewal (see renewWait); while the token still holds, an early renewal is scheduled again */
+function renewFailed(w: Window, refresh: string, refused: boolean, unanswered: boolean): void {
     var now = Date.now();
-    var holds = signInEnds(w) - TOKEN_MARGIN_MS - now;
-    var again = !refused && holds > RETRY_AHEAD_MS;
-    failed[refresh] = refused ? Infinity : now + (again ? RETRY_AHEAD_MS : RENEW_AGAIN_MS);
-    if (again) {
+    // The token still holds for a while: an early renewal is tried again meanwhile
+    var holding = signInEnds(w) - TOKEN_MARGIN_MS - now > RETRY_AHEAD_MS;
+    failed[refresh] = now + renewWait(refused, unanswered, holding);
+    if (!refused && holding) {
         clearTimeout(aheadTimer);
         aheadTimer = setTimeout(function () { renewAhead(w); }, RETRY_AHEAD_MS) as unknown as number;
     }
@@ -444,13 +527,21 @@ function keepToken(w: Window, last: { [field: string]: any }, token: string, lif
     var raw = JSON.parse(w.localStorage.getItem(TOKENS_KEY) || 'null');
     var kept = raw && typeof raw === 'object' ? raw : {};
     kept.data = kept.data || {};
-    var key = last.effectiveObfuscatedGaiaId + '||' + last.ownerObfuscatedGaiaId;
+    var key = identityKey(last as Identity);
     var entry = kept.data[key] || { identity: last };
     entry.accessToken = token;
     entry.accessTokenDiscountedExpiration = now + life - RENEW_EARLY_MS;
     entry.accessTokenServerExpiration = now + life;
     kept.data[key] = entry;
     w.localStorage.setItem(TOKENS_KEY, JSON.stringify(kept));
+}
+
+/** The TV app's OAuth clients from the /tv page; one its script no longer shows as expected stays as found before
+ * (they practically never change, and without them no account's sign-in can be renewed) */
+export function oauthClients(html: string, before: Client['oauth'] | null | undefined): Client['oauth'] {
+    return [0, 1].map(function (n) {
+        return oauthClient(html, n) || (before && before[n]) || null;
+    });
 }
 
 /** The TV app's OAuth client for an account's clientIdName, found in the /tv page's script (null: not found), which
@@ -508,13 +599,17 @@ export function lastAccount(): Promise<string> {
 /** The last-used account's token and, for a brand account, its own id
  * (channel; '' for a Google account); null: none or expired */
 export function signIn(w: Window): { token: string; channel: string } | null {
-    return signInOf(w, stored(w, IDENTITY_KEY) as { [field: string]: unknown } | null);
+    return signInFor(w, stored(w, IDENTITY_KEY) as { [field: string]: unknown } | null);
 }
 
 /** An account's token and channel (null: none or expired) */
-function signInOf(w: Window, last: { [field: string]: unknown } | null): { token: string; channel: string } | null {
-    var entry = tokenOf(w, last);
-    if (!entry || entry.ends <= Date.now() + TOKEN_MARGIN_MS) {
+function signInFor(w: Window, last: { [field: string]: unknown } | null): { token: string; channel: string } | null {
+    return signInOf(last, tokenOf(w, last));
+}
+
+/** An account's token and channel, from its token entry (null: none or expired) */
+function signInOf(last: { [field: string]: unknown } | null, entry: { token: string; ends: number } | null): { token: string; channel: string } | null {
+    if (!entry || entry.ends <= Date.now() + TOKEN_MARGIN_MS || refused[entry.token]) {
         return null;
     }
     var effective = String(last!.effectiveObfuscatedGaiaId || '');
@@ -598,10 +693,15 @@ export interface Identities {
     last: Identity | null;
 }
 
+/** The Google accounts on the TV, by id (YouTube's store; {} none) */
+function ownersKept(w: Window): Identities['owners'] {
+    return (stored(w, AVAILABLE_KEY) || {}) as Identities['owners'];
+}
+
 function identitiesKept(w: Window): Identities {
     var last = stored(w, IDENTITY_KEY) as Identity | null;
     return {
-        owners: (stored(w, AVAILABLE_KEY) || {}) as Identities['owners'],
+        owners: ownersKept(w),
         tokens: (stored(w, TOKENS_KEY) || {}) as Identities['tokens'],
         activity: (stored(w, ACTIVITY_KEY) || {}) as Identities['activity'],
         last: last && last.ownerObfuscatedGaiaId ? last : null
@@ -697,6 +797,8 @@ export function addIdentity(identity: Identity, nonBrand: number, token: string,
 export function useIdentity(identity: Identity): Promise<void> {
     return youtubePage().then(function (w) {
         keep(w, IDENTITY_KEY, identityOf(identity));
+        // The app's own change: not told back as one from elsewhere (a second reset of everything)
+        seenAccount = identityKey(identity);
         var activity = identitiesKept(w).activity;
         activity[identity.effectiveObfuscatedGaiaId] = { lastActivityTimestamp: Date.now() };
         keep(w, ACTIVITY_KEY, activity);
@@ -713,6 +815,7 @@ export function forgetAccount(google: string): Promise<void> {
         keep(w, ACTIVITY_KEY, kept.activity);
         if (!kept.last) {
             w.localStorage.removeItem(IDENTITY_KEY);
+            seenAccount = '';
         }
     });
 }
@@ -757,11 +860,13 @@ export function get(w: Window, url: string): Promise<string> {
     return send(w, 'GET', url, null, {});
 }
 
-/** A request from the youtube.com page: the reply text (non-2xx: rejects) */
+/** A request from the youtube.com page: the reply text (non-2xx: rejects with an Error that has the status) */
 function send(w: Window, method: string, url: string, body: string | null, headers: { [name: string]: string }): Promise<string> {
     return answer(w, method, url, body, headers).then(function (r) {
         if (r.status < 200 || r.status >= 300) {
-            throw new Error('YouTube answered ' + r.status);
+            var refusal = new Error('YouTube answered ' + r.status) as Error & { status: number };
+            refusal.status = r.status;
+            throw refusal;
         }
         return r.text;
     });

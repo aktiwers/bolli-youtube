@@ -113,6 +113,11 @@ export class SignInView implements View {
             if (!self.shown || self.current !== c) {
                 return;
             }
+            // In the background: nothing asked (left open, it polled for days); again once back
+            if (document.hidden) {
+                self.wait();
+                return;
+            }
             if (Date.now() >= c.ends) {
                 self.newCode();
                 return;

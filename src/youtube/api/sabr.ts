@@ -67,6 +67,7 @@ export interface SabrSegment {
 }
 
 export interface SabrAnswer {
+    /** Its segments (a reader told of each, onSegment, keeps none) */
     segments: SabrSegment[];
     /** The last segment of each format (by itag), and its end (ms) */
     ends: { [itag: number]: { segment: number; endMs: number } };
@@ -80,8 +81,10 @@ export interface SabrAnswer {
     redirect: string;
     /** YouTube's error ('' none) */
     error: string;
-    /** The /player reply must be fetched again */
+    /** The /player reply must be fetched again, with YouTube's token for it ('' none: the /player request names it so
+     * the server sends media again) */
     reload: boolean;
+    reloadToken: string;
     /** Contexts to keep (and send when asked), and which types to start sending, stop sending, or discard */
     contexts: { type: number; value: Uint8Array; byDefault: boolean }[];
     start: number[];
@@ -134,34 +137,23 @@ export class Writer {
 /** Protocol buffers reader: each field's values (varints as numbers, length-delimited as bytes) */
 export function fields(p: Uint8Array): { [field: number]: (number | Uint8Array)[] } {
     var out: { [field: number]: (number | Uint8Array)[] } = {};
-    var i = 0;
-    var varint = function (): number {
-        var n = 0;
-        var scale = 1;
-        var c: number;
-        do {
-            c = p[i++];
-            n += (c & 127) * scale;
-            scale *= 128;
-        } while (c & 128 && i < p.length);
-        return n;
-    };
-    while (i < p.length) {
-        var key = varint();
+    var at = { i: 0 };
+    while (at.i < p.length) {
+        var key = varint(p, at);
         var field = Math.floor(key / 8);
         var type = key % 8;
         var value: number | Uint8Array;
         if (type === 0) {
-            value = varint();
+            value = varint(p, at);
         } else if (type === 2) {
-            var length = varint();
-            value = p.subarray(i, i + length);
-            i += length;
+            var length = varint(p, at);
+            value = p.subarray(at.i, at.i + length);
+            at.i += length;
         } else if (type === 1) {
-            i += 8;
+            at.i += 8;
             continue;
         } else if (type === 5) {
-            i += 4;
+            at.i += 4;
             continue;
         } else {
             break;
@@ -169,6 +161,19 @@ export function fields(p: Uint8Array): { [field: number]: (number | Uint8Array)[
         (out[field] = out[field] || []).push(value);
     }
     return out;
+}
+
+/** The varint at p[at.i], moving at.i past it */
+function varint(p: Uint8Array, at: { i: number }): number {
+    var n = 0;
+    var scale = 1;
+    var c: number;
+    do {
+        c = p[at.i++];
+        n += (c & 127) * scale;
+        scale *= 128;
+    } while (c & 128 && at.i < p.length);
+    return n;
 }
 
 function num(f: { [field: number]: (number | Uint8Array)[] }, field: number): number {
@@ -194,17 +199,8 @@ function ints(f: { [field: number]: (number | Uint8Array)[] }, field: number): n
             out.push(v);
             return;
         }
-        var i = 0;
-        while (i < v.length) {
-            var n = 0;
-            var scale = 1;
-            var c: number;
-            do {
-                c = v[i++];
-                n += (c & 127) * scale;
-                scale *= 128;
-            } while (c & 128 && i < v.length);
-            out.push(n);
+        for (var at = { i: 0 }; at.i < v.length;) {
+            out.push(varint(v, at));
         }
     });
     return out;
@@ -284,55 +280,20 @@ export function sabrRequest(ask: SabrAsk): Uint8Array {
     return new Uint8Array(req.bytes);
 }
 
-/** The complete UMP parts in b: type and data (a view into b); ended receives the end of the last complete part */
-export function umpParts(b: Uint8Array, ended?: (end: number) => void): { type: number; data: Uint8Array }[] {
-    var parts: { type: number; data: Uint8Array }[] = [];
-    var o = 0;
-    var whole = 0;
-    var number = function (): number {
-        var first = b[o];
-        var n = first < 128 ? 1 : first < 192 ? 2 : first < 224 ? 3 : first < 240 ? 4 : 5;
-        var v: number;
-        if (n === 1) {
-            v = first;
-        } else if (n === 2) {
-            v = (first & 0x3f) + b[o + 1] * 64;
-        } else if (n === 3) {
-            v = (first & 0x1f) + b[o + 1] * 32 + b[o + 2] * 8192;
-        } else if (n === 4) {
-            v = (first & 0x0f) + b[o + 1] * 16 + b[o + 2] * 4096 + b[o + 3] * 1048576;
-        } else {
-            v = b[o + 1] + b[o + 2] * 256 + b[o + 3] * 65536 + b[o + 4] * 16777216;
-        }
-        o += n;
-        return v;
-    };
-    while (o < b.length) {
-        var first = b[o];
-        // The part's type and size are not complete yet
-        if (o + numberLength(first) > b.length) {
-            break;
-        }
-        var type = number();
-        if (o >= b.length || o + numberLength(b[o]) > b.length) {
-            break;
-        }
-        var size = number();
-        if (o + size > b.length) {
-            break;
-        }
-        parts.push({ type: type, data: b.subarray(o, o + size) });
-        o += size;
-        whole = o;
-    }
-    if (ended) {
-        ended(whole);
-    }
-    return parts;
-}
-
+/** The length of a UMP number (part type, part size) from its first byte */
 function numberLength(first: number): number {
     return first < 128 ? 1 : first < 192 ? 2 : first < 224 ? 3 : first < 240 ? 4 : 5;
+}
+
+/** The UMP number at b[at.i], moving at.i past it */
+function umpNumber(b: Uint8Array, at: { i: number }): number {
+    var o = at.i;
+    var first = b[o];
+    var n = numberLength(first);
+    at.i += n;
+    return n === 1 ? first : n === 2 ? (first & 0x3f) + b[o + 1] * 64 : n === 3 ? (first & 0x1f) + b[o + 1] * 32 + b[o + 2] * 8192 :
+        n === 4 ? (first & 0x0f) + b[o + 1] * 16 + b[o + 2] * 4096 + b[o + 3] * 1048576 :
+        b[o + 1] + b[o + 2] * 256 + b[o + 3] * 65536 + b[o + 4] * 16777216;
 }
 
 /** Part types (googlevideo's UMPPartId) */
@@ -352,7 +313,7 @@ var SABR_CONTEXT_SENDING_POLICY = 59;
  * data yet) and the segment once complete (onSegment); everything else is collected in answer */
 export class SabrReader {
     answer: SabrAnswer = {
-        segments: [], ends: {}, backoffMs: 0, cookie: null, protection: 0, retries: 0, redirect: '', error: '', reload: false,
+        segments: [], ends: {}, backoffMs: 0, cookie: null, protection: 0, retries: 0, redirect: '', error: '', reload: false, reloadToken: '',
         contexts: [], start: [], stop: [], discard: []
     };
     /** Bytes received but not yet read (an incomplete part), and their count */
@@ -370,28 +331,19 @@ export class SabrReader {
         }
         for (;;) {
             var head = this.peek(10);
-            var at = 0;
-            var read = function (): number {
-                var first = head[at];
-                var n = numberLength(first);
-                var v = n === 1 ? first : n === 2 ? (first & 0x3f) + head[at + 1] * 64 : n === 3 ? (first & 0x1f) + head[at + 1] * 32 + head[at + 2] * 8192 :
-                    n === 4 ? (first & 0x0f) + head[at + 1] * 16 + head[at + 2] * 4096 + head[at + 3] * 1048576 :
-                    head[at + 1] + head[at + 2] * 256 + head[at + 3] * 65536 + head[at + 4] * 16777216;
-                at += n;
-                return v;
-            };
+            var at = { i: 0 };
             if (!head.length || numberLength(head[0]) >= head.length) {
                 return;
             }
-            var type = read();
-            if (at >= head.length || at + numberLength(head[at]) > head.length) {
+            var type = umpNumber(head, at);
+            if (at.i >= head.length || at.i + numberLength(head[at.i]) > head.length) {
                 return;
             }
-            var length = read();
-            if (this.size < at + length) {
+            var length = umpNumber(head, at);
+            if (this.size < at.i + length) {
                 return;
             }
-            this.take(at);
+            this.take(at.i);
             this.part(type, this.take(length));
         }
     }
@@ -408,8 +360,18 @@ export class SabrReader {
         return out;
     }
 
-    /** Consumes the first n bytes (into their own array) */
+    /** Consumes the first n bytes: a view when they lie in the first piece received (bytes kept beyond the reply
+     * are copied: a segment's at MEDIA_END, others by copy() or text()), else joined into their own array */
     private take(n: number): Uint8Array {
+        this.size -= n;
+        var first = this.chunks[0];
+        if (first && first.length >= n) {
+            this.chunks[0] = first.subarray(n);
+            if (first.length === n) {
+                this.chunks.shift();
+            }
+            return first.subarray(0, n);
+        }
         var out = new Uint8Array(n);
         var at = 0;
         while (at < n) {
@@ -423,7 +385,6 @@ export class SabrReader {
                 this.chunks[0] = c.subarray(used);
             }
         }
-        this.size -= n;
         return out;
     }
 
@@ -442,7 +403,7 @@ export class SabrReader {
             case MEDIA:
                 var open = this.open[data[0]];
                 if (open) {
-                    // A view into the part's own copy (take), so the reply's chunks can be released
+                    // A view (into the reply, or the part joined from pieces): MEDIA_END copies the segment out
                     open.pieces.push(data.subarray(1));
                     open.size += data.length - 1;
                 }
@@ -458,9 +419,10 @@ export class SabrReader {
                     });
                     done.segment.data = whole;
                     delete this.open[data[0]];
-                    a.segments.push(done.segment);
                     if (this.onSegment) {
                         this.onSegment(done.segment);
+                    } else {
+                        a.segments.push(done.segment);
                     }
                 }
                 break;
@@ -488,6 +450,7 @@ export class SabrReader {
                 break;
             case RELOAD_PLAYER_RESPONSE:
                 a.reload = true;
+                a.reloadToken = text(bytes(fields(bytes(fields(data), 1) || new Uint8Array(0)), 1));
                 break;
             case SABR_CONTEXT_UPDATE:
                 f = fields(data);
@@ -501,11 +464,4 @@ export class SabrReader {
                 break;
         }
     }
-}
-
-/** Reads a complete reply */
-export function sabrAnswer(b: Uint8Array): SabrAnswer {
-    var reader = new SabrReader();
-    reader.push(b);
-    return reader.answer;
 }

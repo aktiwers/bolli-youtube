@@ -4,12 +4,14 @@
 // the choices; OK sets one (or toggles it where several can be set); Left or
 // Back return to the list, then to the rail. The list keeps the focused
 // setting centred once it scrolls. Order: the app's own settings
-// (api/prefs.ts, saved at once), phone linking, then the account's History &
-// data settings that have an effect here (fetched when Settings shows).
+// (api/prefs.ts, saved at once), phone linking, the account's History & data
+// settings that have an effect here (fetched when Settings shows), then About
+// (the version, the device).
 // Clearing a history asks first, with YouTube's question.
 
 import { h, setShown, setSrc, setText, toggleClass, translate } from '../../core/dom.js';
 import { KEY } from '../../core/keys.js';
+import { android } from '../../core/platform.js';
 import { View } from '../../core/view.js';
 import { AccountGroup, AccountSetting, historySettings } from '../api/account-settings.js';
 import { Ask } from '../api/feed.js';
@@ -23,9 +25,12 @@ import { CAPTION_STYLES } from '../player/captions.js';
 import { Question } from '../ui/question.js';
 import { applyTheme, themes } from '../ui/theme.js';
 
+/** A choice's value (an on/off pref's: true or false) */
+type Value = string | number | boolean;
+
 /** A setting's choice: value, name, note ('' for none) */
 interface Choice {
-    value: string | number;
+    value: Value;
     name: string;
     note: string;
 }
@@ -33,13 +38,13 @@ interface Choice {
 /** A setting's choices: list, isSet, choose; many: several can be set (OK toggles one) */
 interface Choices {
     list: () => Choice[];
-    isSet: (value: string | number) => boolean;
-    choose: (value: string | number) => void;
+    isSet: (value: Value) => boolean;
+    choose: (value: Value) => void;
     many?: boolean;
 }
 
 /** A setting: name, description, picture ('' for none); its choices, or the steps to link a phone (code: shows a TV
- * code, for a phone on another network) */
+ * code, for a phone on another network), or lines to read (info) */
 interface Setting {
     label: string;
     summary: string;
@@ -47,6 +52,7 @@ interface Setting {
     choices?: Choices;
     steps?: string[];
     code?: boolean;
+    info?: string[];
 }
 
 /** A rail page the app can start on */
@@ -67,16 +73,17 @@ function pic(name: string): string {
     return 'https://www.gstatic.com/ytlr/img/' + name + '.png';
 }
 
-/** A setting with choices: now() gives the set value, set() changes it */
-function pick(label: string, summary: string, picture: string, list: () => Choice[], now: () => string | number,
-    set: (value: string | number) => void): Setting {
-    return { label: label, summary: summary, picture: picture, choices: { list: list, isSet: function (value) { return value === now(); }, choose: set } };
+/** A setting with choices (a list, or made when shown): now() gives the set value, set() changes it */
+function pick(label: string, summary: string, picture: string, list: Choice[] | (() => Choice[]), now: () => Value,
+    set: (value: Value) => void): Setting {
+    return { label: label, summary: summary, picture: picture, choices: { list: typeof list === 'function' ? list : function () { return list as Choice[]; },
+        isSet: function (value) { return value === now(); }, choose: set } };
 }
 
 /** An app pref with choices (then: called after a choice) */
-function pref<K extends keyof Prefs>(label: string, summary: string, picture: string, name: K, list: () => Choice[],
-    then?: (value: string | number) => void): Setting {
-    return pick(label, summary, picture, list, function () { return prefs()[name] as unknown as string | number; }, function (value) {
+function pref<K extends keyof Prefs>(label: string, summary: string, picture: string, name: K, list: Choice[] | (() => Choice[]),
+    then?: (value: Value) => void): Setting {
+    return pick(label, summary, picture, list, function () { return prefs()[name] as unknown as Value; }, function (value) {
         setPref(name, value as unknown as Prefs[K]);
         if (then) {
             then(value);
@@ -84,15 +91,9 @@ function pref<K extends keyof Prefs>(label: string, summary: string, picture: st
     });
 }
 
-/** An app on/off pref, with notes for on and off */
-function flag(label: string, summary: string, picture: string, name: 'history' | 'preload' | 'startSign' | 'sabr' | 'replays', on: string,
-    off: string): Setting {
-    return pick(label, summary, picture, function () { return onOff(on, off); }, function () { return prefs()[name] ? 1 : 0; },
-        function (value) { setPref(name, value === 1); });
-}
-
+/** An on/off setting's choices, with notes for on and off */
 function onOff(on: string, off: string): Choice[] {
-    return [{ value: 1, name: 'On', note: on }, { value: 0, name: 'Off', note: off }];
+    return [{ value: true, name: 'On', note: on }, { value: false, name: 'Off', note: off }];
 }
 
 /** Autoplay: off, or the next video after an "Up next" countdown of so many seconds (overrides the account's own
@@ -187,61 +188,61 @@ function dearrowOptions(): Setting {
 function bolli(pages: StartPage[], more: () => void): Setting[] {
     var settings = [
         autoplay(),
-        pref('Video quality', 'The quality videos start at', pic('clear_search_history'), 'quality', function () {
-            return [
-                { value: 0, name: 'Auto', note: 'as good as the video and the connection allow, up to 4K' },
-                { value: HIGHEST, name: 'Highest available', note: 'the best the video has, up to 8K where the TV plays it' },
-                { value: 2160, name: '4K (2160p)', note: 'or the closest below it' },
-                { value: 1440, name: '1440p (2K)', note: 'or the closest below it' },
-                { value: 1080, name: '1080p (HD)', note: 'or the closest below it' },
-                { value: 720, name: '720p', note: 'or the closest below it' },
-                { value: 480, name: '480p', note: 'or the closest below it' }
-            ];
-        }),
+        pref('Video quality', 'The quality videos start at', pic('clear_search_history'), 'quality', [
+            { value: 0, name: 'Auto', note: 'as good as the video and the connection allow, up to 4K' },
+            { value: HIGHEST, name: 'Highest available', note: 'the best the video has, up to 8K where the TV plays it' },
+            { value: 2160, name: '4K (2160p)', note: 'or the closest below it' },
+            { value: 1440, name: '1440p (2K)', note: 'or the closest below it' },
+            { value: 1080, name: '1080p (HD)', note: 'or the closest below it' },
+            { value: 720, name: '720p', note: 'or the closest below it' },
+            { value: 480, name: '480p', note: 'or the closest below it' }
+        ]),
         subtitles(more),
-        pref('Subtitle style', 'How YouTube\'s automatic subtitles appear', pic('language'), 'captionStyle', function () {
-            return CAPTION_STYLES;
-        }),
-        pref('Previews', 'The video whose tile you rest on plays in the tile (in Bolli\'s player)', pic('clear_watch_history'), 'previews', function () {
-            return [
-                { value: 'sound', name: 'With sound', note: '' },
-                { value: 'muted', name: 'Without sound', note: '' },
-                { value: 'off', name: 'Off', note: '' }
-            ];
-        }),
+        pref('Subtitle style', 'How YouTube\'s automatic subtitles appear', pic('language'), 'captionStyle', CAPTION_STYLES),
+        pref('Previews', 'The video whose tile you rest on plays in the tile (in Bolli\'s player)', pic('clear_watch_history'), 'previews', [
+            { value: 'sound', name: 'With sound', note: '' },
+            { value: 'muted', name: 'Without sound', note: '' },
+            { value: 'off', name: 'Off', note: '' }
+        ]),
         sponsorBlock(),
         // Its picture drawn for the app in the style of YouTube's
-        flag('Most replayed', 'A graph over the progress bar in Bolli\'s player of the parts people watch again the most, from YouTube',
-            'replays.png', 'replays', 'shown on videos YouTube has one for (popular ones)', 'no graph'),
+        pref('Most replayed', 'A graph over the progress bar in Bolli\'s player of the parts people watch again the most, from YouTube',
+            'replays.png', 'replays', onOff('shown on videos YouTube has one for (popular ones)', 'no graph')),
+        // Its picture drawn for the app, as Most replayed's
+        pref('Dislike counts', 'How many dislike a video, on its watch page beside the likes, as Return YouTube Dislike estimates them',
+            'dislikes.png', 'dislikes', onOff('asked of returnyoutubedislike.com for each video whose watch page you open', 'no count')),
+        // Its picture drawn for the app, as Most replayed's
+        pref('Live chat', 'A live stream\'s chat beside the picture in Bolli\'s player (also in the player\'s settings)', 'chat.png',
+            'liveChat', onOff('the latest messages at the right of the picture', 'no chat')),
         // DeArrow's logo (from github.com/ajayyy/DeArrow, based on Twemoji), bundled with the app
-        pref('DeArrow', 'Titles and thumbnails DeArrow\'s users submit, in place of clickbait', 'dearrow.png', 'dearrow', function () {
-            return [
-                { value: '', name: 'Off', note: 'YouTube\'s titles and thumbnails' },
-                { value: 'classic', name: 'Classic', note: 'DeArrow\'s titles and thumbnails wherever its users submitted them' },
-                { value: 'casual', name: 'Casual', note: 'YouTube\'s own titles where DeArrow\'s users voted them fine (funny, clever, descriptive), DeArrow\'s elsewhere' }
-            ];
-        }),
+        pref('DeArrow', 'Titles and thumbnails DeArrow\'s users submit, in place of clickbait', 'dearrow.png', 'dearrow', [
+            { value: '', name: 'Off', note: 'YouTube\'s titles and thumbnails' },
+            { value: 'classic', name: 'Classic', note: 'DeArrow\'s titles and thumbnails wherever its users submitted them' },
+            { value: 'casual', name: 'Casual', note: 'YouTube\'s own titles where DeArrow\'s users voted them fine (funny, clever, descriptive), DeArrow\'s elsewhere' }
+        ]),
         dearrowOptions(),
-        flag('History', 'What you watch in Bolli\'s player, told to YouTube', pic('privacy_and_terms'),
-            'history', 'it goes into your YouTube history, and YouTube remembers where you stopped', 'Bolli\'s player tells YouTube nothing of what you watch'),
+        pref('History', 'What you watch in Bolli\'s player, told to YouTube', pic('privacy_and_terms'), 'history',
+            onOff('it goes into your YouTube history, and YouTube remembers where you stopped', 'Bolli\'s player tells YouTube nothing of what you watch')),
         // Any page of the rail
         pref('Start page', 'The screen the app starts on', pic('location'), 'startPage', function () {
             return pages.map(function (p) { return { value: p.id, name: p.label, note: '' }; });
         }),
-        pref('Tile pictures', 'How sharp the tiles\' pictures are', pic('linked_devices'), 'pictures', function () {
-            return [
-                { value: 'sharpest', name: 'Sharpest', note: 'the clearest pictures; they take the most memory (about 30 MB more while a video plays)' },
-                { value: 'sharp', name: 'Sharp', note: 'clearer pictures, a little more memory' },
-                { value: 'standard', name: 'Standard', note: 'YouTube\'s small pictures: softer on this screen, the least memory' }
-            ];
-        }),
-        flag('Videos start sooner', 'The video or page whose tile you rest on gets ready', pic('send_feedback'), 'preload',
-            'it opens about a second sooner', ''),
-        flag('Loading sign', 'What shows while a video starts in Bolli\'s player', pic('reset_app'), 'startSign',
-            'the channel\'s picture fills up', 'the screen stays dark until the video plays'),
-        flag('Streams by SABR', 'How Bolli\'s player gets the videos', pic('parent_code'), 'sabr',
-            'as YouTube\'s TV app does (signed in, by SABR), as a guest when that fails',
-            'as a guest, signed in (by SABR) only when YouTube asks, as for an age check')
+        pref('Tile pictures', 'How sharp the tiles\' pictures are', pic('linked_devices'), 'pictures', [
+            { value: 'sharpest', name: 'Sharpest', note: 'the clearest pictures; they take the most memory (about 30 MB more while a video plays)' },
+            { value: 'sharp', name: 'Sharp', note: 'clearer pictures, a little more memory' },
+            { value: 'standard', name: 'Standard', note: 'YouTube\'s small pictures: softer on this screen, the least memory' }
+        ]),
+        pref('Videos start sooner', 'The video or page whose tile you rest on gets ready', pic('send_feedback'), 'preload',
+            onOff('it opens about a second sooner', '')),
+        pref('Loading sign', 'What shows while a video starts in Bolli\'s player', pic('reset_app'), 'startSign',
+            onOff('the channel\'s picture fills up', 'the screen stays dark until the video plays')),
+        pref('Start picture', 'What shows behind the loading sign while a video starts in Bolli\'s player, until it moves', pic('reset_app'), 'startPicture', [
+            { value: 'tile', name: 'The tile\'s picture', note: 'sharp, at once; it melts into the video once that moves' },
+            { value: 'frame', name: 'The frame it starts on', note: 'the very picture it opens with, blurry: from YouTube\'s seek previews' },
+            { value: 'none', name: 'None', note: 'dark until the video plays: its picture comes soonest' }
+        ]),
+        pref('Streams by SABR', 'How Bolli\'s player gets the videos', pic('parent_code'), 'sabr',
+            onOff('as YouTube\'s TV app does (signed in, by SABR), as a guest when that fails', 'as a guest, signed in (by SABR) only when YouTube asks, as for an age check'))
     ];
     // Only when there is more than one theme
     if (themes().length > 1) {
@@ -259,6 +260,35 @@ var LINK: Setting[] = [
     { label: 'Link with TV code', summary: '', picture: '', code: true, steps: ['On your phone, open the YouTube app.',
         'Tap the cast icon.', 'Tap \'Link with TV code\' and enter the code below.'] }
 ];
+
+/** About: the app's version, the device it runs on, where its code is, what it uses */
+function about(): Setting {
+    var where = device();
+    return { label: 'About', summary: 'Bolli YouTube, a light YouTube app for TVs', picture: 'logo.webp', info: [
+        'Version ' + (document.documentElement.getAttribute('data-version') || ''),
+        where ? 'On ' + where : '',
+        'Source code: github.com/aktiwers/bolli-youtube',
+        'With SponsorBlock, DeArrow, Return YouTube Dislike and the Roboto font (Apache License 2.0)',
+        'Not made by YouTube or Google'
+    ].filter(function (line) { return line; }) };
+}
+
+/** The device: the Android app's model and version (its browser names an LG TV, as YouTube needs), else an LG TV's
+ * model, webOS year and firmware as its browser names them ('' none) */
+function device(): string {
+    var shell = android();
+    if (shell) {
+        return shell.device ? shell.device() : 'Android';
+    }
+    var ua = navigator.userAgent;
+    var model = /\(LG, ([^,)]+)/.exec(ua);
+    if (!model) {
+        return '';
+    }
+    var year = /webOS\.TV-(\d+)/.exec(ua);
+    var firmware = /_TV_\w+\/([\d.]+)/.exec(ua);
+    return 'LG ' + model[1] + (year ? ', webOS TV ' + year[1] : '') + (firmware ? ', firmware ' + firmware[1] : '');
+}
 
 /** "a thing" as "A thing" */
 function sentence(s: string): string {
@@ -283,12 +313,15 @@ export class SettingsView implements View {
     private summary: HTMLElement;
     private steps: HTMLElement;
     private code: HTMLElement;
+    private info: HTMLElement;
     private phone: HTMLImageElement;
     private buttonsBox: HTMLElement;
     private note: HTMLElement;
-    /** Settings in list order with their elements; ownCount: how many precede the account's */
+    /** Settings in list order with their elements; ownCount: how many precede the account's; About's (always last) */
     private items: { setting: Setting; el: HTMLElement }[] = [];
     private ownCount = 0;
+    private aboutItems: { setting: Setting; el: HTMLElement }[] = [];
+    private aboutHead: HTMLElement | null = null;
     private at = 0;
     private place: Place = 'list';
     private focused = false;
@@ -301,8 +334,8 @@ export class SettingsView implements View {
     private choices: Choice[] = [];
     private buttons: { el: HTMLElement; check: HTMLElement }[] = [];
     private button = 0;
-    /** Subtitles' "More languages" picker; takes the keys while open */
-    private languages: LanguagePicker;
+    /** Subtitles' "More languages" picker (built on first open); takes the keys while open */
+    private languages: LanguagePicker | null = null;
     /** The account's History & data group as shown, and its elements */
     private history: AccountGroup | null = null;
     private historyEls: HTMLElement[] = [];
@@ -332,16 +365,18 @@ export class SettingsView implements View {
         var linkBox = this.body.appendChild(h('div', 'by-settings-link')) as HTMLElement;
         this.steps = linkBox.appendChild(h('ol', 'by-settings-steps')) as HTMLElement;
         this.code = linkBox.appendChild(h('div', 'by-settings-code')) as HTMLElement;
+        this.info = this.body.appendChild(h('div', 'by-settings-info')) as HTMLElement;
         this.phone = this.body.appendChild(h('img', 'by-settings-phone')) as HTMLImageElement;
         this.buttonsBox = this.body.appendChild(h('div', 'by-settings-buttons')) as HTMLElement;
         this.note = this.body.appendChild(h('div', 'by-settings-note')) as HTMLElement;
         panel.appendChild(this.body);
         this.el.appendChild(panel);
-        this.languages = new LanguagePicker(this.el);
         var self = this;
         this.addGroup('Bolli', bolli(pages, function () { self.moreLanguages(); }));
         this.addGroup('Link TV & phone', LINK);
         this.ownCount = this.items.length;
+        this.aboutHead = this.addGroup('Bolli YouTube', [about()])[0];
+        this.aboutItems = this.items.slice(this.ownCount);
         this.drawFocus();
     }
 
@@ -360,9 +395,7 @@ export class SettingsView implements View {
 
     hide(): void {
         this.shown = false;
-        this.languages.close();
         this.closeOwn();
-        this.place = 'list';
         setShown(this.el, false);
     }
 
@@ -373,15 +406,13 @@ export class SettingsView implements View {
         }
         this.focused = focused;
         if (!focused) {
-            this.languages.close();
             this.closeOwn();
-            this.place = 'list';
         }
         this.drawFocus();
     }
 
     onKey(code: number): boolean {
-        if (this.languages.shown) {
+        if (this.languages && this.languages.shown) {
             return this.languages.onKey(code);
         }
         if (this.place === 'choices') {
@@ -431,6 +462,7 @@ export class SettingsView implements View {
     /** Subtitles' "More languages": the chosen language is set and added to the list */
     private moreLanguages(): void {
         var self = this;
+        this.languages = this.languages || new LanguagePicker(this.el);
         this.languages.open(prefs().captions, function (code) {
             var added = prefs().captionLanguages;
             if (ALWAYS.indexOf(code) < 0 && added.indexOf(code) < 0) {
@@ -441,29 +473,37 @@ export class SettingsView implements View {
         });
     }
 
-    /** Appends a group heading and its settings to the list; returns their elements */
-    private addGroup(title: string, settings: Setting[]): HTMLElement[] {
+    /** Adds a group heading and its settings to the list (at its end, or before the element before); returns their
+     * elements */
+    private addGroup(title: string, settings: Setting[], before?: HTMLElement): HTMLElement[] {
         var self = this;
-        var els = [this.list.appendChild(h('div', 'by-settings-group', title)) as HTMLElement];
+        var add = function (el: HTMLElement): HTMLElement {
+            return self.list.insertBefore(el, before || null) as HTMLElement;
+        };
+        var els = [add(h('div', 'by-settings-group', title))];
         settings.forEach(function (s) {
-            var el = self.list.appendChild(h('div', 'by-settings-item', s.label)) as HTMLElement;
+            var el = add(h('div', 'by-settings-item', s.label));
             self.items.push({ setting: s, el: el });
             els.push(el);
         });
         return els;
     }
 
-    /** Puts the account's History & data group last, replacing the previous one (no-op for the same reply) */
+    /** Puts the account's History & data group before About, replacing the previous one (no-op for the same reply);
+     * the focus stays on its setting */
     private putHistory(group: AccountGroup | null): void {
         var self = this;
         if (group === this.history) {
             return;
         }
+        var focused = this.items[this.at].setting;
         this.history = group;
         this.historyEls.forEach(function (el) { self.list.removeChild(el); });
         this.items.length = this.ownCount;
-        this.historyEls = group ? this.addGroup(group.title, group.settings.map(function (a) { return self.accountSetting(a); })) : [];
-        this.at = Math.min(this.at, this.items.length - 1);
+        this.historyEls = group ? this.addGroup(group.title, group.settings.map(function (a) { return self.accountSetting(a); }), this.aboutHead || undefined) : [];
+        this.items = this.items.concat(this.aboutItems);
+        var still = this.items.map(function (item) { return item.setting; }).indexOf(focused);
+        this.at = still >= 0 ? still : Math.min(this.at, this.items.length - 1);
         if (!this.question.shown) {
             this.drawFocus();
         }
@@ -478,8 +518,8 @@ export class SettingsView implements View {
             return pick(a.title, a.summary, a.picture, function () { return [{ value: 0, name: a.title, note: '' }]; },
                 function () { return -1; }, function () { self.openAsk(ask!); });
         }
-        var setting = pick(a.title, a.summary, a.picture, function () { return onOff('', ''); }, function () { return a.on ? 1 : 0; }, function (value) {
-            apply(a, 'on', value === 1, value === 1 ? a.enable : a.disable, function () {
+        var setting = pick(a.title, a.summary, a.picture, onOff('', ''), function () { return !!a.on; }, function (value) {
+            apply(a, 'on', value === true, value ? a.enable : a.disable, function () {
                 if (self.drawn === setting) {
                     self.drawButtons();
                 }
@@ -514,7 +554,7 @@ export class SettingsView implements View {
         var self = this;
         var s = this.drawn = this.items[this.at].setting;
         this.body.className = 'by-settings-body' + (s.picture ? ' by-settings-body--picture' : '') +
-            (s.code ? ' by-settings-body--code' : s.steps ? ' by-settings-body--steps' : '');
+            (s.code ? ' by-settings-body--code' : s.steps ? ' by-settings-body--steps' : s.info ? ' by-settings-body--info' : '');
         if (s.picture) {
             setSrc(this.picture, s.picture);
         }
@@ -523,6 +563,10 @@ export class SettingsView implements View {
         this.steps.innerHTML = '';
         (s.steps || []).forEach(function (one) {
             self.steps.appendChild(h('li', 'by-settings-step', one));
+        });
+        this.info.innerHTML = '';
+        (s.info || []).forEach(function (line) {
+            self.info.appendChild(h('div', 'by-settings-fact', line));
         });
         if (s.code) {
             setSrc(this.phone, pic('link_with_tv_code_static_v2'));
@@ -566,7 +610,8 @@ export class SettingsView implements View {
     /** Requests a TV code if there is none (again: also after a failure); shown until it expires */
     private askCode(again: boolean): void {
         var self = this;
-        if (!this.shown || !this.items[this.at].setting.code || this.tvCode || this.codeSaid === '…' || this.codeSaid && !again) {
+        // (in the background, none: renewIfOld asks once back)
+        if (!this.shown || document.hidden || !this.items[this.at].setting.code || this.tvCode || this.codeSaid === '…' || this.codeSaid && !again) {
             return;
         }
         this.codeSaid = '…';
@@ -584,6 +629,11 @@ export class SettingsView implements View {
         });
     }
 
+    /** Back in front: a link code that expired in the background is asked for again */
+    renewIfOld(): void {
+        this.askCode(false);
+    }
+
     /** Redraws the code if showing (requests a new one when the old one expired) */
     private redrawCode(): void {
         if (this.items[this.at].setting.code) {
@@ -592,11 +642,16 @@ export class SettingsView implements View {
         }
     }
 
-    /** Closes the question if this screen opened it (from a setting's button; others stay) */
+    /** Closes what this screen opened (the language picker; the question, if from a setting's button: others stay) and
+     * returns to the list */
     private closeOwn(): void {
+        if (this.languages) {
+            this.languages.close();
+        }
         if (this.place === 'choices') {
             this.question.close();
         }
+        this.place = 'list';
     }
 
     /** Shows YouTube's question; yes runs the action (and shows YouTube's reply); focus returns to the button after */

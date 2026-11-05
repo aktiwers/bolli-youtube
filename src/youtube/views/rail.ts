@@ -23,11 +23,11 @@ export interface RailItem {
     bottom?: boolean;
 }
 
-/** An entry in the logo's menu: an action returning true keeps the menu open; picture: a round image before the
- * label (the account's); entries: a submenu shown in its place on OK (Back returns) */
+/** An entry in the logo's menu: its action (the menu closes); picture: a round image before the label (the account's);
+ * entries: a submenu shown in its place on OK (Back returns) */
 export interface RailEntry {
     label: string;
-    action?: () => boolean | void;
+    action?: () => void;
     picture?: string;
     entries?: RailEntry[];
 }
@@ -54,8 +54,9 @@ export class Rail implements KeyHandler {
     /** Shows the focused section once the focus rests there */
     private restTimer = 0;
 
-    /** logoEntries: builds the logo's menu in its current state */
-    constructor(private items: RailItem[], private onSelect: (id: string) => void, private onLeave: () => void,
+    /** onSelect: a section is shown (rested: the focus rested on its entry; else Right or OK entered it); logoEntries:
+     * builds the logo's menu in its current state */
+    constructor(private items: RailItem[], private onSelect: (id: string, rested: boolean) => void, private onLeave: () => void,
                 private logoEntries: () => RailEntry[]) {
         this.el = h('div', 'by-rail');
         this.el.appendChild(h('div', 'by-rail-shade'));
@@ -142,13 +143,13 @@ export class Rail implements KeyHandler {
                 if (this.at < 0) {
                     this.openDrop();
                 } else {
-                    this.showNow();
+                    this.showNow(false);
                     this.onLeave();
                 }
                 return true;
             case KEY.RIGHT:
                 if (this.at >= 0) {
-                    this.showNow();
+                    this.showNow(false);
                     this.onLeave();
                 }
                 return true;
@@ -162,17 +163,17 @@ export class Rail implements KeyHandler {
         clearTimeout(this.restTimer);
         if (at >= 0 && at !== this.selected) {
             var self = this;
-            this.restTimer = setTimeout(function () { self.showNow(); }, REST_MS) as unknown as number;
+            this.restTimer = setTimeout(function () { self.showNow(true); }, REST_MS) as unknown as number;
         }
         this.mark();
     }
 
     /** Shows the focused item's section now (the focus rested, or entered the section) */
-    private showNow(): void {
+    private showNow(rested: boolean): void {
         clearTimeout(this.restTimer);
         if (this.at >= 0 && this.at !== this.selected) {
             this.selected = this.at;
-            this.onSelect(this.items[this.at].id);
+            this.onSelect(this.items[this.at].id, rested);
             this.mark();
         }
     }
@@ -187,13 +188,12 @@ export class Rail implements KeyHandler {
                 break;
             case KEY.OK:
                 var entry = this.entries[this.dropIndex];
-                var keep = this.dropIndex;
                 if (entry.entries) {
                     this.showEntries(entry.entries, true);
-                } else if (entry.action && entry.action()) {
-                    this.showEntries(this.inner ? this.entries : this.logoEntries(), this.inner);
-                    this.dropIndex = Math.min(keep, this.entries.length - 1);
                 } else {
+                    if (entry.action) {
+                        entry.action();
+                    }
                     this.dropIndex = -1;
                 }
                 break;

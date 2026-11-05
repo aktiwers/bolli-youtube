@@ -12,9 +12,13 @@
 .by-tv-wait { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; z-index: 45; background: #000; }
 .by-player { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; z-index: 40; background: #000; }
 .by-player video { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
-/* The ended video's thumbnail while Up next's video loads hidden; cover crops the black bars of YouTube's 4:3
-   thumbnails */
-.by-player-poster { position: absolute; left: 0; top: 0; width: 100%; height: 100%; object-fit: cover; }
+/* Over the video until it moves, then faded out (own-player.ts uncoverOnMove): a video's thumbnail (cover crops the
+   black bars of YouTube's 4:3 thumbnails; a preview's with the tile's corners; its background keeps the crop once the
+   video shows under it, else the browser draws the picture on its layer stretched), a start's frame from the storyboard */
+.by-player-poster { position: absolute; left: 0; top: 0; width: 100%; height: 100%; object-fit: cover; background-color: #000; }
+.by-player-poster--round { border-radius: 12px; }
+.by-player-frame { position: absolute; left: 0; top: 0; width: 100%; height: 100%; background-repeat: no-repeat; }
+.by-player-cover--out { opacity: 0; -webkit-transition: opacity .3s ease; }
 
 /* Toasts (ui/toast.ts), over everything (YouTube's TV app too): they fade in and out */
 .by-toast { position: absolute; z-index: 60; white-space: nowrap; visibility: hidden; opacity: 0;
@@ -61,8 +65,9 @@
 .by-settings-body { position: relative; text-align: center; }
 /* The right side shows the parts of the focused setting's kind: a picture, the steps to link a phone and the TV code
    beside YouTube's picture of a phone; empty texts take no room */
-.by-settings-picture, .by-settings-link, .by-settings-code, .by-settings-phone,
+.by-settings-picture, .by-settings-link, .by-settings-code, .by-settings-phone, .by-settings-info,
 .by-settings-summary:empty, .by-settings-note:empty { display: none; }
+.by-settings-body--info .by-settings-info { display: block; }
 .by-settings-body--picture .by-settings-picture, .by-question .by-settings-picture { display: block; }
 .by-settings-body--steps .by-settings-link, .by-settings-body--code .by-settings-link,
 .by-settings-body--code .by-settings-phone { display: inline-block; vertical-align: top; }
@@ -114,6 +119,12 @@
 .by-watch-marker { position: absolute; }
 /* The subtitles go under the watch page (player/own-player.ts) */
 .by-player--watch .vod-subtitles { display: none; }
+/* A live stream's chat (player/chat-view.ts): shown while the player is marked by-player--chat, not under the watch
+   page; its newest messages at the bottom, older ones cut at the top */
+.by-chat { position: absolute; overflow: hidden; display: none; }
+.by-player--chat .by-chat { display: block; }
+.by-player--watch .by-chat { display: none; }
+.by-chat-list { position: absolute; left: 0; right: 0; bottom: 0; }
 .by-watch-buttons { position: relative; }
 .by-watch-left, .by-watch-right { position: absolute; top: 0; white-space: nowrap; }
 .by-watch-left { left: 0; }
@@ -182,7 +193,7 @@
    video's corners beside the player (themes: by-peek-ring) */
 .by-player--peek { background: transparent; overflow: hidden; }
 .by-player--peek > * { display: none; }
-.by-player--peek > video { display: block; }
+.by-player--peek > video, .by-player--peek > .by-player-poster { display: block; }
 /* Comments over the video (player/comments-view.ts): the watch page's own content hidden meanwhile */
 .by-watch--comments .by-watch-body, .by-watch--comments .by-watch-shade, .by-watch--comments .by-watch-dim { visibility: hidden; }
 .by-comments, .by-comments-dim { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; }
@@ -223,8 +234,8 @@
 
 /* Subscriptions (views/subscriptions.ts): the channels and the pills over its rows (they slide away in the rows) */
 .by-subs { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; overflow: hidden; }
-.by-subs-rows { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; -webkit-transition: -webkit-transform .3s ease; }
-.by-subs-head { position: absolute; overflow: hidden; -webkit-transition: -webkit-transform .3s ease, opacity .3s ease; }
+.by-subs-rows { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; -webkit-transition: -webkit-transform .25s cubic-bezier(.2, .7, .3, 1); }
+.by-subs-head { position: absolute; overflow: hidden; -webkit-transition: -webkit-transform .25s cubic-bezier(.2, .7, .3, 1), opacity .3s ease; }
 .by-subs-strip { position: relative; white-space: nowrap; -webkit-transition: -webkit-transform .2s ease; }
 .by-subs-channel { position: relative; display: inline-block; vertical-align: top; }
 .by-subs-picture { display: block; }
@@ -235,8 +246,8 @@
 
 /* Library (views/library.ts): its cards over its rows (they slide away in the rows) */
 .by-library { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; overflow: hidden; }
-.by-library-rows { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; -webkit-transition: -webkit-transform .3s ease; }
-.by-library-head { position: absolute; overflow: hidden; -webkit-transition: -webkit-transform .3s ease, opacity .3s ease; }
+.by-library-rows { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; -webkit-transition: -webkit-transform .25s cubic-bezier(.2, .7, .3, 1); }
+.by-library-head { position: absolute; overflow: hidden; -webkit-transition: -webkit-transform .25s cubic-bezier(.2, .7, .3, 1), opacity .3s ease; }
 .by-library-strip { position: relative; white-space: nowrap; -webkit-transition: -webkit-transform .2s ease; }
 .by-library-card { display: inline-block; position: relative; vertical-align: top; overflow: hidden; }
 
@@ -263,5 +274,5 @@
 .by-chapters-strip { white-space: nowrap; -webkit-transition: -webkit-transform .2s ease; }
 .by-chapter { display: inline-block; vertical-align: top; white-space: normal; }
 .by-chapter-frame { position: relative; }
-.by-chapter-img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.by-chapter-img { width: 100%; height: 100%; background-repeat: no-repeat; }
 .by-chapter-time { position: absolute; right: 5px; bottom: 5px; }

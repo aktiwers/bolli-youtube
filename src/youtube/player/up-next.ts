@@ -3,10 +3,10 @@
 // when the countdown ends, or on Play now; Cancel shows the watch page's related videos
 // instead; Back closes the player. Styled by themes/<id>.css (by-upnext).
 
-import { h, setShown, setSrc, setText } from '../../core/dom.js';
+import { h, setPicture, setShown, setText } from '../../core/dom.js';
 import { KEY } from '../../core/keys.js';
 import { dearrowPicture, dearrowTitle } from '../api/dearrow.js';
-import { thumbnail, Video } from '../api/feed.js';
+import { thumbnail, thumbnailFallback, Video } from '../api/feed.js';
 import { Pills } from '../ui/pills.js';
 
 export interface UpNextActions {
@@ -42,17 +42,13 @@ export class UpNext {
         var self = this;
         row.appendChild(this.buttons.add(h('div', 'by-pill', 'Play now'), function () { self.playNow(); }));
         row.appendChild(this.buttons.add(h('div', 'by-pill', 'Cancel'), function () {
-            self.end();
+            self.hide();
             self.actions.cancel();
         }));
         this.buttons.setFocused(true);
         this.el.appendChild(row);
         setShown(this.el, false);
         parent.appendChild(this.el);
-    }
-
-    get shown(): boolean {
-        return !!this.video;
     }
 
     /** The video counted down to (null: hidden) */
@@ -63,7 +59,7 @@ export class UpNext {
     /** Starts the countdown to video (seconds), focus on Play now */
     show(video: Video, seconds: number): void {
         this.video = video;
-        setSrc(this.img, dearrowPicture(video.id, thumbnail(video.id)));
+        setPicture(this.img, dearrowPicture(video.id, thumbnail(video.id)), thumbnailFallback(video.id));
         setText(this.title, dearrowTitle(video.id, video.title));
         setText(this.channel, video.channel);
         this.buttons.focus(0);
@@ -72,13 +68,9 @@ export class UpNext {
         setShown(this.el, true);
     }
 
-    hide(): void {
-        this.end();
-    }
-
     /** Plays its video now (Play now, or Play from a phone) */
     playNow(): void {
-        this.actions.play(this.end());
+        this.actions.play(this.hide());
     }
 
     onKey(code: number): void {
@@ -91,14 +83,14 @@ export class UpNext {
                 this.buttons.press();
                 break;
             case KEY.BACK:
-                this.end();
+                this.hide();
                 this.actions.close();
                 break;
         }
     }
 
     /** Hides it and stops the countdown; returns its video */
-    private end(): Video {
+    hide(): Video {
         var video = this.video as Video;
         clearTimeout(this.timer);
         this.video = null;

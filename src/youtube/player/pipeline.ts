@@ -64,6 +64,11 @@ function fits(kinds: string[]): boolean {
     return !!current && kept && usable(current) && kinds.join() === current.kinds.join();
 }
 
+/** Whether formats of these mimes would replace the pipeline there is (another kind: tearing it down blocks ~1 s) */
+export function replacesPipeline(mimes: string[]): boolean {
+    return !!current && usable(current) && mimes.map(kindOf).join() !== current.kinds.join();
+}
+
 /** The video kind the current pipeline takes ('' none: any kind starts equally fast) */
 export function pictureKind(): string {
     return current && usable(current) ? current.kinds[0] : '';
@@ -99,6 +104,10 @@ export function openPipeline(video: HTMLVideoElement, mimes: string[]): Promise<
 
 /** A new pipeline on video, once its Media Source opens */
 function fresh(video: HTMLVideoElement, mimes: string[]): Promise<Pipeline> {
+    // A source replaced before it opened is let go with its address (else the browser keeps it)
+    if (current) {
+        URL.revokeObjectURL(current.url);
+    }
     var source = new MediaSource();
     var url = URL.createObjectURL(source);
     var pipe = current = new Pipeline(video, source, mimes.map(kindOf), url);
@@ -140,6 +149,12 @@ function fresh(video: HTMLVideoElement, mimes: string[]): Promise<Pipeline> {
 export function setLength(pipe: Pipeline, length: number): void {
     pipe.length = length;
     pipe.source.duration = length;
+}
+
+/** Sets the video's duration (s) as setLength does, now, or on the next updateend while a buffer updates */
+export function growLength(pipe: Pipeline, length: number): void {
+    pipe.length = length;
+    keepLength(pipe);
 }
 
 /** Restores the set duration if the TV changed it (not while a buffer updates: on the next updateend) */
@@ -236,6 +251,7 @@ function empty(pipe: Pipeline, sb: SourceBuffer): Promise<void> {
             sb.abort();
         }
         sb.appendWindowStart = 0;
+        sb.appendWindowEnd = Infinity;
         sb.timestampOffset = 0;
     });
 }
@@ -306,6 +322,7 @@ export function releasePipeline(video: HTMLVideoElement): void {
     emptying = playAsked = false;
     if (current) {
         current.onUpdate = null;
+        URL.revokeObjectURL(current.url);
         current = null;
     } else if (!video.getAttribute('src')) {
         return;

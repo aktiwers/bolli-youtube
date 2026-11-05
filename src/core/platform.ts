@@ -14,7 +14,8 @@ export interface AndroidShell {
     canListen(): boolean;
     /** True when the TV runs at this refresh rate, or switches to it (only
      * when Google TV is set to always match the content's rate: the switch
-     * blanks the screen a moment) */
+     * blanks the screen a moment); 0: the TV's own rate again (shells built
+     * before it: false) */
     preferFrameRate(hz: number): boolean;
     /** The display's maximum height in lines (its largest mode: 1080 on an
      * HD Chromecast) */
@@ -23,6 +24,9 @@ export interface AndroidShell {
      * this size and frame rate (0: any); AV1 only in hardware. Missing in
      * shells built before it */
     decodes?(codec: string, width: number, height: number, fps: number): boolean;
+    /** The device's maker, model and Android version. Missing in shells
+     * built before it */
+    device?(): string;
 }
 
 /** The Android app around the page, or null (webOS, a browser) */

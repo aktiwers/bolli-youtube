@@ -4,18 +4,23 @@
 // over a second), search results, tile menus, video details, SponsorBlock
 // segments. Each kind has its own Keeper with its own age and size limits.
 // Replies a caller may mutate are stored as JSON and each caller gets a
-// fresh copy; failed replies are not kept. Account replies are dropped by
-// forgetKept() when the account writes or changes.
+// fresh copy; failed replies are not kept. A full keeper drops the least
+// recently used reply; expired ones are dropped each minute (pruneKept), so
+// an idle keeper holds nothing through a long video. Account replies are
+// dropped by forgetKept() when the account writes or changes.
 
-/** Keepers holding account replies */
+/** All keepers, and those holding account replies */
+var keepers: Keeper<unknown>[] = [];
 var ofAccount: Keeper<unknown>[] = [];
 
 export class Keeper<T> {
+    /** Least recently used first */
     private kept: { key: string; at: number; value: Promise<unknown> }[] = [];
 
     /** Keeps up to count replies for ms. copies: each caller gets its own copy (else the shared value);
      * account: cleared by forgetKept() */
     constructor(private ms: number, private count: number, private copies: boolean, account: boolean) {
+        keepers.push(this as Keeper<unknown>);
         if (account) {
             ofAccount.push(this as Keeper<unknown>);
         }
@@ -31,12 +36,7 @@ export class Keeper<T> {
         return this.taken(this.entry(key, ask));
     }
 
-    /** Prefetches key's reply for a later get (nothing copied now) */
-    ahead(key: string, ask: () => Promise<T>): void {
-        this.entry(key, this.kind(ask)).then(null, function () { return undefined; });
-    }
-
-    /** As ahead, with ask() returning JSON text */
+    /** Prefetches key's reply, ask() returning JSON text, for a later get (nothing copied now) */
     aheadJson(key: string, ask: () => Promise<string>): void {
         this.entry(key, ask).then(null, function () { return undefined; });
     }
@@ -62,13 +62,14 @@ export class Keeper<T> {
 
     private entry(key: string, ask: () => Promise<unknown>): Promise<unknown> {
         var self = this;
-        var now = Date.now();
-        this.kept = this.kept.filter(function (e) { return now - e.at < self.ms; });
+        this.prune();
         var had = this.kept.filter(function (e) { return e.key === key; })[0];
         if (had) {
+            this.kept.splice(this.kept.indexOf(had), 1);
+            this.kept.push(had);
             return had.value;
         }
-        var made = { key: key, at: now, value: ask() };
+        var made = { key: key, at: Date.now(), value: ask() };
         this.kept.push(made);
         if (this.kept.length > this.count) {
             this.kept.shift();
@@ -78,6 +79,18 @@ export class Keeper<T> {
         });
         return made.value;
     }
+
+    /** Drops expired replies */
+    prune(): void {
+        var self = this;
+        var now = Date.now();
+        this.kept = this.kept.filter(function (e) { return now - e.at < self.ms; });
+    }
+}
+
+/** Drops expired replies from every keeper (called each minute: idle keepers let theirs go) */
+export function pruneKept(): void {
+    keepers.forEach(function (k) { k.prune(); });
 }
 
 /** Clears all account replies (after an account write or account change) */

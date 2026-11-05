@@ -5,8 +5,7 @@
 // Add account opens the app's sign-in. Accounts show from storage at once, then as YouTube
 // names them now (api/accounts.ts; redrawn only on change). Styled by the theme (by-who).
 
-import { h, setShown, setSrc, setText, translate } from '../../core/dom.js';
-import { KEY } from '../../core/keys.js';
+import { h, setShown, setSrc, setText } from '../../core/dom.js';
 import { View } from '../../core/view.js';
 import { keptProfiles, Profile, profiles } from '../api/accounts.js';
 import { icon } from '../ui/icons.js';
@@ -56,25 +55,12 @@ export class AccountsView implements View {
     }
 
     onKey(code: number): boolean {
-        switch (code) {
-            case KEY.LEFT:
-            case KEY.RIGHT:
-                // Left of the first goes to the rail
-                if (this.pills.move(code === KEY.LEFT ? -1 : 1)) {
-                    var p = this.list[this.pills.at];
-                    this.focusKey = p ? p.key : '';
-                    this.scroll();
-                    return true;
-                }
-                return code === KEY.RIGHT;
-            case KEY.OK:
-                this.pills.press();
-                return true;
-            case KEY.UP:
-            case KEY.DOWN:
-                return true;
-        }
-        return false;
+        var self = this;
+        return this.pills.key(code, { moved: function () {
+            var p = self.list[self.pills.at];
+            self.focusKey = p ? p.key : '';
+            self.scroll();
+        } });
     }
 
     /** Draws the row: the accounts, then Add account, focus on its account (initially the current one) */
@@ -113,8 +99,6 @@ export class AccountsView implements View {
 
     /** Scrolls the row so the focused item is in view */
     private scroll(): void {
-        var step = metrics().whoStep;
-        var inView = Math.floor((1280 - metrics().rows.pad) / step);
-        translate(this.row, -Math.max(0, this.pills.at - inView + 1) * step, 0);
+        this.pills.slide(this.row, metrics().whoStep);
     }
 }

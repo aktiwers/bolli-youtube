@@ -35,7 +35,7 @@ export function suggestions(text: string): Promise<Suggestion[]> {
 }
 
 /** Parses the service's reply: ")]}'", then [text, [[search, 0, [kinds], {person or thing}], …], …] */
-export function suggestionsOf(text: string): Suggestion[] {
+function suggestionsOf(text: string): Suggestion[] {
     var data = JSON.parse(text.replace(/^\)\]\}'\s*/, ''));
     var list: any[] = data && data[1] || [];
     return list.filter(function (s) {

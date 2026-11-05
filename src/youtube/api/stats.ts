@@ -9,7 +9,7 @@
 // them (the URLs name s.youtube.com). Nothing is requested or sent without a sign-in.
 
 import { takeTracking } from './streams.js';
-import { freshSignIn, innertube, newCpn, report, TvClient, tvClient } from './youtube.js';
+import { freshSignIn, innertubeText, newCpn, objectAt, report, TvClient, tvClient } from './youtube.js';
 
 /** The first FIRST_COUNT reports come this far apart (s), then every EVERY_S */
 var FIRST_EVERY_S = 10;
@@ -33,6 +33,8 @@ export class WatchReport {
     private parts: number[][] = [];
     private from = -1;
     private last = 0;
+    /** Moved without playing since the last report (a seek while paused): the next one is sent all the same */
+    private moved = false;
     private stopped = false;
     private askTimer = 0;
     /** The formats last seen playing (kept for a report sent after the video stopped) */
@@ -54,19 +56,24 @@ export class WatchReport {
         var id = this.id;
         this.askTimer = 0;
         freshSignIn().then(function (sign) {
-            // A video streamed by SABR with this sign-in already has its /player reply
+            // A video streamed by SABR with this sign-in already has its /player reply; else only the reply's
+            // playbackTracking is read (not its formats, captions and storyboards)
             var kept = sign && takeTracking(id, sign.token);
-            return sign ? Promise.all<any>([tvClient(), kept ? { playbackTracking: kept } : innertube('player', { videoId: id, contentCheckOk: true, racyCheckOk: true })]) : null;
+            return sign ? Promise.all<any>([tvClient(), kept || innertubeText('player', { videoId: id, contentCheckOk: true, racyCheckOk: true }).then(function (text) {
+                return objectAt(text, '"playbackTracking":');
+            })]) : null;
         }).then(function (got) {
-            var tracking = got && got[1] && got[1].playbackTracking;
+            var tracking = got && got[1];
             if (!tracking) {
                 return;
             }
             self.client = got![0].context.client;
             self.playback = statsPath(tracking.videostatsPlaybackUrl);
             self.watchtime = statsPath(tracking.videostatsWatchtimeUrl);
-            // What played before they arrived (all of it, if it was short)
-            self.send(self.stopped ? 'paused' : 'playing');
+            // What played before they arrived (all of it, if it was short), in the formats playing now; a range still
+            // open: it plays
+            self.seen();
+            self.send(self.from >= 0 ? 'playing' : 'paused');
         }, function () { return undefined; });
     }
 
@@ -84,20 +91,22 @@ export class WatchReport {
             this.from = t;
         }
         this.last = t;
-        var now = this.formats();
-        if (now.video) {
-            this.playing = now;
-        }
         if (Date.now() >= this.nextAt) {
+            this.seen();
             this.reports++;
             this.nextAt = Date.now() + (this.reports < FIRST_COUNT ? FIRST_EVERY_S : EVERY_S) * 1000;
             this.send('playing');
         }
     }
 
-    /** A seek ends the current range (the next starts where the seek lands) */
-    seek(): void {
+    /** A seek to t ends the current range (the next starts there); t is the time now, also if nothing plays from there
+     * (moved while paused, then closed: YouTube resumes there) */
+    seek(t: number): void {
         this.end();
+        if (!this.stopped && t !== this.last) {
+            this.last = t;
+            this.moved = true;
+        }
     }
 
     /** Paused at t: ends the current range and reports it */
@@ -105,6 +114,7 @@ export class WatchReport {
         if (this.stopped) {
             return;
         }
+        this.seen();
         // Ignore an earlier time (the engine restarting at 0 pauses there): the range ends where it was
         if (this.from >= 0 && t >= this.last) {
             this.last = t;
@@ -123,6 +133,14 @@ export class WatchReport {
         }
     }
 
+    /** Notes the formats playing now (the last ones are kept once none plays: the video stopped) */
+    private seen(): void {
+        var now = this.formats();
+        if (now.video) {
+            this.playing = now;
+        }
+    }
+
     /** Ends the current range at the last time */
     private end(): void {
         if (this.from >= 0 && this.last > this.from) {
@@ -133,8 +151,8 @@ export class WatchReport {
 
     /** Sends "playback" the first time, then "watchtime" with the ranges played since the last (none: nothing) */
     private send(state: string): void {
-        if (!this.watchtime) {
-            // Kept until the URLs arrive
+        if (!this.watchtime || !this.playback) {
+            // Kept until the URLs arrive (both: without "playback" the video is not in History)
             return;
         }
         if (!this.played) {
@@ -149,6 +167,11 @@ export class WatchReport {
         }
         var parts = this.parts;
         this.parts = [];
+        // Moved without playing: a range of none, so YouTube takes the time
+        if (!parts.length && this.moved) {
+            parts = [[this.last, this.last]];
+        }
+        this.moved = false;
         if (!parts.length) {
             return;
         }

@@ -11,14 +11,14 @@ import { View } from '../../core/view.js';
 import { Rows, Video } from '../api/feed.js';
 import { Pills } from '../ui/pills.js';
 import { metrics, word } from '../ui/theme.js';
-import { FeedOptions, FeedTexts, FeedView } from './videos.js';
+import { copied } from './tiles.js';
+import { FeedHost, FeedOptions, FeedTexts, FeedView } from './videos.js';
 
-export class LibraryView implements View {
+export class LibraryView extends FeedHost implements View {
     el: HTMLElement;
     private head: HTMLElement;
     private strip: HTMLElement;
     private rowsBox: HTMLElement;
-    private feed: FeedView;
     private cards = new Pills('by-library-card--focused');
     private inHead = false;
     private focused = true;
@@ -27,6 +27,7 @@ export class LibraryView implements View {
 
     /** load: YouTube's rows (a first row of pages without pictures becomes the cards); open: OK on a tile or card */
     constructor(load: () => Promise<Rows | null>, texts: FeedTexts, private open: (video: Video) => void, opts: FeedOptions) {
+        super();
         var self = this;
         this.el = h('div', 'by-library');
         this.rowsBox = h('div', 'by-library-rows');
@@ -50,10 +51,6 @@ export class LibraryView implements View {
         this.place();
     }
 
-    get settled(): boolean {
-        return this.feed.settled;
-    }
-
     show(rest?: boolean): void {
         setShown(this.el, true);
         this.feed.show(rest);
@@ -62,38 +59,6 @@ export class LibraryView implements View {
     hide(): void {
         setShown(this.el, false);
         this.feed.hide();
-    }
-
-    cover(covered: boolean): void {
-        this.feed.cover(covered);
-    }
-
-    renewIfOld(): void {
-        this.feed.renewIfOld();
-    }
-
-    prepare(): void {
-        this.feed.prepare();
-    }
-
-    putFresh(): void {
-        this.feed.putFresh();
-    }
-
-    setProgress(id: string, progress: number): void {
-        this.feed.setProgress(id, progress);
-    }
-
-    removeVideo(id: string): void {
-        this.feed.removeVideo(id);
-    }
-
-    retry(quiet?: boolean): boolean {
-        return this.feed.retry(quiet);
-    }
-
-    reload(): void {
-        this.feed.reload();
     }
 
     setFocused(focused: boolean): void {
@@ -118,27 +83,13 @@ export class LibraryView implements View {
             }
             return false;
         }
-        switch (code) {
-            case KEY.LEFT:
-            case KEY.RIGHT:
-                // Left past the first card goes to the rail
-                if (this.cards.move(code === KEY.LEFT ? -1 : 1)) {
-                    this.scroll();
-                    return true;
-                }
-                return code === KEY.RIGHT;
-            case KEY.OK:
-                this.cards.press();
-                return true;
-            case KEY.DOWN:
-                if (this.feed.hasRows) {
-                    this.go(false);
-                }
-                return true;
-            case KEY.UP:
-                return true;
-        }
-        return false;
+        var self = this;
+        return this.cards.key(code, { down: function () {
+            if (self.feed.focusable) {
+                self.go(false);
+            }
+            return true;
+        }, moved: function () { self.scroll(); } });
     }
 
     private go(inHead: boolean): void {
@@ -152,15 +103,17 @@ export class LibraryView implements View {
         var first = rows.shelves[0];
         var cards = first && !first.title && first.videos.every(function (v) { return !!v.page && !v.image; }) ? first.videos : null;
         if (!cards) {
+            // None (a guest): the old account's go
+            if (this.shownCards) {
+                this.shownCards = '';
+                this.strip.innerHTML = '';
+                this.cards.clear();
+                this.go(false);
+            }
             return rows;
         }
         this.drawCards(cards);
-        var rest: Rows = { title: rows.title, shelves: [], next: '' };
-        for (var key in rows) {
-            (rest as any)[key] = (rows as any)[key];
-        }
-        rest.shelves = rows.shelves.slice(1);
-        return rest;
+        return copied(rows, { shelves: rows.shelves.slice(1) });
     }
 
     private drawCards(list: Video[]): void {
@@ -190,9 +143,7 @@ export class LibraryView implements View {
 
     /** Scrolls the cards so the focused one is in view */
     private scroll(): void {
-        var step = metrics().libraryStep;
-        var inView = Math.floor((1280 - metrics().rows.pad) / step);
-        translate(this.strip, -Math.max(0, this.cards.at - inView + 1) * step, 0);
+        this.cards.slide(this.strip, metrics().libraryStep);
     }
 
     /** Positions the cards and rows for where the focus is */

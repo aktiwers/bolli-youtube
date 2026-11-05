@@ -13,8 +13,9 @@ var KEPT = 1000;
 var PX = 192;
 
 var avatars: { [channel: string]: string } | null = null;
-/** Delay before saving new avatars, so the screen they came with draws first */
-var SAVE_MS = 3000;
+/** Delay before saving new avatars (one save for a while of browsing: each rewrites the whole map, 5-10 ms on the TV);
+ * saved at once when the app is hidden, left or restarted */
+var SAVE_MS = 30000;
 var saveTimer = 0;
 
 function known(): { [channel: string]: string } {
@@ -50,8 +51,10 @@ export function noteAvatars(seen: { [channel: string]: string }): void {
     for (var i = 0; i < names.length - KEPT; i++) {
         delete all[names[i]];
     }
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(saveAvatars, SAVE_MS) as unknown as number;
+    // (not put off by later ones: at most SAVE_MS unsaved)
+    if (!saveTimer) {
+        saveTimer = setTimeout(saveAvatars, SAVE_MS) as unknown as number;
+    }
 }
 
 /** Saves pending avatars now, for when the app is left or reloaded before SAVE_MS */

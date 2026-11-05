@@ -1,7 +1,8 @@
 // Loading sign: a dimmed picture (the app logo
 // while a screen loads, the channel avatar while a video starts) with a
 // bright copy over it that fills in from the left as steps complete. It
-// hides at once when done (no fade). Chrome 38 has no clip-path, so the
+// hides at once (no fade), or once full (finish). A new picture keeps it
+// hidden until that picture is in. Chrome 38 has no clip-path, so the
 // fill uses two opposite slides: the copy's box slides in from the left
 // with overflow hidden while the copy inside slides back, keeping it in
 // place. Look and pace: themes/<id>.css (by-loader, --round for a circle).
@@ -17,6 +18,8 @@ export class FillLoader {
     private bright: HTMLImageElement;
     private parts: HTMLElement[];
     private fill = 0;
+    /** The hide once full (finish) */
+    private finishing = 0;
 
     /** Adds the sign to parent; round shows the picture as a circle */
     constructor(parent: HTMLElement, round: boolean) {
@@ -42,6 +45,7 @@ export class FillLoader {
 
     /** Shows the sign empty, then fills towards the first step */
     show(image: string, first: number): void {
+        clearTimeout(this.finishing);
         this.setImage(image);
         // Reset without a slide back: transitions off, force a style read, transitions on
         toggleClass(this.el, 'by-loader--snap', true);
@@ -53,10 +57,32 @@ export class FillLoader {
         this.slide(first);
     }
 
+    /** A new picture, the sign hidden until both copies have it (the browser shows the previous picture, the last
+     * video's channel's, until a new one has loaded; one that fails leaves it hidden) */
     private setImage(image: string): void {
-        if (this.dim.getAttribute('src') !== image) {
-            this.dim.src = this.bright.src = image;
+        if (this.dim.getAttribute('src') === image) {
+            return;
         }
+        var el = this.el;
+        var pictures = [this.dim, this.bright];
+        var left = pictures.length;
+        var loaded = function (img: HTMLImageElement): void {
+            img.onload = null;
+            if (--left === 0) {
+                el.style.visibility = '';
+            }
+        };
+        el.style.visibility = 'hidden';
+        pictures.forEach(function (img) {
+            img.onload = function () { loaded(img); };
+            img.src = image;
+        });
+        // (pictures already decoded are complete at once)
+        pictures.forEach(function (img) {
+            if (img.complete && img.onload) {
+                loaded(img);
+            }
+        });
     }
 
     /** Fills towards fill (0-1); never goes back */
@@ -67,8 +93,21 @@ export class FillLoader {
         }
     }
 
+    /** Done: fills up, then hides once full (ms: the fill's pace, themes); at once if full already or not seen */
+    finish(ms: number): void {
+        clearTimeout(this.finishing);
+        if (!this.shown || this.fill >= 1 || this.el.style.visibility === 'hidden') {
+            this.hide();
+            return;
+        }
+        this.step(1);
+        var self = this;
+        this.finishing = setTimeout(function () { self.hide(); }, ms) as unknown as number;
+    }
+
     /** Hides at once */
     hide(): void {
+        clearTimeout(this.finishing);
         this.el.style.display = 'none';
     }
 

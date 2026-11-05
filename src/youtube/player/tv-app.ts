@@ -6,10 +6,10 @@
 // user agent (appinfo.json, as YouTube AdFree does); with webOS's own, YouTube serves a
 // build without its icon font.
 //
-// pageHooks runs in the page before YouTube's code: ad hooks, a quiet mode (no playback, no
+// pageHooks (player/tv-page.ts) runs in the page before YouTube's code: ad hooks, a quiet mode (no playback, no
 // playback reports), and commands run by the page's own timer; events come back by
-// postMessage. Phases: off, loading, warming (started on a video, quiet, until it loads and
-// the command handler is hooked), idle (player emptied: a paused video left in it froze the
+// postMessage. Phases: off, loading, warming (started on a video, or idle not hooked yet;
+// quiet, until it loads and the command handler is hooked), idle (player emptied: a paused video left in it froze the
 // app ~1 s every 5 s, garbage collection), opening, playing (shown, keys go to YouTube).
 // Each waiting phase has a deadline. Videos open with _yttv's resolveCommand (as YouTube
 // AdFree and TizenTube do); "Who's watching?" is skipped as YouTube AdFree's auto account
@@ -22,13 +22,17 @@ import { note } from './play-log.js';
 import { PROBLEM, skipEdge, toast } from '../ui/toast.js';
 import { prefs } from '../api/prefs.js';
 import { Segment, segmentAt, segments, skippedText } from '../api/sponsorblock.js';
-import { PAGE, TvPage, tvPage } from '../api/youtube.js';
+import { PAGE, TvPage, tvPage, usable } from '../api/youtube.js';
+import { MediaState, pageHooks } from './tv-page.js';
 
 /** Warm-up video the player starts on: "Me at the zoo", YouTube's first upload (19 s) */
 var WARM_UP = 'jNQXAC9IVRw';
 /** Deadlines: page loaded and written; warmed up; video loading (else asked again); video playing (else given up) */
 var LOADING_MS = 20000;
 var WARMING_MS = 25000;
+/** After a start failed, a start only to have it ready (a film tile rested on) waits this long: if YouTube broke the
+ * hook, each one costs up to three loads of its app (~60 MB, the TV's one core busy) while browsing */
+var FAILED_REST_MS = 10 * 60 * 1000;
 var OPEN_RETRY_MS = 8000;
 var OPEN_GIVE_UP_MS = 30000;
 /** Typical cold start (OK to picture, ~13 s): the loading sign fills over it up to WAIT_MOST, then to WAIT_ASKED once
@@ -45,315 +49,6 @@ var RESTARTS_MS = 2 * 60 * 1000;
 var VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
 
 type Phase = 'off' | 'loading' | 'warming' | 'idle' | 'opening' | 'playing';
-
-/** A media event's video state, as pageHooks sends it */
-interface MediaState {
-    t: number;
-    paused: boolean;
-    route: string;
-}
-
-/** The page's half: runs in YouTube's TV page before YouTube's code (so ES5, self-contained).
- * Holds YouTube AdFree's ad hooks (its src/adblock.js and hooks/json-stringify.ts): ads are removed from every
- * reply YouTube's code reads (video ad slots, Home's banner and ad tiles), and every play is requested as ad-free
- * (YouTube otherwise delays an ad-blocked play about as long as the ad). Also: a postMessage fix, the quiet mode,
- * Back while shown, media events, the hooked command handler ("Who's watching?" answered) and the commands
- * (__bolliPage). opening: started on the wanted video (not quiet: it plays). */
-function pageHooks(opening: boolean): void {
-    var w = window as any;
-    var send = function (type: string, value?: unknown): void {
-        w.top.postMessage({ bolli: type, value: value }, '*');
-    };
-    // In a frame, YouTube's page reports its start with parent.postMessage(message, {targetOrigin}). Chrome 38 only
-    // knows postMessage(message, targetOrigin, transfer) and throws, which stops YouTube's start before its overlays
-    // (Description, Buy or rent, channel panel, settings). The options are passed as those arguments instead, on the
-    // windows YouTube's code can reach
-    var oldForm = function (win: any): void {
-        var postMessage = win.postMessage;
-        win.postMessage = function (message: unknown, target: any, transfer?: unknown): void {
-            if (target && typeof target === 'object') {
-                transfer = target.transfer;
-                // Default targetOrigin: same origin
-                target = target.targetOrigin || '/';
-            }
-            return transfer ? postMessage.call(win, message, target, transfer) : postMessage.call(win, message, target);
-        };
-    };
-    oldForm(w);
-    oldForm(w.parent);
-    // Quiet unless started for a video, and that start was not cancelled before this page loaded
-    w.__bolliQuiet = !opening || !!w.parent.__bolliNoStart;
-    w.__bolliShown = false;
-    w.__adsRemoved = 0;
-    w.__noAds = 0;
-    var parse = JSON.parse;
-    JSON.parse = function (this: any): any {
-        var r = parse.apply(this, arguments as any);
-        if (r && typeof r === 'object') {
-            // The playing video's streams, kept for inspection in DevTools
-            if (r.streamingData) {
-                w.__bolliStreams = r.streamingData;
-            }
-            if (r.adPlacements) {
-                delete r.adPlacements;
-                w.__adsRemoved++;
-            }
-            if (r.adSlots instanceof Array) {
-                delete r.adSlots;
-                w.__adsRemoved++;
-            }
-            if (r.playerAds) {
-                delete r.playerAds;
-                w.__adsRemoved++;
-            }
-            var c = r.contents;
-            if (c) {
-                var surface = c.tvBrowseRenderer && c.tvBrowseRenderer.content && c.tvBrowseRenderer.content.tvSurfaceContentRenderer;
-                var lists = [surface && surface.content && surface.content.sectionListRenderer, c.sectionListRenderer];
-                for (var i = 0; i < lists.length; i++) {
-                    var list = lists[i];
-                    if (!list || !(list.contents instanceof Array)) {
-                        continue;
-                    }
-                    var before = list.contents.length;
-                    list.contents = list.contents.filter(function (e: any) { return !e.tvMastheadRenderer && !e.adSlotRenderer; });
-                    w.__adsRemoved += before - list.contents.length;
-                    list.contents.forEach(function (e: any) {
-                        var row = e.shelfRenderer && e.shelfRenderer.content && e.shelfRenderer.content.horizontalListRenderer;
-                        if (row && row.items instanceof Array) {
-                            var n = row.items.length;
-                            row.items = row.items.filter(function (item: any) { return !item.adSlotRenderer; });
-                            w.__adsRemoved += n - row.items.length;
-                        }
-                    });
-                }
-            }
-        }
-        return r;
-    };
-    var stringify = JSON.stringify;
-    JSON.stringify = function (this: any, value: any): string {
-        var play = value && typeof value === 'object' && value.playbackContext && value.playbackContext.contentPlaybackContext;
-        if (play && typeof play === 'object') {
-            play.isInlinePlaybackNoAd = true;
-            w.__noAds++;
-        }
-        return stringify.apply(this, arguments as any);
-    };
-    var mediaPlay = HTMLMediaElement.prototype.play;
-    HTMLMediaElement.prototype.play = function (this: HTMLMediaElement): any {
-        if (w.__bolliQuiet) {
-            return undefined;
-        }
-        return mediaPlay.apply(this, arguments as any);
-    };
-    var open = XMLHttpRequest.prototype.open;
-    var xhrSend = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.open = function (this: any, method: string, url: string): void {
-        this.__bolliDrop = w.__bolliQuiet && /\/api\/stats\/|\/ptracking|\/youtubei\/v1\/log_event/.test(String(url));
-        return open.apply(this, arguments as any);
-    };
-    XMLHttpRequest.prototype.send = function (this: any): void {
-        if (!this.__bolliDrop) {
-            return xhrSend.apply(this, arguments as any);
-        }
-    };
-    // Back while shown goes to the app (ahead of YouTube's keys), unless one of YouTube's panels has the focus (its
-    // overlay stage: Description, Buy or rent, settings): then YouTube closes the panel
-    w.addEventListener('keydown', function (e: KeyboardEvent) {
-        if (e.keyCode !== 461 || !w.__bolliShown) {
-            return;
-        }
-        var stage = document.querySelector('yt-unified-overlay-stage');
-        if (!(stage && stage.contains(document.activeElement))) {
-            e.preventDefault();
-            e.stopPropagation();
-            send('back');
-        }
-    }, true);
-    // Media events (they do not bubble: caught in the capture phase)
-    ['loadstart', 'loadedmetadata', 'playing', 'timeupdate'].forEach(function (type) {
-        document.addEventListener(type, function (e: Event) {
-            var v = e.target as HTMLVideoElement;
-            if (v && v.tagName === 'VIDEO') {
-                send(type, { t: v.currentTime, paused: v.paused, route: location.hash });
-            }
-        }, true);
-    });
-    var resolve: ((command: unknown) => unknown) | null = null;
-    var tries = 0;
-    var hook = function (): void {
-        var yt = w._yttv;
-        for (var key in yt || {}) {
-            var target = yt[key];
-            if (target && typeof target === 'function' && target.instance && typeof target.instance.resolveCommand === 'function') {
-                var own = target.instance.resolveCommand.bind(target.instance);
-                resolve = own;
-                target.instance.resolveCommand = function (command: any, extra: any): any {
-                    // Skip "Who's watching?": keep the current account (a guest too; the app has its own picker)
-                    if (command && command.startAccountSelectorCommand) {
-                        return own({
-                            onIdentityChanged: {
-                                identityActionContext: {
-                                    nextEndpoint: command.startAccountSelectorCommand.nextEndpoint,
-                                    eventTrigger: 'ACCOUNT_EVENT_TRIGGER_WHOS_WATCHING',
-                                    reloadRequired: undefined
-                                },
-                                isSameIdentity: true
-                            },
-                            commandMetadata: { webCommandMetadata: { clientAction: true } }
-                        });
-                    }
-                    return own(command, extra);
-                };
-                send('hooked');
-                return;
-            }
-        }
-        // YouTube creates it during its start; give up after a minute
-        if (++tries < 1200) {
-            setTimeout(hook, 50);
-        }
-    };
-    hook();
-    // YouTube AdFree's fixes for this engine (its yt-fixes.css): the watch page's shade over the
-    // video (missing otherwise), Shorts' tiles and picture
-    var fixes = document.createElement('style');
-    fixes.textContent = '.ytLrWatchDefaultShadow{background-image:linear-gradient(to bottom,rgba(0,0,0,0) 0,rgba(0,0,0,.8) 90%)!important;' +
-        'background-color:rgba(0,0,0,.3)!important;display:block!important;height:100%!important;pointer-events:none!important;' +
-        'position:absolute!important;width:100%!important}' +
-        '.ytLrWatchDefault2025Shadow{background-color:rgba(11,11,11,.5)!important}' +
-        '.ytLrTileHeaderRendererShorts{z-index:-1}' +
-        '.WEB_PAGE_TYPE_SHORTS video{border:1px solid #000;' +
-        'border-image:url(data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7) 30%}';
-    (document.head || document.documentElement).appendChild(fixes);
-    // <body>'s classes, fixed each time YouTube resets them: its reduced look removed, as YouTube AdFree
-    // does (app-quality-root: text on opaque black boxes, over the video too), and yt-icon-font-loaded
-    // added. YouTube draws its icons (a font) once <body> has that class, set as the font loads, but in
-    // this written page the font's load never starts: it is started here
-    var iconsLoaded = false;
-    var bodyClasses = function (): void {
-        var body = document.body;
-        var cls = body.className.replace(/(^| )app-quality-root(?= |$)/g, '');
-        if (iconsLoaded && !/(^| )yt-icon-font-loaded( |$)/.test(cls)) {
-            cls += ' yt-icon-font-loaded';
-        }
-        if (cls !== body.className) {
-            body.className = cls;
-        }
-    };
-    var watchBody = function (): void {
-        if (!document.body) {
-            setTimeout(watchBody, 50);
-            return;
-        }
-        bodyClasses();
-        new MutationObserver(bodyClasses).observe(document.body, { attributes: true, attributeFilter: ['class'] });
-    };
-    watchBody();
-    var fontTries = 0;
-    var iconFont = function (): void {
-        var faces: Promise<unknown>[] = [];
-        if (document.body && (document as any).fonts) {
-            (document as any).fonts.forEach(function (f: any) {
-                if (f.family === 'YouTube') {
-                    faces.push(f.load());
-                }
-            });
-        }
-        if (!faces.length) {
-            if (++fontTries < 300) {
-                setTimeout(iconFont, 200);
-            }
-            return;
-        }
-        Promise.all(faces).then(function () {
-            iconsLoaded = true;
-            bodyClasses();
-        }, function () { return undefined; });
-    };
-    iconFont();
-    var video = function (): HTMLVideoElement | null {
-        return document.querySelector('video');
-    };
-    // YouTube's player service and its blank watch descriptor, for preload (found by shape: the
-    // names are minified)
-    var service: any = null;
-    var blank: any = null;
-    var findPreload = function (): boolean {
-        var yt = w._yttv || {};
-        for (var key in yt) {
-            if (service && blank) {
-                break;
-            }
-            var o = yt[key];
-            if (!service && o && typeof o.get === 'function' && o.mappings) {
-                for (var m in o.mappings) {
-                    // Only an already created one (requested before its module loads, a stub would be kept)
-                    var entry = o.mappings[m] && typeof o.mappings[m] === 'object' ? o.mappings[m].PlayerService : null;
-                    if (entry && entry.type === 'mapping' && entry.value && typeof entry.value.preloadVideo === 'function') {
-                        service = entry.value;
-                    }
-                }
-            }
-            // The cheap tests first: isFrozen lists an object's properties
-            if (!blank && o && typeof o === 'object' && 'watchEndpoint' in o && 'reelWatchEndpoint' in o &&
-                'prefetchWatchCommand' in o && 'startTime' in o && Object.isFrozen(o)) {
-                blank = o;
-            }
-        }
-        return !!(service && blank);
-    };
-    w.__bolliPage = {
-        open: function (want: { id: string; t: number }): void {
-            w.__bolliQuiet = false;
-            if (resolve) {
-                resolve({ watchEndpoint: want.t ? { videoId: want.id, startTimeSeconds: Math.floor(want.t) } : { videoId: want.id } });
-            }
-        },
-        empty: function (): void {
-            // Quiet again (an open queued before this one turned it off)
-            w.__bolliQuiet = true;
-            var v = video();
-            if (v) {
-                v.pause();
-                v.removeAttribute('src');
-                v.load();
-            }
-        },
-        seek: function (t: number): void {
-            var v = video();
-            if (v) {
-                v.currentTime = t;
-            }
-        },
-        pause: function (): void {
-            var v = video();
-            if (v) {
-                v.pause();
-            }
-        },
-
-        preload: function (id: string): void {
-            if (!findPreload()) {
-                return;
-            }
-            var wanted: any = {};
-            for (var f in blank) {
-                wanted[f] = blank[f];
-            }
-            wanted.watchEndpoint = { videoId: id };
-            try {
-                var done = service.preloadVideo(wanted, undefined, 'playback_preview_preload');
-                if (done && done.then) {
-                    done.then(null, function () { return undefined; });
-                }
-            } catch (e) {
-                // Failed: the video opens without preload
-            }
-        }
-    };
-}
 
 interface Want {
     id: string;
@@ -401,8 +96,11 @@ export class TvApp {
      * started for, while still wanted ('' otherwise) */
     private startedOn = WARM_UP;
     private startedFor = '';
-    /** Times of recent restarts */
+    /** Times of recent restarts, and when a start last failed */
     private restarts: number[] = [];
+    private failedAt = 0;
+    /** Warming only to wait for the command handler (it was idle): stopped, it is idle again */
+    private hookWait = false;
     /** Start counter (a late answer for an earlier start, shut down since, is ignored) */
     private starts = 0;
 
@@ -437,7 +135,7 @@ export class TvApp {
         });
     }
 
-    /** A video is wanted (keys wait meanwhile; Back cancels it) */
+    /** A video is wanted (keys wait while it starts, Back cancels it; shown, they go to its page) */
     get busy(): boolean {
         return !!this.want;
     }
@@ -457,9 +155,10 @@ export class TvApp {
         return this.phase === 'idle' || this.phase === 'opening' || this.phase === 'playing';
     }
 
-    /** Starts YouTube's TV app (once; again after a failure) */
-    start(): void {
-        if (this.phase !== 'off') {
+    /** Starts YouTube's TV app (once; again after a failure; ahead: only to have it ready, not within FAILED_REST_MS of
+     * a failure) */
+    start(ahead?: boolean): void {
+        if (this.phase !== 'off' || ahead && Date.now() - this.failedAt < FAILED_REST_MS) {
             return;
         }
         this.phase = 'loading';
@@ -489,25 +188,31 @@ export class TvApp {
         this.want = { id: id, t: t || 0, back: back, film: film };
         note('YouTube\'s player', id + ' (' + this.phase + ')');
         this.resume = null;
+        this.track(id, film);
         this.at = t || 0;
         this.askedAt = Date.now();
-        this.segments = [];
-        this.skipped = {};
         (window as any).__bolli.steps = {};
-        var self = this;
-        segments(id, prefs().skip).then(function (list) {
-            if (self.want && self.want.id === id) {
-                self.segments = list;
-            }
-        });
-        if (this.phase === 'idle') {
+        if (this.phase === 'idle' && this.hooked) {
             this.open();
+        } else if (this.phase === 'idle') {
+            // Ready without the command handler (it started on a video, shown as it loaded): an open would go unheard;
+            // it opens once the handler is hooked (warmedUp), else the app starts afresh
+            this.phase = 'warming';
+            this.hookWait = true;
+            this.deadline(WARMING_MS, 'warming');
+            this.view();
         } else {
             this.start();
             // Already starting: show the loading sign now
             this.view();
         }
         return true;
+    }
+
+    /** A remote key for YouTube's player while it shows (one that came through the app: Android's remote, a phone's
+     * d-pad; webOS's remote goes to its frame itself) */
+    key(code: number): void {
+        this.call('key', code);
     }
 
     /** Preloads a video for a faster start (one at a time; while the player starts, once it is ready) */
@@ -530,7 +235,17 @@ export class TvApp {
         clearTimeout(this.timer);
         this.phase = 'off';
         this.preloaded = '';
-        this.el.src = 'about:blank';
+        this.release();
+    }
+
+    /** Lets its page go: the frame is taken out with no address (restart adds it again, as on the first start). Not
+     * sent to about:blank: a frame loading while the app is in the background makes the TV report the app as shown
+     * again, and it would then miss its own return */
+    private release(): void {
+        if (this.el.parentNode) {
+            this.el.parentNode.removeChild(this.el);
+        }
+        this.el.removeAttribute('src');
     }
 
     /** Stops the video (player emptied) or the wait for it; the keys return to the app */
@@ -540,6 +255,9 @@ export class TvApp {
         this.resume = null;
         // Started on it and still starting: quiet and pause it now, else it plays on unseen (it is emptied once warm,
         // i.e. on loadedmetadata)
+        if (this.phase === 'warming' && this.hookWait) {
+            this.idle();
+        }
         if (this.phase === 'warming' && this.startedFor) {
             this.startedFor = '';
             this.setFlag('__bolliQuiet', true);
@@ -596,19 +314,25 @@ export class TvApp {
         }
     }
 
-    /** YouTube's app moved on to another video: reset the position and fetch its SponsorBlock segments */
+    /** YouTube's app moved on to another video: follow that one */
     private follow(id: string): void {
-        var want = this.want as Want;
+        (this.want as Want).id = id;
+        this.track(id);
+    }
+
+    /** Follows video id from its start, with its SponsorBlock segments (a film has none) */
+    private track(id: string, film?: boolean): void {
         var self = this;
-        want.id = id;
         this.at = 0;
         this.segments = [];
         this.skipped = {};
-        segments(id, prefs().skip).then(function (list) {
-            if (self.want && self.want.id === id) {
-                self.segments = list;
-            }
-        });
+        if (!film) {
+            segments(id, prefs().skip).then(function (list) {
+                if (self.want && self.want.id === id) {
+                    self.segments = list;
+                }
+            });
+        }
     }
 
     /** The wanted video's media events: times its start, keeps its position, skips SponsorBlock segments */
@@ -640,19 +364,13 @@ export class TvApp {
 
     /** The frame loaded robots.txt (to write YouTube's page into), or YouTube's page loaded in it */
     private loaded(): void {
-        var w = this.el.contentWindow as any;
         var page = this.tvWindow();
         if (this.phase === 'loading') {
-            var usable = false;
-            try {
-                usable = w.location.pathname === '/robots.txt' && !!w.localStorage;
-            } catch (e) {
-                // Not youtube.com's page (an error page): not usable
-            }
-            if (usable) {
+            // Not usable (not youtube.com's robots.txt: an error page): the loading deadline starts it afresh
+            var w = usable(this.el);
+            if (w) {
                 this.write(w);
             }
-            // Not usable: the loading deadline starts it afresh
         } else if (this.phase !== 'off' && !(page && page.__bolliPage)) {
             // YouTube's page without the hooks (it reloaded itself): restart
             this.restart();
@@ -734,6 +452,7 @@ export class TvApp {
     private idle(): void {
         clearTimeout(this.timer);
         this.phase = 'idle';
+        this.hookWait = false;
         this.setFlag('__bolliQuiet', true);
         this.call('empty');
         this.view();
@@ -806,10 +525,11 @@ export class TvApp {
     private fail(text: string): void {
         clearTimeout(this.timer);
         this.phase = 'off';
+        this.failedAt = Date.now();
         // Release its page (else YouTube's app runs on hidden without the hooks, and could play and report unseen)
         this.preloaded = '';
         this.restarts = [];
-        this.el.src = 'about:blank';
+        this.release();
         if (this.want) {
             toast(text, undefined, PROBLEM);
             this.stop();
@@ -917,16 +637,23 @@ export class TvApp {
     /** Sent to the background, a video stops; back in front, it resumes where it was */
     private visibility(): void {
         if (document.hidden) {
-            // Opening or waiting to open: stopped too, else it plays unseen; it resumes from its start time
+            // Opening or waiting to open: stopped too, else it plays unseen; it resumes from its start time (as a film
+            // if it is one)
             if (this.want) {
-                var resume = { id: this.want.id, t: this.phase === 'playing' ? this.at : this.want.t, back: this.want.back };
+                var resume = this.want;
+                if (this.phase === 'playing') {
+                    resume.t = this.at;
+                }
                 this.stop();
                 this.resume = resume;
+            } else {
+                // Only warm (a film tile rested on): its ~60 MB go; a film's tile warms it again
+                this.shutDown();
             }
         } else if (this.resume) {
             var r = this.resume;
             this.resume = null;
-            this.play(r.id, r.back, r.t);
+            this.play(r.id, r.back, r.t, r.film);
         }
     }
 
@@ -934,12 +661,9 @@ export class TvApp {
 
     /** A command of the page's (pageHooks __bolliPage), run by its own timer */
     private call(name: string, arg?: unknown): void {
-        this.inPage('var p = window.__bolliPage; if (p) { p.' + name + '(' + (arg === undefined ? '' : JSON.stringify(arg)) + '); }');
-    }
-
-    /** Code run by YouTube's page itself (a timer of its own), so YouTube's code there resolves its addresses against youtube.com */
-    private inPage(code: string): void {
-        this.inWindow(this.tvWindow(), code);
+        // Run by YouTube's page itself (a timer of its own), so YouTube's code there resolves its addresses against
+        // youtube.com
+        this.inWindow(this.tvWindow(), 'var p = window.__bolliPage; if (p) { p.' + name + '(' + (arg === undefined ? '' : JSON.stringify(arg)) + '); }');
     }
 
     /** Code run by a youtube.com page's own timer */

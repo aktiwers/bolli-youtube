@@ -13,37 +13,25 @@
 // hole). A seek outside the buffered data drops requests in flight and completes once both
 // tracks cover the target. A resume start lands on the video keyframe there (decoding up to a
 // later point runs at only ~2.3x play speed); audio is requested from that keyframe.
+// A request that gets no data for a while, or no answer, goes at once to another of the
+// video's networks while there is one (networks.ts).
 // Fails as 'expired' (403, or the server wants a fresh /player reply), 'protection' (device
 // attestation wanted), 'sabr' (server error or empty answers), 'network', 'media'.
 
 import { base64Bytes, BufferedRange, FormatId, SabrAnswer, SabrReader, sabrRequest, SabrSegment } from '../api/sabr.js';
 import { Format, Sabr } from '../api/streams.js';
 import { youtubePage } from '../api/youtube.js';
-import { bufferedEnd, Engine } from './dash.js';
+import { AHEAD_MB, BEHIND_MB, BEHIND_S, bufferedEnd, Engine, hopHole, jumpTarget, KEYFRAME_IN, MB, RETRIES, seekNudged, STILL_AHEAD, TICK_MS, TIMEOUT_MS } from './engine.js';
+import { networkFailed, onNetwork, stallWatch } from './networks.js';
 import { keepPipeline, openPipeline, Pipeline, setLength, spoilingFail } from './pipeline.js';
 
-/** Request more once less than this is buffered ahead of the playhead (s), unless more than AHEAD_MB of the track is */
+/** Request more once less than this is buffered ahead of the playhead (s), unless more than AHEAD_MB of the track is;
+ * trimmed to half once BEHIND_S or BEHIND_MB lie behind it */
 var READAHEAD_S = 10;
-var AHEAD_MB = 32;
-/** Kept behind the playhead before trimming to half (s, and MB per track) */
-var BEHIND_S = 20;
-var BEHIND_MB = 16;
-var MB = 1024 * 1024;
-var TICK_MS = 500;
-var TIMEOUT_MS = 20000;
-var RETRIES = 3;
 /** Answers in a row that bring a track nothing new before it gives up */
 var EMPTY_ANSWERS = 5;
-/** A failed request is retried while at least this much is buffered ahead (s) */
-var STILL_AHEAD = 3;
-/** Offset after a keyframe to land on (s): inside the buffer, not just before its first frame */
-var KEYFRAME_IN = 0.05;
 /** A jump snaps to a segment start within this distance of its target (s) */
 var SNAP_S = 3;
-/** A gap this short just ahead of the playhead is skipped (s); a seek not done after SEEK_STUCK_MS is nudged */
-var HOLE_S = 1;
-var SEEK_STUCK_MS = 5000;
-var NUDGE_S = 0.1;
 /** Track types for a request (enabledTrackTypesBitfield) */
 var SOUND = 1;
 var PICTURE = 2;
@@ -169,6 +157,8 @@ export class SabrEngine implements Engine {
     private listeners: { [event: string]: () => void } = {};
     private pipe: Pipeline | null = null;
     private startAt = 0;
+    /** At most this far ahead (s; 0: READAHEAD_S): hold */
+    private most = 0;
     private url: string;
     private config: Uint8Array;
     private cookie: Uint8Array | null = null;
@@ -261,17 +251,13 @@ export class SabrEngine implements Engine {
 
     /** Jumps to about `to` (s) from `from`: to a nearby known segment start, else to `to` itself */
     jump(to: number, from: number): void {
-        if (!this.tracks.length) {
-            return;
+        if (this.tracks.length) {
+            this.seek(jumpTarget(this.tracks[0].pieces.map(function (p) { return p.startMs / 1000; }), to, from, SNAP_S));
         }
-        var best = -1;
-        this.tracks[0].pieces.forEach(function (p) {
-            var s = p.startMs / 1000;
-            if ((to > from ? s > from + 1 : s < from - 1) && Math.abs(s - to) < SNAP_S && (best < 0 || Math.abs(s - to) < Math.abs(best - to))) {
-                best = s;
-            }
-        });
-        this.seek(best < 0 ? to : best + KEYFRAME_IN);
+    }
+
+    seekTarget(): number {
+        return this.pending;
     }
 
     stop(): void {
@@ -311,11 +297,16 @@ export class SabrEngine implements Engine {
         var now = Date.now();
         this.tracks.forEach(function (track) {
             var ahead = track.ahead(t);
-            if (!track.doneFrom(t) && ahead.end - t < READAHEAD_S && ahead.bytes < AHEAD_MB * MB && !track.xhr && now >= track.waitUntil &&
+            if (!track.doneFrom(t) && ahead.end - t < (self.most || READAHEAD_S) && ahead.bytes < AHEAD_MB * MB && !track.xhr && now >= track.waitUntil &&
                 !(self.snap && track.kind === SOUND)) {
                 self.ask(track);
             }
         });
+    }
+
+    hold(s: number): void {
+        this.most = s;
+        this.pump();
     }
 
     private ask(track: Track): void {
@@ -348,7 +339,7 @@ export class SabrEngine implements Engine {
             contexts: contexts,
             unsent: unsent
         });
-        var url = this.url + '&rn=' + (++this.rn);
+        var url = onNetwork(this.url) + '&rn=' + (++this.rn);
         // The video track's first answer after a start or seek is read as it arrives, until its first new segment is complete
         var streaming = track.kind === PICTURE && track.at(this.playhead) < 0;
         var enough = false;
@@ -431,11 +422,26 @@ export class SabrEngine implements Engine {
                         done();
                     }
                 };
-                xhr.onerror = xhr.ontimeout = function () {
+                xhr.ontimeout = function () {
                     if (track.xhr === xhr) {
                         failed();
                     }
                 };
+                // No answer or no data: at once from the next network if one is left, else retried as any failure
+                var lost = function (stalled: boolean): void {
+                    if (track.xhr !== xhr) {
+                        return;
+                    }
+                    if (gen === track.gen && networkFailed(url, stalled)) {
+                        track.xhr = null;
+                    } else {
+                        failed();
+                    }
+                };
+                xhr.onerror = function () {
+                    lost(false);
+                };
+                stallWatch(xhr, function () { lost(true); });
                 xhr.send(body.buffer);
             } catch (e) {
                 failed();
@@ -460,7 +466,9 @@ export class SabrEngine implements Engine {
             this.onFail('sabr ' + a.error);
             return;
         }
+        // New streams wanted: the ladder fetches them as for expired URLs, its /player request with the server's token
         if (a.reload) {
+            this.sabr.reloadToken = a.reloadToken;
             this.onFail('expired');
             return;
         }
@@ -577,31 +585,14 @@ export class SabrEngine implements Engine {
             }
         }
         this.pending = -1;
-        v.currentTime = t;
         clearTimeout(this.stuckTimer);
-        this.stuckTimer = setTimeout(function () {
-            if (v.seeking) {
-                v.currentTime = v.currentTime + NUDGE_S;
-            }
-        }, SEEK_STUCK_MS) as unknown as number;
+        this.stuckTimer = seekNudged(v, t);
     }
 
     /** Moves the playhead over a small gap just before buffered data (playback stalls there) */
     private hop(): void {
-        var v = this.video;
-        if (this.pending >= 0 || v.readyState > 2 || !this.tracks.length) {
-            return;
-        }
-        var t = v.currentTime;
-        var b = v.buffered;
-        for (var i = 0; i < b.length; i++) {
-            if (b.start(i) <= t && t < b.end(i)) {
-                return;
-            }
-            if (b.start(i) > t && b.start(i) - t < HOLE_S) {
-                v.currentTime = b.start(i) + 0.01;
-                return;
-            }
+        if (this.pending < 0 && this.video.readyState <= 2 && this.tracks.length) {
+            hopHole(this.video);
         }
     }
 

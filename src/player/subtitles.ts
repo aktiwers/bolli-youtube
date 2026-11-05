@@ -273,6 +273,12 @@ function joinTexts(active: Cue[]): string | null {
     return parts.join('\n');
 }
 
+/** The piece t falls in (starts[0] <= t), from the last one looked up: normal playback has moved on by at most one
+ * piece, tried before searching (YouTube's captions) */
+export function pieceAt(starts: number[], last: number, t: number): number {
+    return inPiece(starts, last, t) ? last : inPiece(starts, last + 1, t) ? last + 1 : findPiece(starts, t);
+}
+
 /** Whether t falls in piece k */
 function inPiece(starts: number[], k: number, t: number): boolean {
     return k < starts.length && starts[k] <= t && (k + 1 === starts.length || t < starts[k + 1]);

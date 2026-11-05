@@ -16,10 +16,11 @@ import { prefs, setPref } from './api/prefs.js';
 import { offerComments, withdrawComments } from './api/handoff.js';
 import { Lounge } from './api/lounge.js';
 import { newCpn } from './api/youtube.js';
-import { ListQueue, OwnPlayer, Playing } from './player/own-player.js';
+import { ListQueue } from './player/list-queue.js';
+import { OwnPlayer, Playing } from './player/own-player.js';
 
 /** LG's DIAL server endpoint for the YouTube app's additional data (also given at launch) */
-var DIAL_DATA = 'http://localhost:18181/apps/YouTube/dial_data';
+var DIAL_URL = 'http://localhost:18181/apps/YouTube/dial_data';
 var KEYS: { [name: string]: number } = { UP: KEY.UP, DOWN: KEY.DOWN, LEFT: KEY.LEFT, RIGHT: KEY.RIGHT, ENTER: KEY.OK, BACK: KEY.BACK };
 /** When the phone's time differs from the player's by more than this, the player seeks there */
 var JUMP_S = 3;
@@ -30,9 +31,14 @@ export class Cast {
     private lounge = new Lounge();
     /** The comments offered to the phone (YouTube's hand-off): the offer's id once given (null: none) */
     private offer: Promise<string> | null = null;
-    private dialData = DIAL_DATA;
+    /** Where the lounge's DIAL data is posted (LG's endpoint, else the one given at launch) */
+    private dialUrl = DIAL_URL;
     /** A phone is in the lounge (state is sent only then) */
     private remotes = false;
+    /** The phones in the lounge, by id (remotes: one at least, or one that cast), and whether one cast that the list
+     * does not name (then a known one leaving leaves remotes on) */
+    private phones: { [id: string]: boolean } = {};
+    private castUnlisted = false;
     /** The phone's list (the player's queue while it plays from it), and the extra fields YouTube sent with it */
     private queue: ListQueue | null = null;
     private extra = extraOf({});
@@ -92,7 +98,7 @@ export class Cast {
         var q = query(target.slice(target.indexOf('?') + 1));
         // Accept only a local DIAL address: the lounge token is posted there
         if (q.additionalDataUrl && /^http:\/\/(localhost|127\.0\.0\.1)[:\/]/.test(q.additionalDataUrl)) {
-            this.dialData = q.additionalDataUrl.replace(/\?$/, '');
+            this.dialUrl = q.additionalDataUrl.replace(/\?$/, '');
         }
         if (q.pairingCode) {
             this.lounge.pair(q.pairingCode);
@@ -103,9 +109,10 @@ export class Cast {
     /** Posts the screen's id and token to LG's DIAL server, which includes them in its answer to phones */
     private announce(): void {
         var body = this.lounge.dialData;
-        if (body) {
+        // (Android has no DIAL server)
+        if (body && !android()) {
             var xhr = new XMLHttpRequest();
-            xhr.open('POST', this.dialData);
+            xhr.open('POST', this.dialUrl);
             xhr.setRequestHeader('Content-Type', 'text/plain');
             xhr.send(body);
         }
@@ -121,10 +128,25 @@ export class Cast {
         var now = p.now;
         switch (name) {
             case 'loungeStatus':
-                this.remotes = /REMOTE_CONTROL/.test(f.devices || '');
+                // YouTube's list of who is in the lounge (not a list: as before, by its text)
+                var known = phonesOf(f.devices);
+                this.phones = known || {};
+                this.castUnlisted = false;
+                this.remotes = known ? Object.keys(known).length > 0 : /REMOTE_CONTROL/.test(f.devices || '');
                 this.tellAll();
                 break;
+            case 'remoteDisconnected':
+                // The last one gone: nothing more is told (it was, for the rest of the session); one not known changes
+                // nothing
+                if (this.phones[f.id]) {
+                    delete this.phones[f.id];
+                    this.remotes = Object.keys(this.phones).length > 0 || this.castUnlisted;
+                }
+                break;
             case 'remoteConnected':
+                if (f.id) {
+                    this.phones[f.id] = true;
+                }
                 this.remotes = true;
                 toast((f.name || 'A phone') + ' is connected to Bolli YouTube', 'check');
                 this.tellAll();
@@ -134,6 +156,7 @@ export class Cast {
                 break;
             case 'setPlaylist':
             case 'setVideo':
+                this.castUnlisted = this.castUnlisted || !Object.keys(this.phones).length;
                 this.remotes = true;
                 this.setPlaylist(f);
                 break;
@@ -449,3 +472,18 @@ function ids(text: string | undefined): string[] {
     return (text || '').split(',').filter(function (id) { return /^[\w-]{11}$/.test(id); });
 }
 
+/** The phones (remote controls) in a lounge's device list (JSON), by id */
+function phonesOf(devices: string | undefined): { [id: string]: boolean } | null {
+    var phones: { [id: string]: boolean } = {};
+    try {
+        (JSON.parse(devices || '[]') as { type?: string; id?: string }[]).forEach(function (d) {
+            if (d && d.type === 'REMOTE_CONTROL' && d.id) {
+                phones[d.id] = true;
+            }
+        });
+    } catch (e) {
+        // Not a list
+        return null;
+    }
+    return phones;
+}

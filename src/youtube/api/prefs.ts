@@ -5,6 +5,8 @@
 // history: report watched videos to YouTube (api/stats.ts).
 // captions: subtitle language turned on by default ('' none).
 // startSign: show the loading sign on start.
+// startPicture: what shows under it until the video moves: 'tile' (its tile's picture), 'frame' (its frame where it
+// starts, from the storyboard) or 'none'.
 
 import { load, save } from '../../core/store.js';
 
@@ -27,12 +29,17 @@ export interface Prefs {
     /** Languages added under Settings › Subtitles › More languages (Danish and English are always listed) */
     captionLanguages: string[];
     startSign: boolean;
+    startPicture: string;
     /** Fetch streams by SABR first (api/streams.ts playableStreams) */
     sabr: boolean;
     /** Tile thumbnail size: 'standard' (320 px wide), 'sharp' (480) or 'sharpest' (640) */
     pictures: string;
     /** YouTube's most replayed graph over the player's progress bar (api/replays.ts) */
     replays: boolean;
+    /** Dislike counts from Return YouTube Dislike on the watch page (api/dislikes.ts) */
+    dislikes: boolean;
+    /** A live stream's chat beside the picture (player/chat-view.ts) */
+    liveChat: boolean;
     /** DeArrow (api/dearrow.ts): '' off, 'classic' or 'casual' */
     dearrow: string;
     /** DeArrow's options: 'thumbnails', 'frames' (a random frame where none was chosen), 'tidy' (titles tidied) */
@@ -43,7 +50,7 @@ export interface Prefs {
 export var HIGHEST = 4320;
 
 var KEY = 'youtube.prefs';
-var DEFAULTS: Prefs = { skip: ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'music_offtopic'], theme: 'youtube', startPage: 'home', quality: 0, preload: true, history: true, autoplay: true, autoplayWait: 10, stableVolume: false, previews: 'sound', captions: '', captionStyle: 'words', captionLanguages: [], startSign: true, sabr: false, pictures: 'sharpest', replays: true, dearrow: '',
+var DEFAULTS: Prefs = { skip: ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'music_offtopic'], theme: 'youtube', startPage: 'home', quality: 0, preload: true, history: true, autoplay: true, autoplayWait: 10, stableVolume: false, previews: 'sound', captions: '', captionStyle: 'words', captionLanguages: [], startSign: true, startPicture: 'tile', sabr: false, pictures: 'sharpest', replays: true, dislikes: true, liveChat: true, dearrow: '',
     dearrowOptions: ['thumbnails', 'frames', 'tidy'] };
 
 /** Read once (they are read on every key) and updated by setPref. Only changed settings are stored, so a new

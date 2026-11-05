@@ -62,10 +62,19 @@ export function icon(name: string, className: string): HTMLElement {
     return el;
 }
 
+/** Icons parsed once, by name: each box gets a copy (cloning took half the time of parsing the markup again) */
+var parsed: { [name: string]: Node } = {};
+
 /** Changes the box's icon (rewritten only if different) */
 export function setIcon(el: HTMLElement, name: string): void {
     if (el.getAttribute('data-icon') !== name) {
         el.setAttribute('data-icon', name);
-        el.innerHTML = '<svg viewBox="0 0 24 24" width="100%" height="100%"><path fill="currentColor" d="' + (ICONS[name] || '') + '"/></svg>';
+        if (!parsed[name]) {
+            var box = document.createElement('div');
+            box.innerHTML = '<svg viewBox="0 0 24 24" width="100%" height="100%"><path fill="currentColor" d="' + (ICONS[name] || '') + '"/></svg>';
+            parsed[name] = box.firstChild as Node;
+        }
+        el.textContent = '';
+        el.appendChild(parsed[name].cloneNode(true));
     }
 }

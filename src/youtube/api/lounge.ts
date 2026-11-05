@@ -27,6 +27,8 @@ var RETRIES = 3;
 var RETRY_MS = 5000;
 /** A back channel that ends sooner than this is reopened only after a wait */
 var BRIEF_MS = 1000;
+/** A channel YouTube refuses this soon after it was bound is not bound again at once (it waits as any failure) */
+var REBIND_MS = 30000;
 var RETRY_MAX_MS = 5 * 60000;
 
 /** The screen's stored state */
@@ -70,6 +72,8 @@ export class Lounge {
     private watchdog = 0;
     private failures = 0;
     private retryTimer = 0;
+    /** When the channel was last bound */
+    private boundAt = 0;
     private flushTimer = 0;
     /** Incremented per channel, so late answers for an old one are dropped */
     private gen = 0;
@@ -93,34 +97,28 @@ export class Lounge {
             loungeTokenRefreshIntervalMs: String(TOKEN_REFRESH_MS) }) : '';
     }
 
-    /** Registers the screen and opens its channel (once; concurrent callers share the same start) */
+    /** Registers the screen and opens its channel (once; concurrent callers share the same start; if it fails, it is
+     * tried again as any failure) */
     start(): Promise<void> {
         if (!this.starting) {
             var self = this;
-            this.starting = this.identity().then(function () {
-                self.bind();
-            }, function () {
-                // Retried on the next start()
-                self.starting = null;
+            this.starting = this.reopen();
+            // Back in front (e.g. the TV woke up): no wait for a retry
+            document.addEventListener('visibilitychange', function () {
+                if (!document.hidden) {
+                    self.wake();
+                }
             });
         }
         return this.starting;
     }
 
-    /** Registers a phone's pairing code (from its cast) once the channel is open. If waiting to retry after failures,
-     * reopens the channel (or the back channel, which carries the phone's commands) now, as the phone gives up soon */
+    /** Registers a phone's pairing code (from its cast) once the channel is open; if waiting to retry after failures,
+     * opens it now, as the phone gives up soon */
     pair(code: string): void {
         this.pairing = code;
         if (this.retryTimer) {
-            clearTimeout(this.retryTimer);
-            this.retryTimer = 0;
-            this.failures = 0;
-            if (this.sid) {
-                this.register();
-                this.listen();
-            } else {
-                this.reopen();
-            }
+            this.wake();
         } else if (this.sid) {
             this.register();
         }
@@ -130,9 +128,9 @@ export class Lounge {
      * network: 12 digits, valid for about 5 minutes */
     linkCode(): Promise<string> {
         var k = this.kept;
-        var self = this;
-        return this.start().then(function () {
-            if (!self.starting || !k.token) {
+        // Waiting to retry (e.g. the start failed): now, as someone waits for the code
+        return (this.retryTimer ? this.wake() : this.start()).then(function () {
+            if (!k.token) {
                 throw new Error('no screen');
             }
             return request('POST', PAIRING + 'get_pairing_code?ctx=pair', form({
@@ -227,6 +225,7 @@ export class Lounge {
     private bind(): void {
         var gen = ++this.gen;
         var self = this;
+        this.boundAt = Date.now();
         this.close();
         this.sid = this.gsid = '';
         this.aid = -1;
@@ -282,9 +281,21 @@ export class Lounge {
     }
 
     /** Renews the token if due, then binds a new channel */
-    private reopen(): void {
+    private reopen(): Promise<void> {
         var self = this;
-        this.identity().then(function () { self.bind(); }, function () { self.retry(true); });
+        return this.identity().then(function () { self.bind(); }, function () { self.retry(true); });
+    }
+
+    /** Waiting to retry after failures: a new channel now (also when the old one may still be known: messages in flight
+     * go with the new one) */
+    private wake(): Promise<void> {
+        if (!this.retryTimer) {
+            return Promise.resolve();
+        }
+        clearTimeout(this.retryTimer);
+        this.retryTimer = 0;
+        this.failures = 0;
+        return this.reopen();
     }
 
     /** Opens the back channel: the phones' commands, read as the response grows */
@@ -300,24 +311,26 @@ export class Lounge {
             xhr.overrideMimeType('text/plain; charset=utf-8');
             self.read = 0;
             self.listenedAt = Date.now();
-            var heard = function (): void {
+            // Each chunk as it arrives (Chrome tells every one this way)
+            xhr.onreadystatechange = function () {
+                // (not an old channel's, e.g. on its abort)
+                if (gen !== self.gen || self.back !== xhr) {
+                    return;
+                }
                 self.arm();
-                if (xhr.readyState >= 3 && gen === self.gen && self.back === xhr) {
-                    // Data arrives: reset the failure count
-                    if (xhr.responseText) {
+                if (xhr.readyState >= 3) {
+                    // Data arrives: reset the failure count (not for a refusal's text)
+                    if (xhr.responseText && xhr.status === 200) {
                         self.failures = 0;
                     }
                     self.frames(xhr.responseText);
                 }
-            };
-            xhr.onreadystatechange = function () {
-                heard();
+                // (frames may have bound a new channel meanwhile)
                 if (xhr.readyState === 4 && gen === self.gen && self.back === xhr) {
                     self.back = null;
                     self.ended(xhr.status, xhr.responseText);
                 }
             };
-            xhr.onprogress = heard;
             xhr.send();
             self.arm();
         });
@@ -325,23 +338,34 @@ export class Lounge {
 
     /** The back channel ended: reopen it at once (it ends now and then), bind a new channel, or wait */
     private ended(status: number, text: string): void {
-        // One that ended within a second, or was refused, waits first, to avoid a storm of reconnects
-        var brief = Date.now() - this.listenedAt < BRIEF_MS;
-        if (status === 200 && !brief) {
+        var next = afterEnd(status, text, Date.now() - this.listenedAt < BRIEF_MS);
+        if (next === 'listen') {
             this.listen();
-        } else if (status === 401) {
+        } else if (next === 'renew') {
             this.renew();
-        } else if ((status === 400 && /Unknown SID/i.test(text) || status === 404 || status === 410) && !this.failures) {
-            this.failures++;
-            this.bind();
+        } else if (next === 'gone') {
+            this.gone();
         } else {
             this.retry(status !== 200);
         }
     }
 
-    /** After a failure: reopens the back channel after a wait, or binds a new channel after RETRIES failures */
+    /** YouTube no longer knows the channel: a new one at once, unless it refuses one just bound (then after a wait) */
+    private gone(): void {
+        if (Date.now() - this.boundAt >= REBIND_MS) {
+            this.bind();
+        } else {
+            this.retry(true);
+        }
+    }
+
+    /** After a failure: reopens the back channel after a wait, or binds a new channel after RETRIES failures (fresh: at
+     * once; the old back channel goes now, else its end would count as another failure) */
     private retry(fresh: boolean): void {
         var self = this;
+        if (fresh) {
+            this.dropBack();
+        }
         this.failures++;
         clearTimeout(this.retryTimer);
         this.retryTimer = setTimeout(function () {
@@ -365,9 +389,12 @@ export class Lounge {
         }, WATCHDOG_MS) as unknown as number;
     }
 
+    /** Ends the channel's timers (a resend's too: the new channel sends the queue) and its back channel */
     private close(): void {
         clearTimeout(this.watchdog);
         clearTimeout(this.retryTimer);
+        clearTimeout(this.flushTimer);
+        this.retryTimer = this.flushTimer = 0;
         this.dropBack();
     }
 
@@ -399,9 +426,17 @@ export class Lounge {
                 return;
             }
             this.read = end;
-            var arrays: any[] = JSON.parse(text.substring(line + 1, end));
+            var arrays: any[];
+            try {
+                arrays = JSON.parse(text.substring(line + 1, end));
+            } catch (e) {
+                // One that is not JSON is skipped; the channel reads on
+                continue;
+            }
             for (var i = 0; i < arrays.length && gen === this.gen; i++) {
-                this.array(arrays[i][0], arrays[i][1]);
+                if (arrays[i] instanceof Array) {
+                    this.array(arrays[i][0], arrays[i][1]);
+                }
             }
         }
     }
@@ -420,7 +455,12 @@ export class Lounge {
         } else if (name === 'stop') {
             this.bind();
         } else if (name !== 'noop') {
-            this.onCommand(name, m[1] || {});
+            // One the app fails on is skipped: the channel goes on (it ended casting for the session)
+            try {
+                this.onCommand(name, m[1] || {});
+            } catch (e) {
+                // (cast.ts lists the commands heard)
+            }
         }
     }
 
@@ -463,13 +503,7 @@ export class Lounge {
                 self.sending = null;
                 self.flush();
             } else if (r.status === 400 && /Unknown SID/i.test(r.text)) {
-                // A new channel at once the first time, after a wait when YouTube keeps refusing
-                if (self.failures) {
-                    self.retry(true);
-                } else {
-                    self.failures++;
-                    self.bind();
-                }
+                self.gone();
             } else if (tried >= 2) {
                 // YouTube does not accept them: drop them
                 self.sending = null;
@@ -506,3 +540,15 @@ export function form(fields: { [name: string]: string }): string {
     return out.join('&');
 }
 
+/** What the back channel's end calls for: reopen it ('listen'; one that ended within a second, or was refused, waits
+ * first, to avoid a storm of reconnects), renew the token, a new channel (YouTube no longer knows it: 'gone'), or a
+ * wait */
+export function afterEnd(status: number, text: string, brief: boolean): 'listen' | 'renew' | 'gone' | 'wait' {
+    if (status === 200 && !brief) {
+        return 'listen';
+    }
+    if (status === 401) {
+        return 'renew';
+    }
+    return status === 400 && /Unknown SID/i.test(text) || status === 404 || status === 410 ? 'gone' : 'wait';
+}

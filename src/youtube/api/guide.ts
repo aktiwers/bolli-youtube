@@ -3,6 +3,7 @@
 // page. Kept a week, so the rail starts with them; asked again after that.
 
 import { load, save } from '../../core/store.js';
+import { all, get, text } from './feed.js';
 import { innertube } from './youtube.js';
 
 var KEY = 'youtube.guide';
@@ -35,20 +36,17 @@ export function freshGuideNames(): Promise<{ [browseId: string]: string }> {
 /** A guide reply's entries: browse page to name */
 export function guideNamesOf(reply: unknown): { [browseId: string]: string } {
     var names: { [browseId: string]: string } = {};
-    (function walk(o: any): void {
-        if (!o || typeof o !== 'object') {
-            return;
+    var entries = all(reply, 'guideEntryRenderer');
+    // (and entries inside an entry: found as the list grows)
+    for (var i = 0; i < entries.length; i++) {
+        all(entries[i], 'guideEntryRenderer', entries);
+    }
+    entries.forEach(function (entry: any) {
+        var id = get(entry, 'navigationEndpoint', 'browseEndpoint', 'browseId');
+        var name = text(entry.formattedTitle || entry.title);
+        if (id && name) {
+            names[id] = name;
         }
-        var entry = o.guideEntryRenderer;
-        var page = entry && entry.navigationEndpoint && entry.navigationEndpoint.browseEndpoint;
-        var title = entry && (entry.formattedTitle || entry.title);
-        var name = title ? title.simpleText || (title.runs || []).map(function (r: any) { return r.text; }).join('') : '';
-        if (page && page.browseId && name) {
-            names[page.browseId] = name;
-        }
-        for (var k in o) {
-            walk(o[k]);
-        }
-    })(reply);
+    });
     return names;
 }

@@ -38,6 +38,8 @@ interface Level {
     list: HTMLElement;
     items: Item[];
     at: number;
+    /** The card marked focused (null: none) */
+    marked: Item | null;
     scroll: number;
     next: string;
     fetching: boolean;
@@ -134,7 +136,7 @@ export class CommentsView {
         if (under) {
             setShown(under.list, false);
         }
-        var level: Level = { title: title, count: count, list: h('div', 'by-comments-list'), items: [], at: 0, scroll: 0, next: token, fetching: false };
+        var level: Level = { title: title, count: count, list: h('div', 'by-comments-list'), items: [], at: 0, marked: null, scroll: 0, next: token, fetching: false };
         this.body.appendChild(level.list);
         this.levels.push(level);
         this.heading(level);
@@ -197,7 +199,7 @@ export class CommentsView {
                 level.list.innerHTML = '';
                 level.items = [];
                 level.at = 0;
-                if (!items.length || !part.focal && !part.list.length && !part.handoff) {
+                if (!items.length) {
                     items.push(self.note(level.title === 'Comments' ? 'No comments yet.' : 'No replies yet.'));
                 }
             }
@@ -228,16 +230,18 @@ export class CommentsView {
         this.more(level);
     }
 
-    /** Marks the focused card (or the focal comment's button) and scrolls the list to keep it in view */
+    /** Marks the focused card (or the focal comment's button), only it and the one marked before, and scrolls the
+     * list to keep it in view */
     private mark(level: Level): void {
-        level.items.forEach(function (item, i) {
-            var on = i === level.at;
-            toggleClass(item.el, 'by-comment--focused', on && !item.buttons && item.kind !== 'note');
-            (item.buttons || []).forEach(function (b, j) {
-                toggleClass(b, 'by-comment-button--focused', on && j === item.button);
-            });
-        });
+        var was = level.marked;
         var focused = level.items[level.at];
+        if (was && was !== focused) {
+            markItem(was, false);
+        }
+        if (focused) {
+            markItem(focused, true);
+        }
+        level.marked = focused || null;
         if (!focused || this.levels[this.levels.length - 1] !== level) {
             return;
         }
@@ -277,14 +281,21 @@ export class CommentsView {
     /** Turns a comment's Like or Dislike on or off as YouTube's TV app does (the other one goes off) */
     private vote(item: Item, c: Comment, toggle: Toggle, other: Toggle): void {
         var self = this;
+        var otherWas = other.on;
         var on = !toggle.on;
-        run(on ? toggle.set : toggle.unset).then(function () {
-            toggle.on = on;
-            if (on) {
-                other.on = false;
+        // Drawn at once, so a second press undoes it (it waited for YouTube, so two quick presses both turned it on);
+        // as it was if YouTube refuses
+        toggle.on = on;
+        if (on) {
+            other.on = false;
+        }
+        this.drawVote(item, c);
+        run(on ? toggle.set : toggle.unset).then(null, function () {
+            if (toggle.on === on) {
+                toggle.on = !on;
+                other.on = otherWas;
+                self.drawVote(item, c);
             }
-            self.drawVote(item, c);
-        }, function () {
             toast('YouTube did not take that. Try again.', undefined, PROBLEM);
         });
     }
@@ -355,4 +366,12 @@ export class CommentsView {
     private note(text: string): Item {
         return { el: h('div', 'by-comments-note', text), kind: 'note' };
     }
+}
+
+/** A card marked focused or not (one with buttons: its chosen button) */
+function markItem(item: Item, on: boolean): void {
+    toggleClass(item.el, 'by-comment--focused', on && !item.buttons && item.kind !== 'note');
+    (item.buttons || []).forEach(function (b, j) {
+        toggleClass(b, 'by-comment-button--focused', on && j === item.button);
+    });
 }

@@ -104,19 +104,16 @@ var SELECTOR_THEN_EMOJI = new RegExp('[\\uFE0E\\uFE0F]' + EMOJI);
 
 /** Styled letters and digits (𝐁𝐨𝐥𝐝, ｗｉｄｅ, Ⓒⓘⓡⓒⓛⓔⓓ, ①) in blocks: first and last code point, then the plain characters
  * they go through (repeating) or the first number */
-var FANCY_RANGES = (function () {
-    var upper = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-    var lower = 'abcdefghijklmnopqrstuvwxyz';
-    var digits = '0123456789';
-    var ranges: [number, number, string | number][] = [
-        [0x1D400, 0x1D6A3, upper + lower], [0x1D7CE, 0x1D7FF, digits], [0xFF10, 0xFF19, digits], [0xFF21, 0xFF3A, upper],
-        [0xFF41, 0xFF5A, lower], [0x24B6, 0x24CF, upper], [0x24D0, 0x24E9, lower], [0x249C, 0x24B5, lower],
-        [0x1F110, 0x1F129, upper], [0x1F130, 0x1F149, upper], [0x1F150, 0x1F169, upper], [0x1F170, 0x1F189, upper],
-        [0x2080, 0x2089, 0], [0x1F101, 0x1F10A, 0], [0x2460, 0x2473, 1], [0x2474, 0x2487, 1], [0x2488, 0x249B, 1],
-        [0x24EB, 0x24F4, 11], [0x24F5, 0x24FE, 1], [0x2776, 0x277F, 1], [0x2780, 0x2789, 1], [0x278A, 0x2793, 1]
-    ];
-    return ranges;
-})();
+var UPPER = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+var LOWER = 'abcdefghijklmnopqrstuvwxyz';
+var DIGITS = '0123456789';
+var FANCY_RANGES: [number, number, string | number][] = [
+    [0x1D400, 0x1D6A3, UPPER + LOWER], [0x1D7CE, 0x1D7FF, DIGITS], [0xFF10, 0xFF19, DIGITS], [0xFF21, 0xFF3A, UPPER],
+    [0xFF41, 0xFF5A, LOWER], [0x24B6, 0x24CF, UPPER], [0x24D0, 0x24E9, LOWER], [0x249C, 0x24B5, LOWER],
+    [0x1F110, 0x1F129, UPPER], [0x1F130, 0x1F149, UPPER], [0x1F150, 0x1F169, UPPER], [0x1F170, 0x1F189, UPPER],
+    [0x2080, 0x2089, 0], [0x1F101, 0x1F10A, 0], [0x2460, 0x2473, 1], [0x2474, 0x2487, 1], [0x2488, 0x249B, 1],
+    [0x24EB, 0x24F4, 11], [0x24F5, 0x24FE, 1], [0x2776, 0x277F, 1], [0x2780, 0x2789, 1], [0x278A, 0x2793, 1]
+];
 
 /** The other styled letters and digits, by character */
 var FANCY: { [char: string]: string } = Object.create(null);
@@ -211,11 +208,8 @@ function wordToTitleCase(word: string, index: number, words: string[], custom: b
 
 /** Capitals are trusted unless most of the title, or a word next to this one, is in all caps */
 function shouldTrustCaps(shouting: boolean, words: string[], index: number): boolean {
-    return !shouting && !isShouted(words[index - 1]) && !isShouted(words[index + 1]);
-}
-
-function isShouted(word: string | undefined): boolean {
-    return isAllCaps(word) && !forceKeepFormatting(word as string, true);
+    var shouted = function (word: string | undefined): boolean { return isAllCaps(word) && !forceKeepFormatting(word as string, true); };
+    return !shouting && !shouted(words[index - 1]) && !shouted(words[index + 1]);
 }
 
 /** More than half the words are in all caps */
@@ -282,6 +276,15 @@ function isFirstLetterCapital(word: string): boolean {
     return i >= 0 && letterAt(word, i) === 2;
 }
 
+function hasCapital(word: string): boolean {
+    for (var i = 0; i < word.length; i++) {
+        if (letterAt(word, i) === 2) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /** Uppercase first letter and lowercase rest */
 function capitalizeFirstLetter(word: string): string {
     if (startsWithEmojiLetter(word)) {
@@ -309,15 +312,6 @@ function startsWithEmojiLetter(word: string): boolean {
 /** The low surrogate of 🅰 🆎 🅱 🆑 or 🅾 */
 function isEmojiLetter(low: number): boolean {
     return low === 0xDD70 || low === 0xDD71 || low === 0xDD7E || low === 0xDD8E || low === 0xDD91;
-}
-
-function hasCapital(word: string): boolean {
-    for (var i = 0; i < word.length; i++) {
-        if (letterAt(word, i) === 2) {
-            return true;
-        }
-    }
-    return false;
 }
 
 /** Has capitals besides the first letter (iPhone, AirPods); a compound word in any of its parts */
@@ -397,6 +391,7 @@ function isAcronym(word: string): boolean {
         && !listHasWord(NOT_ACRONYMS, word.toLowerCase())) || isAcronymStrict(word);
 }
 
+/** How many letters word has */
 function countLetters(word: string): number {
     var count = 0;
     for (var i = 0; i < word.length; i++) {

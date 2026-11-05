@@ -11,18 +11,15 @@ import { h, LAYOUT_HEIGHT, LAYOUT_WIDTH, setShown, setText, toggleClass, transla
 import { KEY } from '../../core/keys.js';
 import { canListen } from '../../core/platform.js';
 import { mark } from '../../core/perf.js';
-import { load, save } from '../../core/store.js';
-import { clock } from '../../core/time.js';
 import { View } from '../../core/view.js';
 import { RowStack } from '../../ui/row-stack.js';
-import { rowHeight, TileItem, TileLayout, TileRow } from '../../ui/tile-row.js';
-import { dearrowFetch, dearrowListen, dearrowOn, dearrowPicture, dearrowSettings, dearrowTitle, dearrowWait } from '../api/dearrow.js';
-import { more, Nudge, PageButton, Rows, Shelf, Tab, thumbnail, thumbnailFallback, Video } from '../api/feed.js';
-import { NoStreams, streams } from '../api/streams.js';
+import { TileItem, TileRow } from '../../ui/tile-row.js';
+import { more, Nudge, PageButton, Rows, Shelf, Tab, Video } from '../api/feed.js';
 import { Pills } from '../ui/pills.js';
 import { FillLoader, LOGO } from '../ui/fill-loader.js';
 import { icon } from '../ui/icons.js';
-import { metrics, RowSpacing, themed, word } from '../ui/theme.js';
+import { metrics, RowSpacing, word } from '../ui/theme.js';
+import { brandedRows, copied, gridLines, Paging, rowH, VideoTiles } from './tiles.js';
 
 /** The loading sign fills at its theme pace (~1.2 s, about when Home's rows usually arrive) */
 var LOADING_FILL = 1;
@@ -36,16 +33,6 @@ var BUTTON_ICONS: { [iconType: string]: string } = {
     SHUFFLE: 'shuffle'
 };
 
-/** More is fetched once focus is this near the end (a row's tiles; rows; grid lines of three tiles, passed
- * quickly), part after part until that much is ready. Subscriptions' parts are one row each (~92 KB, 0.2-0.4 s),
- * so fetching only at the end lets focus outrun the rows */
-var TILES_AHEAD = 6;
-var ROWS_AHEAD = 3;
-var LINES_AHEAD = 4;
-/** Length lookups at once (videos YouTube lists without a length, as in its preview carousel) */
-var LOOKUPS = 2;
-/** Consecutive empty parts before fetching stops (until focus moves) */
-var EMPTY_PARTS = 3;
 /** Rows this old are refreshed behind the ones shown (Subscriptions sooner: main.ts) */
 var REFRESH_MS = 60 * 60 * 1000;
 
@@ -76,13 +63,15 @@ function withVideo(rows: Rows, video: Video, s: number, i: number): Rows {
     return put;
 }
 
-/** A shallow copy of o */
-function copied<T>(o: T): T {
-    var c: any = {};
-    for (var k in o) {
-        c[k] = (o as any)[k];
-    }
-    return c as T;
+/** A copy of rows without video id (a shelf that had only it goes too) */
+function withoutVideo(rows: Rows, id: string): Rows {
+    var put = copied(rows);
+    put.shelves = rows.shelves.map(function (s) {
+        var shelf = copied(s);
+        shelf.videos = s.videos.filter(function (v) { return v.id !== id; });
+        return shelf;
+    }).filter(function (s, i) { return s.videos.length > 0 || !rows.shelves[i].videos.length; });
+    return put;
 }
 
 /** The shelves' video ids in order (equal ids: nothing to redraw) */
@@ -90,387 +79,6 @@ function idsOf(shelves: Shelf[]): string {
     return shelves.map(function (s) {
         return s.videos.map(function (v) { return v.id; }).join(',');
     }).join('|');
-}
-
-/** Progress and stop time of videos watched in the app's player (History on): shown on their tiles everywhere
- * (YouTube's rows only reflect it when refetched), and OK resumes from there */
-var watched: { [id: string]: { progress: number; t: number } } = {};
-/** Watched this far: restart from the beginning (as YouTube does) */
-var WATCHED_ALL = 0.95;
-
-export function noteWatched(id: string, progress: number, t: number): void {
-    watched[id] = { progress: progress, t: t };
-}
-
-/** Where a video watched in the app stopped (-1: not watched here; 0: watched to the end) */
-export function watchedAt(id: string): number {
-    var w = watched[id];
-    return !w ? -1 : w.progress >= WATCHED_ALL ? 0 : w.t;
-}
-
-/** Height of one row in the theme's sizes */
-export function rowH(): number {
-    var m = metrics();
-    return rowHeight(m.tile, false, m.rows);
-}
-
-/** Grows rows as focus nears their end, one part at a time: a row's next tiles, the next shelves, or a grid's next
- * tiles */
-export class Paging {
-    /** The shelves shown, by row (a row's continuation token is its shelf's) */
-    shelves: Shelf[] = [];
-    /** Continuation token for more shelves (for a grid: its next tiles) */
-    private next = '';
-    /** Adds a grid's next tiles (null: rows of shelves) */
-    private lines: ((videos: Video[]) => void) | null = null;
-    private fetching = false;
-    /** Incremented when the rows change, so late replies for old rows are dropped */
-    private gen = 0;
-    /** Consecutive parts that brought no rows */
-    private empties = 0;
-
-    /** from: the endpoint the tokens are sent to (api/feed.ts more) */
-    constructor(private tiles: VideoTiles, private from?: string) {}
-
-    /** Other rows are coming: drop replies for the current ones */
-    stop(): void {
-        this.gen++;
-        this.fetching = false;
-    }
-
-    /** Sets the rows shown: their shelves and continuation token (lines: for a grid, adds its tiles) */
-    set(shelves: Shelf[], next: string, lines?: (videos: Video[]) => void): void {
-        this.stop();
-        this.shelves = shelves;
-        this.next = next;
-        this.lines = lines || null;
-    }
-
-    /** Sets the continuation token for more shelves (or a grid's tiles) */
-    setNext(next: string): void {
-        // Drop a pending reply for the old token
-        this.stop();
-        this.next = next;
-    }
-
-    /** Removes video id's tiles from stack's rows at once (removed from History, Not interested): each affected row
-     * is rebuilt without it (an emptied row is removed), with focus on the tile now in its place */
-    drop(stack: RowStack, id: string): void {
-        // A pending fetch for the old row is dropped; it is retried as focus moves
-        this.stop();
-        // From the end, so removing a row leaves the earlier indexes valid
-        for (var r = stack.rows.length - 1; r >= 0; r--) {
-            var row = stack.rows[r];
-            var gone = row.items.map(function (item) { return item.id; }).indexOf(id);
-            var shelf = this.shelves[r];
-            if (gone < 0 || !shelf) {
-                continue;
-            }
-            var self = this;
-            shelf.videos = row.items.filter(function (item) { return item.id !== id; })
-                .map(function (item) { return self.tiles.video(item) as Video; }).filter(function (v) { return !!v; });
-            if (!shelf.videos.length) {
-                stack.remove(row);
-                this.shelves.splice(r, 1);
-                continue;
-            }
-            var fresh = this.tiles.rows([shelf], false)[0];
-            stack.replace(row, fresh);
-            fresh.focusAt(Math.min(row.index > gone ? row.index - 1 : row.index, fresh.count - 1));
-        }
-        stack.focusRow(stack.index);
-    }
-
-    /** Focus moved in stack (across: within a row): near an end with more available, fetches the next part */
-    ahead(stack: RowStack, across: boolean): void {
-        var row = stack.row;
-        var shelf = across && !this.lines ? this.shelves[stack.index] : null;
-        var token = shelf ? (row && row.index >= row.count - 1 - TILES_AHEAD && shelf.next) || '' :
-            stack.index >= stack.rows.length - 1 - (this.lines ? LINES_AHEAD : ROWS_AHEAD) ? this.next : '';
-        if (!token || this.fetching) {
-            return;
-        }
-        this.fetching = true;
-        var gen = this.gen;
-        var self = this;
-        more(token, this.from).then(function (rows) {
-            if (gen !== self.gen) {
-                return;
-            }
-            self.fetching = false;
-            var first = rows.shelves[0];
-            if (self.lines) {
-                self.next = first && first.next || rows.next || '';
-                self.lines(first ? first.videos : []);
-            } else if (shelf) {
-                // The row's next tiles (a search row comes back as a section, whose token may be the section's)
-                shelf.next = first && first.next || rows.next || '';
-                (row as TileRow).append(self.tiles.items(first ? first.videos : []));
-            } else {
-                self.next = rows.next;
-                self.shelves = self.shelves.concat(rows.shelves);
-                stack.addAll(self.tiles.rows(rows.shelves, false));
-            }
-            // Fetch the next part at once until enough are ready below focus (not within a row: its tiles load as
-            // focus moves along)
-            self.empties = rows.shelves.length ? 0 : self.empties + 1;
-            if (!shelf && self.empties < EMPTY_PARTS) {
-                self.ahead(stack, false);
-            }
-        }, function () {
-            // Retried when focus moves next
-            if (gen === self.gen) {
-                self.fetching = false;
-            }
-        });
-    }
-}
-
-/** The longest a page waits for DeArrow's branding of its first screen before it draws (the rest come into their tiles
- * as they arrive) */
-var DEARROW_WAIT_MS = 500;
-
-/** Rows, once DeArrow's branding of their first screen (the first two rows' first six tiles) is in or
- * DEARROW_WAIT_MS passed (at once with DeArrow off) */
-export function brandedRows(rows: Rows): Promise<Rows> {
-    if (!dearrowOn()) {
-        return Promise.resolve(rows);
-    }
-    var videos: Video[] = [];
-    rows.shelves.slice(0, 2).forEach(function (shelf) {
-        videos = videos.concat(shelf.videos.slice(0, 6));
-    });
-    return dearrowWait(videos, DEARROW_WAIT_MS).then(function () { return rows; });
-}
-
-/** A video's own picture: its poster, the picture YouTube gave it, else its thumbnail */
-function ownImage(v: Video): string {
-    return v.poster || v.image || thumbnail(v.id);
-}
-
-/** Lengths looked up from videos' streams (also the previews' start), for the session: 'LIVE', '' (none known) */
-var lengths: { [id: string]: Promise<string> } = {};
-var looking = 0;
-var waiting: (() => void)[] = [];
-
-function lengthOf(id: string): Promise<string> {
-    if (!lengths[id]) {
-        lengths[id] = new Promise<string>(function (resolve) {
-            var ask = function (): void {
-                looking++;
-                streams(id).then(function (s) {
-                    var longest = 0;
-                    s.videos.forEach(function (f) { longest = Math.max(longest, f.duration); });
-                    resolve(s.live ? 'LIVE' : longest ? clock(longest) : '');
-                }, function (e: NoStreams) {
-                    resolve(e.length ? clock(e.length) : '');
-                }).then(function () {
-                    looking--;
-                    var next = waiting.shift();
-                    if (next) {
-                        next();
-                    }
-                });
-            };
-            if (looking < LOOKUPS) {
-                ask();
-            } else {
-                waiting.push(ask);
-            }
-        });
-    }
-    return lengths[id];
-}
-
-/** Tile styles the app does not draw yet, each kept with a shelf that had it (to draw them as YouTube does) */
-var NEW_STYLES_KEY = 'youtube.newStyles';
-
-function noteNewStyles(shelf: Shelf): void {
-    var v = shelf.videos.filter(function (x) { return !!x.newStyle; })[0];
-    var seen = v ? load<{ [style: string]: string }>(NEW_STYLES_KEY) || {} : null;
-    if (v && seen && !seen[v.newStyle as string]) {
-        seen[v.newStyle as string] = shelf.title + ': ' + v.title;
-        save(NEW_STYLES_KEY, seen);
-    }
-}
-
-/** A tile's label: LIVE, else the length (with a note for audio) */
-function labelOf(v: Video): string {
-    return v.live ? 'LIVE' : v.audio && v.length ? '\u266a ' + v.length : v.length;
-}
-
-/** Builds tile rows for shelves and maps tiles back to their videos */
-export class VideoTiles {
-    /** Left margin of the rows (0: the theme's; a channel page has no rail and uses YouTube's 64) */
-    pad = 0;
-    /** Enlarge the focused row's tiles (Home) */
-    big = false;
-    /** Row spacing (null: the theme's lineRows off Home; Home's own) */
-    spacing: RowSpacing | null = null;
-    /** The rows the tiles show in now (the view's: its stack's), which DeArrow's branding goes into as it arrives */
-    shown: () => TileRow[] = function () { return []; };
-    private videos: { [id: string]: Video } = {};
-    /** The videos whose DeArrow branding is still to come, how many, and the listener for it */
-    private branding: { [id: string]: boolean } = {};
-    private pending = 0;
-    private unlisten: (() => void) | null = null;
-    /** The DeArrow settings the tiles were made with */
-    private brandedAs = '';
-
-    /** fresh: forget the videos of the previous rows */
-    rows(shelves: Shelf[], fresh: boolean): TileRow[] {
-        var self = this;
-        var m = metrics();
-        if (fresh) {
-            this.reset();
-        }
-        // The theme's layout at the requested margin; off Home, a row without a subtitle sits higher and one with it is
-        // taller (as YouTube's: metrics.lineRows)
-        var layout = this.pad ? layoutWith(m.rows, { pad: this.pad }) : m.rows;
-        var lines = this.spacing || (this.big ? null : { pitch: rowH(), plainHead: m.rows.head - m.lineRows.plainUp, taller: m.lineRows.taller });
-        var plain = layout;
-        if (lines) {
-            // Each row spans the pitch: a plain row's tiles at plainHead, a subtitled row's at head and taller
-            plain = layoutWith(layout, { head: lines.plainHead, rowGap: lines.pitch - lines.plainHead - m.tile.h - layout.under });
-            layout = layoutWith(layout, { rowGap: lines.pitch - layout.head - m.tile.h - layout.under });
-        }
-        return shelves.map(function (shelf) {
-            noteNewStyles(shelf);
-            // Square tiles (podcasts, releases) or game boxes, as tall as the others (rows keep one height); posters
-            // (Movies) with the focused one wide
-            var shape = shelf.style === 'square' || shelf.style === 'round' ? m.square : shelf.style === 'game' ? m.game : shelf.style === 'poster' ? m.poster : m.tile;
-            return new TileRow({ title: word(shelf.title), subtitle: shelf.subtitle, icon: shelf.icon, shape: shape, layout: shelf.subtitle ? layout : plain,
-                extraHeight: shelf.subtitle && lines ? lines.taller : 0,
-                items: self.items(shelf.videos), noWrap: true, bigShape: self.big && shape === m.tile ? m.big : undefined,
-                wideShape: shape === m.poster ? m.posterWide : undefined, lazy: true });
-        });
-    }
-
-    /** Forgets the videos of the previous tiles (all are made anew) */
-    reset(): void {
-        this.videos = {};
-        this.brandedAs = dearrowSettings();
-    }
-
-    /** Tiles for videos (duplicates skipped), with DeArrow's titles and pictures where it has them (YouTube's
-     * thumbnail stays the fallback) */
-    items(videos: Video[]): TileItem[] {
-        var self = this;
-        var seen: { [id: string]: boolean } = {};
-        var items: TileItem[] = [];
-        videos.forEach(function (v) {
-            if (!seen[v.id]) {
-                seen[v.id] = true;
-                self.videos[v.id] = v;
-                var image = v.page ? v.image || '' : ownImage(v);
-                var branded = v.page || v.poster ? image : dearrowPicture(v.id, image);
-                // A page without an image: its name on the tile, like a "See all" tile
-                items.push(v.page && !v.image ? { id: v.id, title: v.title, image: '', more: '' } : {
-                    id: v.id, title: v.page ? v.title : dearrowTitle(v.id, v.title), image: branded,
-                    fallback: v.page ? '' : thumbnailFallback(v.id) || (branded !== image ? image : ''),
-                    wideImage: v.poster ? v.wide || thumbnail(v.id) : undefined,
-                    label: labelOf(v), labelIcon: v.labelIcon, stack: v.stack,
-                    lines: [v.channel, themed(v.info)], progress: watched[v.id] ? watched[v.id].progress : v.progress, round: v.round,
-                    // In the theme's wording (e.g. "CC" as YouTube's TV app writes it)
-                    chips: v.badges && v.badges.map(word), offerChip: v.offer && word(v.offer)
-                });
-                if (!v.page && !v.poster && !v.live && !v.length) {
-                    self.measure(v);
-                }
-            }
-        });
-        if (dearrowOn()) {
-            this.brand(videos);
-        }
-        return items;
-    }
-
-    /** A video YouTube lists without a length: its tiles get it once looked up */
-    private measure(v: Video): void {
-        var self = this;
-        lengthOf(v.id).then(function (length) {
-            if (length && self.videos[v.id] === v) {
-                if (length === 'LIVE') {
-                    v.live = true;
-                } else {
-                    v.length = length;
-                }
-                self.shown().forEach(function (row) {
-                    row.setLabel(v.id, labelOf(v));
-                });
-            }
-        });
-    }
-
-    /** DeArrow's branding asked for where not known yet; the tiles get it as it arrives */
-    private brand(videos: Video[]): void {
-        var self = this;
-        dearrowFetch(videos).forEach(function (id) {
-            if (!self.branding[id]) {
-                self.branding[id] = true;
-                self.pending++;
-            }
-        });
-        if (!this.unlisten && this.pending) {
-            this.unlisten = dearrowListen(function (id) { self.branded(id); });
-        }
-    }
-
-    /** Video id's DeArrow branding arrived: its tiles take it (the listener stops once nothing more is to come) */
-    private branded(id: string): void {
-        if (!this.branding[id]) {
-            return;
-        }
-        delete this.branding[id];
-        this.pending--;
-        this.apply(id);
-        if (!this.pending && this.unlisten) {
-            this.unlisten();
-            this.unlisten = null;
-        }
-    }
-
-    /** The tiles made again with DeArrow's settings if they changed since (a screen shown again after Settings) */
-    rebrand(): void {
-        if (this.brandedAs === dearrowSettings()) {
-            return;
-        }
-        this.brandedAs = dearrowSettings();
-        var self = this;
-        var videos = Object.keys(this.videos).map(function (id) { return self.videos[id]; }).filter(function (v) { return !v.page; });
-        videos.forEach(function (v) { self.apply(v.id); });
-        if (dearrowOn()) {
-            this.brand(videos);
-        }
-    }
-
-    /** Video id's tiles with its title and picture as DeArrow's settings now give them */
-    private apply(id: string): void {
-        var v = this.videos[id];
-        if (v && !v.page) {
-            var title = dearrowTitle(id, v.title);
-            var own = ownImage(v);
-            var image = v.poster ? undefined : dearrowPicture(id, own);
-            var fallback = thumbnailFallback(id) || (image !== own ? own : '');
-            this.shown().forEach(function (row) {
-                row.retitle(id, title, image, fallback);
-            });
-        }
-    }
-
-    video(item: TileItem | null): Video | null {
-        return item ? this.videos[item.id] || null : null;
-    }
-
-    /** Sets video id's watched fraction (0-1), also on its tiles in stack */
-    setProgress(stack: RowStack, id: string, progress: number): void {
-        if (this.videos[id]) {
-            this.videos[id].progress = progress;
-        }
-        stack.rows.forEach(function (row) {
-            row.setProgress(id, progress);
-        });
-    }
 }
 
 /** YouTube's search bar (OK opens Search) with its microphone beside it. The microphone can be focused where the
@@ -529,23 +137,58 @@ function listens(): boolean {
     return listening;
 }
 
-/** A copy of layout with some values changed */
-function layoutWith(layout: TileLayout, changes: { [key: string]: number }): TileLayout {
-    var made = {} as TileLayout;
-    for (var key in layout) {
-        (made as any)[key] = (layout as any)[key];
-    }
-    for (var k in changes) {
-        (made as any)[k] = changes[k];
-    }
-    return made;
-}
-
 /** Restarts el's quick fade-in (the theme's by-fade-in) */
 export function fadeIn(el: HTMLElement): void {
-    toggleClass(el, 'by-fade-in', false);
-    void el.offsetWidth;
+    // Fading in again: off, and a layout read, so the animation starts anew (a first time needs neither)
+    if (/(^| )by-fade-in( |$)/.test(el.className)) {
+        toggleClass(el, 'by-fade-in', false);
+        void el.offsetWidth;
+    }
     toggleClass(el, 'by-fade-in', true);
+}
+
+/** A screen built around rows (Subscriptions, Library, a channel page): main.ts's hooks for the rows go to its
+ * FeedView (a screen with more to do overrides them) */
+export class FeedHost {
+    protected feed!: FeedView;
+
+    /** The rows (or a message instead) have arrived */
+    get settled(): boolean {
+        return this.feed.settled;
+    }
+
+    /** A video covers it (or not): fresh rows are swapped in out of sight */
+    cover(covered: boolean): void {
+        this.feed.cover(covered);
+    }
+
+    renewIfOld(): void {
+        this.feed.renewIfOld();
+    }
+
+    prepare(): void {
+        this.feed.prepare();
+    }
+
+    putFresh(): void {
+        this.feed.putFresh();
+    }
+
+    setProgress(id: string, progress: number): void {
+        this.feed.setProgress(id, progress);
+    }
+
+    removeVideo(id: string): void {
+        this.feed.removeVideo(id);
+    }
+
+    retry(quiet?: boolean): boolean {
+        return this.feed.retry(quiet);
+    }
+
+    reload(): void {
+        this.feed.reload();
+    }
 }
 
 /** A screen's cached rows, and a check (run once they show) whether they belong to the current account */
@@ -637,7 +280,8 @@ export class FeedView implements View {
     private shown = false;
     /** Its rows (or the message shown instead) are in */
     settled = false;
-    private loader: FillLoader;
+    /** The logo loader (the start screen only: opts.logo) */
+    private loader: FillLoader | null;
     /** Showing older rows (cached or aged) while fresh ones load or wait to replace them */
     private stale = false;
     private fresh: { rows: Rows | null; at: number } | null = null;
@@ -657,6 +301,17 @@ export class FeedView implements View {
         this.tiles.spacing = opts.spacing || null;
         var self = this;
         this.tiles.shown = function () { return self.stack.rows; };
+        // Shelves added while fresh rows wait come from their token: they continue the fresh rows (kept when those
+        // replace the ones shown)
+        this.paging.added = function (shelves, next) {
+            var fresh = self.fresh;
+            if (fresh && fresh.rows) {
+                var put = copied(fresh.rows);
+                put.shelves = put.shelves.concat(shelves);
+                put.next = next;
+                fresh.rows = put;
+            }
+        };
         this.el = h('div', 'bd-page');
         setShown(this.el, false);
         this.stack = this.newStack(false);
@@ -687,7 +342,7 @@ export class FeedView implements View {
         this.emptyEl = h('div', 'by-empty');
         setShown(this.emptyEl, false);
         this.el.appendChild(this.emptyEl);
-        this.loader = new FillLoader(this.el, false);
+        this.loader = opts.logo ? new FillLoader(this.el, false) : null;
         if (opts.onSearch) {
             // Covers the rows scrolling up under the bar
             this.el.appendChild(h('div', 'by-feed-top'));
@@ -716,12 +371,11 @@ export class FeedView implements View {
         }
     }
 
-    /** A video covers the screen (or stops covering it): while covered, fresh rows are swapped in and old ones
-     * refetched */
+    /** A video covers the screen (or stops covering it): while covered, fresh rows are swapped in (old ones are
+     * refetched once its picture moves: main.ts renewRows, not during its start) */
     cover(covered: boolean): void {
         this.covered = covered;
         if (covered) {
-            this.renewIfOld();
             this.freshen();
         } else {
             this.aheadInSight();
@@ -733,6 +387,13 @@ export class FeedView implements View {
         setShown(this.el, false);
         this.stack.setShown(false);
         this.freshen();
+    }
+
+    /** Closed for good (a page left with Back): late replies are dropped, nothing more is fetched or branded for it */
+    destroy(): void {
+        this.gen++;
+        this.paging.stop();
+        this.tiles.stop();
     }
 
     /** Out of view for now (the app goes to the background): swap in waiting fresh rows */
@@ -747,6 +408,10 @@ export class FeedView implements View {
 
     /** Removes video id's tiles at once (YouTube removed it); a grid's lines are refilled after it */
     removeVideo(id: string): void {
+        // Also from the fresh rows waiting to be swapped in (else it comes back with them)
+        if (this.fresh && this.fresh.rows) {
+            this.fresh.rows = withoutVideo(this.fresh.rows, id);
+        }
         if (!this.grid) {
             this.paging.drop(this.stack, id);
             this.taken();
@@ -874,8 +539,7 @@ export class FeedView implements View {
                         return true;
                     }
                     if (code === KEY.UP && this.bar && !this.grid) {
-                        this.at = 'bar';
-                        this.setFocused(this.focused);
+                        this.goTo('bar');
                         return true;
                     }
                     // Down at the end retries a failed fetch for more
@@ -907,6 +571,11 @@ export class FeedView implements View {
         return this.stack.rows.length > 0;
     }
 
+    /** Something to focus: rows, or YouTube's message in their place (with a button) */
+    get focusable(): boolean {
+        return this.hasRows || !!this.nudge && this.nudge.buttons.length > 0;
+    }
+
     /** The focused row (or grid line) index */
     get rowIndex(): number {
         return this.stack.index;
@@ -933,43 +602,24 @@ export class FeedView implements View {
 
     /** Keys on the tabs: Left/Right move along them, OK fetches one, Down returns to the grid */
     private tabKey(code: number): boolean {
-        switch (code) {
-            case KEY.LEFT:
-            case KEY.RIGHT:
-                // Left past the first goes to the rail
-                return this.tabPills.move(code === KEY.LEFT ? -1 : 1) || code === KEY.RIGHT;
-            case KEY.OK:
-                this.tabPills.press();
-                return true;
-            case KEY.DOWN:
-                this.focusTabs(false);
-                return true;
-            case KEY.UP:
-                return true;
-        }
-        return false;
+        var self = this;
+        return this.tabPills.key(code, { down: function () {
+            self.focusTabs(false);
+            return true;
+        } });
     }
 
     /** Keys on YouTube's message: Left/Right move along its buttons, OK presses one, Up goes to the search bar */
     private nudgeKey(code: number): boolean {
-        switch (code) {
-            case KEY.LEFT:
-            case KEY.RIGHT:
-                // Left past the first goes to the rail
-                return this.nudgePills.move(code === KEY.LEFT ? -1 : 1) || code === KEY.RIGHT;
-            case KEY.OK:
-                this.nudgePills.press();
-                return true;
-            case KEY.UP:
-                if (this.bar) {
-                    this.at = 'bar';
-                    this.setFocused(this.focused);
-                }
-                return true;
-            case KEY.DOWN:
-                return true;
-        }
-        return false;
+        var self = this;
+        return this.nudgePills.key(code, { up: function () {
+            // No search bar: the screen above takes it (Subscriptions' pills, Library's cards)
+            if (!self.bar) {
+                return false;
+            }
+            self.goTo('bar');
+            return true;
+        } });
     }
 
     /** Draws YouTube's message in place of rows (null: removes it) */
@@ -1025,8 +675,7 @@ export class FeedView implements View {
         }
         switch (code) {
             case KEY.DOWN:
-                this.at = 'rows';
-                this.setFocused(this.focused);
+                this.goTo('rows');
                 return true;
             case KEY.UP:
                 return true;
@@ -1074,7 +723,7 @@ export class FeedView implements View {
         return false;
     }
 
-    private goTo(at: 'rows' | 'buttons' | 'back'): void {
+    private goTo(at: 'rows' | 'tabs' | 'buttons' | 'bar' | 'back'): void {
         this.at = at;
         this.setFocused(this.focused);
     }
@@ -1220,7 +869,7 @@ export class FeedView implements View {
                 setText(this.status, '');
             }
             // Cached rows at once while these load (without a cache: the loader, if enabled)
-            if (!quiet && !this.drawKept() && this.opts.logo) {
+            if (!quiet && !this.drawKept() && this.loader) {
                 this.loader.show(LOGO, LOADING_FILL);
             }
         }
@@ -1337,18 +986,22 @@ export class FeedView implements View {
                     self.renewIfOld();
                 }
             }
-        }, function () {
+        }).then(null, function () {
+            // (also a throw while drawing: it fails as a fetch would, so OK or the retry tries again; not one after the
+            // rows were drawn)
             if (gen !== self.gen) {
                 return;
             }
             self.loading = false;
             self.settled = true;
-            self.loader.hide();
+            if (self.loader) {
+                self.loader.hide();
+            }
             if (self.stale) {
                 // The rows shown stay (still playable) and are refetched when the screen shows next, like old ones
                 self.stale = false;
                 self.fetchedAt = 1;
-            } else {
+            } else if (!self.hasRows) {
                 self.failed = true;
                 setText(self.status, self.texts.failed);
             }
@@ -1387,7 +1040,8 @@ export class FeedView implements View {
     }
 
     /** Swaps in the fresh rows once out of view (covered by a video, or hidden), keeping focus on the same video. The
-     * video played from here keeps its tile in place even if the fresh rows lack it, so Back returns to it */
+     * tile last opened from here (a video, or a page hiding the screen) keeps its place even if the fresh rows lack
+     * it, so Back returns to it */
     private freshen(): void {
         var fresh = this.fresh;
         if (!fresh || this.shown && !this.covered && !document.hidden) {
@@ -1397,7 +1051,7 @@ export class FeedView implements View {
         var video = this.tiles.video(row ? row.focused : null);
         var id = video ? video.id : '';
         var put = fresh.rows;
-        if (put && video && this.covered && id === this.played && !this.freshVideo(row!.focused)) {
+        if (put && video && id === this.played && !this.freshVideo(row!.focused)) {
             var place = row!.index;
             for (var k = 0; this.grid && k < this.stack.index; k++) {
                 place += this.stack.rows[k].count;
@@ -1439,7 +1093,7 @@ export class FeedView implements View {
         this.stack.setRows([]);
         if (this.loading) {
             this.settled = false;
-            if (this.opts.logo) {
+            if (this.loader) {
                 this.loader.show(LOGO, LOADING_FILL);
             }
         } else if (this.asked) {
@@ -1495,7 +1149,9 @@ export class FeedView implements View {
         setText(self.status, !rows ? self.texts.noAccount : shelves.length || nudge || nothing ? '' : self.texts.empty);
         self.place();
         self.settled = true;
-        self.loader.hide();
+        if (self.loader) {
+            self.loader.hide();
+        }
         // A page fades in as its rows arrive, with nothing shown before
         if (self.opts.fade && empty && (self.hasRows || nudge)) {
             fadeIn(self.el);
@@ -1524,18 +1180,14 @@ export class FeedView implements View {
         var m = metrics();
         // A playlist: one per line right of its side column, text beside the image (the theme's bd-page--list)
         var shape = this.list ? m.list.tile : m.grid;
-        var layout = this.list ? layoutWith(m.rows, { pad: m.list.left, under: 0, rowGap: m.list.pitch - m.list.tile.h }) : m.rows;
+        var layout = this.list ? copied(m.rows, { pad: m.list.left, under: 0, rowGap: m.list.pitch - m.list.tile.h }) : m.rows;
         var perLine = this.list ? 1 : Math.max(1, Math.floor((LAYOUT_WIDTH - m.rows.pad - m.page.right + m.rows.gap) / (m.grid.w + m.rows.gap)));
         var last = this.stack.rows[this.stack.rows.length - 1];
         var fill = last ? Math.min(perLine - last.count, items.length) : 0;
         if (fill > 0) {
             last.append(items.slice(0, fill));
         }
-        var lines: TileRow[] = [];
-        for (var i = fill; i < items.length; i += perLine) {
-            lines.push(new TileRow({ title: '', shape: shape, layout: layout, items: items.slice(i, i + perLine), noTitle: true, noWrap: true }));
-        }
-        this.stack.addAll(lines);
+        this.stack.addAll(gridLines(items.slice(fill), perLine, shape, layout));
     }
 
 

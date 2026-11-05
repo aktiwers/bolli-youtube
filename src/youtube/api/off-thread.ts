@@ -37,6 +37,33 @@ var asked: { [id: number]: Asked } = {};
 var count = 0;
 var idleTimer = 0;
 
+/** The JSON of data handed over, without YouTube's tracking fields (nothing reads them; a quarter of a channel page's
+ * rows). They are deleted from the data first: a JSON.stringify replacer takes the TV's browser off its fast path
+ * (4x slower) */
+export function dataJson(data: unknown): string {
+    if (data && typeof data === 'object') {
+        dropTracking(data);
+    }
+    return JSON.stringify(data);
+}
+
+function dropTracking(o: any): void {
+    if (o.clickTrackingParams !== undefined) {
+        delete o.clickTrackingParams;
+    }
+    if (o.trackingParams !== undefined) {
+        delete o.trackingParams;
+    }
+    if (o.loggingDirectives !== undefined) {
+        delete o.loggingDirectives;
+    }
+    for (var k in o) {
+        if (o[k] && typeof o[k] === 'object') {
+            dropTracking(o[k]);
+        }
+    }
+}
+
 /** Turns asked (a reply's JSON text) into the app's data with the worker's maker named kind, given arg (or with make,
  * the same function, when there is no worker). Returns JSON, which callers store as is (kept-pages.ts getJson,
  * page-store.ts) */
@@ -46,7 +73,7 @@ export function offThreadJson(asked: Promise<string>, kind: string, make: (reply
     clearTimeout(idleTimer);
     return asked.then(function (text) {
         var here = function (): string {
-            return JSON.stringify(make(JSON.parse(text), arg || ''));
+            return dataJson(make(JSON.parse(text), arg || ''));
         };
         var w = started();
         return w ? ask(w, text, kind, arg || '', here) : here();
@@ -122,7 +149,8 @@ function answered(e: MessageEvent): void {
 
 /** With nothing pending, terminates the worker after IDLE_MS */
 function idle(): void {
-    if (Object.keys(asked).length) {
+    // No worker (none started, or none on this platform): nothing to end
+    if (!worker || Object.keys(asked).length) {
         return;
     }
     clearTimeout(idleTimer);

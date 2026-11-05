@@ -2,7 +2,9 @@
 // the caller places their elements): OK presses the focused one; one that cannot act now is
 // hidden and skipped. The focused one gets the given class while the row has the focus.
 
-import { toggleClass } from '../../core/dom.js';
+import { LAYOUT_WIDTH, toggleClass, translate } from '../../core/dom.js';
+import { KEY } from '../../core/keys.js';
+import { metrics } from './theme.js';
 
 interface Pill {
     el: HTMLElement;
@@ -49,6 +51,31 @@ export class Pills {
         this.mark(true);
     }
 
+    /** Keys on the row: Left/Right move along it (then on.moved), Left past the first is not taken (the rail gets it);
+     * OK presses the focused one; on.up and on.down take Up and Down (true: taken; none: taken, nothing done) */
+    key(code: number, on?: { up?: () => boolean; down?: () => boolean; moved?: () => void }): boolean {
+        var o = on || {};
+        switch (code) {
+            case KEY.LEFT:
+            case KEY.RIGHT:
+                if (this.move(code === KEY.LEFT ? -1 : 1)) {
+                    if (o.moved) {
+                        o.moved();
+                    }
+                    return true;
+                }
+                return code === KEY.RIGHT;
+            case KEY.OK:
+                this.press();
+                return true;
+            case KEY.UP:
+                return o.up ? o.up() : true;
+            case KEY.DOWN:
+                return o.down ? o.down() : true;
+        }
+        return false;
+    }
+
     press(): void {
         if (this.pills[this.at]) {
             this.pills[this.at].press();
@@ -58,6 +85,12 @@ export class Pills {
     setFocused(focused: boolean): void {
         this.focused = focused;
         this.mark(true);
+    }
+
+    /** Slides strip (the pills, step px apart from the rows' left edge) so the focused one stays in view */
+    slide(strip: HTMLElement, step: number): void {
+        var inView = Math.floor((LAYOUT_WIDTH - metrics().rows.pad) / step);
+        translate(strip, -Math.max(0, this.at - inView + 1) * step, 0);
     }
 
     /** Hides those that cannot act now, shows the others */

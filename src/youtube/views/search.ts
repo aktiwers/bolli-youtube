@@ -18,24 +18,18 @@ import { RowStack } from '../../ui/row-stack.js';
 import { search, Video } from '../api/feed.js';
 import { keepSearch, recentSearches, Suggestion, suggestions } from '../api/suggest.js';
 import { icon, setIcon } from '../ui/icons.js';
+import { youtubeKeyboard } from '../ui/youtube-keyboard.js';
 import { metrics } from '../ui/theme.js';
-import { brandedRows, Paging, rowH, VideoTiles } from './videos.js';
+import { brandedRows, Paging, rowH, VideoTiles } from './tiles.js';
 
 /** Suggestions are requested once typing pauses this long (YouTube's app requests on every key) */
 var SUGGEST_MS = 80;
 /** Focus resting this long on a suggestion (or on Search) prefetches its results */
 var REST_MS = 400;
 var SUGGESTIONS_MAX = 10;
-/** YouTube's keyboard layout (æ, ø and å where YouTube has other keys); Delete, Space, Clear and Search by label;
- * Space as wide as Clear and Search (as YouTube draws them) */
-var LABELS = { space: 'Space', del: 'Delete', clear: 'Clear', enter: 'Search', spaceUnits: 2 };
-var LINES = [
-    'abcdefg'.split('').concat([LABELS.del]),
-    'hijklmnæ'.split(''),
-    'opqrstuø'.split(''),
-    "vwxyz-'å".split(''),
-    [LABELS.space, LABELS.clear, LABELS.enter]
-];
+/** YouTube's keyboard's letters after a to g (æ, ø and å where YouTube has other keys), and its Search key */
+var LETTERS = ['hijklmnæ', 'opqrstuø', "vwxyz-'å"];
+var ENTER = 'Search';
 
 /** Where the focus is: the back arrow, the suggestions, the keyboard or the results */
 type Place = 'back' | 'list' | 'keys' | 'rows';
@@ -89,17 +83,12 @@ export class SearchView implements View {
         this.query = h('div', 'bd-search-query');
         this.back = icon('back', 'by-search-back');
         this.list = h('div', 'by-suggestions');
-        var self = this;
-        this.keyboard = new Keyboard(LABELS, function (text) {
+        this.keyboard = youtubeKeyboard(LETTERS, function (text) {
             self.changed(text);
-        }, LINES);
+        }, ENTER);
         this.keyboard.onEnter = function () {
             self.submit(self.keyboard.text);
         };
-        // Delete as YouTube draws it
-        var del = this.keyboard.keyEl(LABELS.del) as HTMLElement;
-        setText(del, '');
-        del.appendChild(icon('backspace', 'bd-key-icon'));
         for (var i = 0; i < SUGGESTIONS_MAX; i++) {
             this.items.push(this.newItem());
         }
@@ -456,7 +445,7 @@ export class SearchView implements View {
         var self = this;
         this.restTimer = setTimeout(function () {
             var term = (self.at === 'list' ? (self.suggested[self.pick] || { text: '' }).text :
-                self.at === 'keys' && self.keyboard.focusedLabel === LABELS.enter ? self.keyboard.text : '').trim();
+                self.at === 'keys' && self.keyboard.focusedLabel === ENTER ? self.keyboard.text : '').trim();
             if (term && term !== self.searched) {
                 self.ahead(term);
             }

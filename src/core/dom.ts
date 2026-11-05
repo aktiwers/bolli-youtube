@@ -61,6 +61,37 @@ export function setSrc(img: HTMLImageElement, src: string): void {
     }
 }
 
+/** A loaded picture this narrow is a stand-in: i.ytimg answers a size a video lacks with a 120x90 picture and a
+ * 404, which this browser shows as loaded, without an error */
+var STAND_IN_WIDTH = 120;
+/** Pictures that came as stand-ins this session: their fallback is asked at once */
+var missing: { [src: string]: boolean } = {};
+
+/** Shows src in img, or fallback once src fails or comes as a stand-in (at once when it did before). Every picture
+ * with a fallback goes through here; without one, src as it is. */
+export function setPicture(img: HTMLImageElement, src: string, fallback?: string): void {
+    var other = fallback && fallback !== src ? fallback : '';
+    img.onerror = other ? function () { fallBack(img, src, other, false); } : null;
+    img.onload = other ? function () {
+        if (img.naturalWidth <= STAND_IN_WIDTH) {
+            fallBack(img, src, other, true);
+        }
+    } : null;
+    img.src = other && missing[src] ? other : src;
+}
+
+/** Puts other in img where src still shows; a stand-in is remembered (a failure may pass, so src is tried again) */
+function fallBack(img: HTMLImageElement, src: string, other: string, standIn: boolean): void {
+    if (img.getAttribute('src') === src) {
+        if (standIn) {
+            missing[src] = true;
+        }
+        // Hidden until the fallback loads (the stand-in would show meanwhile)
+        toggleClass(img, 'bd-fade--in', false);
+        img.src = other;
+    }
+}
+
 /** Remove the image sources under root to free their decoded bitmaps, which
  * are most of the app's memory (e.g. while a full-screen player covers it).
  * restoreImages puts them back. keep: images to leave as they are. */

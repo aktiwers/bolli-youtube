@@ -16,8 +16,7 @@ var ROOM = 120;
 /** A line of the panel: a choice, or text to read */
 export interface PanelLine {
     label: string;
-    /** Small lines over and under it (a comment's author and its likes) */
-    over?: string;
+    /** A small line under it */
     under?: string;
     /** Body text, not a choice's weight */
     plain?: boolean;
@@ -34,8 +33,6 @@ interface List {
     title: string;
     lines: () => PanelLine[];
     focused: number;
-    /** Called after Up/Down in it (comments load more near their end) */
-    more?: () => void;
 }
 
 /** Lines of a text by paragraph (blank lines between them), as text to read */
@@ -71,20 +68,10 @@ export class SidePanel {
         parent.appendChild(this.el);
     }
 
-    /** The focused line, and how many there are */
-    get at(): number {
-        return this.focused;
-    }
-
-    get count(): number {
-        return this.lines.length;
-    }
-
-    /** Opens a list on its own (closing any open ones); focus: the focused line (none: its chosen one); more: called
-     * after each move in it */
-    open(title: string, lines: PanelLine[] | (() => PanelLine[]), focus?: number, more?: () => void): void {
+    /** Opens a list on its own (closing any open ones); focus: the focused line (none: its chosen one) */
+    open(title: string, lines: PanelLine[] | (() => PanelLine[]), focus?: number): void {
         this.stack = [];
-        this.push(title, lines, focus, more);
+        this.push(title, lines, focus);
     }
 
     /** A list loaded from YouTube: "Loading <what>" until asked resolves, then lines(got), or a failure line; pushed
@@ -111,13 +98,13 @@ export class SidePanel {
     }
 
     /** Pushes a list over the shown one: Back returns to it, focus kept */
-    push(title: string, lines: PanelLine[] | (() => PanelLine[]), focus?: number, more?: () => void): void {
+    push(title: string, lines: PanelLine[] | (() => PanelLine[]), focus?: number): void {
         var top = this.stack[this.stack.length - 1];
         if (top) {
             top.focused = this.focused;
         }
         var made = typeof lines === 'function' ? lines : function () { return lines; };
-        this.stack.push({ title: title, lines: made, focused: focus === undefined ? -1 : focus, more: more });
+        this.stack.push({ title: title, lines: made, focused: focus === undefined ? -1 : focus });
         this.draw();
     }
 
@@ -130,13 +117,10 @@ export class SidePanel {
     }
 
     /** Appends lines at the end */
-    add(lines: PanelLine[]): void {
+    private add(lines: PanelLine[]): void {
         var self = this;
         lines.forEach(function (line) {
             var el = h('div', 'by-line' + (line.plain ? ' by-line--plain' : '') + (line.action ? ' by-line--choice' : ''));
-            if (line.over) {
-                el.appendChild(h('div', 'by-line-over', line.over));
-            }
             el.appendChild(h('div', 'by-line-label', line.label));
             if (line.under) {
                 el.appendChild(h('div', 'by-line-under', line.under));
@@ -162,10 +146,6 @@ export class SidePanel {
             case KEY.UP:
             case KEY.DOWN:
                 this.focus(this.focused + (code === KEY.UP ? -1 : 1));
-                var top = this.stack[this.stack.length - 1];
-                if (top.more) {
-                    top.more();
-                }
                 break;
             case KEY.OK:
                 var line = this.lines[this.focused] ? this.lines[this.focused].line : null;

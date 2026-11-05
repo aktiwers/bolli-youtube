@@ -11,7 +11,6 @@ import { clearRecentSearches } from './suggest.js';
 import { run } from './watch.js';
 import { innertube } from './youtube.js';
 
-
 /** An on/off setting (state, plus YouTube's commands to turn it on and off) or an action behind a confirmation */
 export interface AccountSetting {
     title: string;

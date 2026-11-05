@@ -11,17 +11,10 @@ import { KEY } from '../../core/keys.js';
 import { Keyboard } from '../../ui/keyboard.js';
 import { Language, languages } from '../api/languages.js';
 import { icon } from './icons.js';
+import { youtubeKeyboard } from './youtube-keyboard.js';
 
 /** Visible list rows */
 var ROWS = 9;
-var LABELS = { space: 'Space', del: 'Delete', clear: 'Clear', spaceUnits: 2 };
-var LINES = [
-    'abcdefg'.split('').concat([LABELS.del]),
-    'hijklmn'.split(''),
-    'opqrstu'.split(''),
-    'vwxyz-'.split(''),
-    [LABELS.space, LABELS.clear]
-];
 
 export class LanguagePicker {
     el: HTMLElement;
@@ -51,11 +44,7 @@ export class LanguagePicker {
                 check: el.appendChild(icon('check', 'by-check')) as HTMLElement });
         }
         this.none = list.appendChild(h('div', 'by-langs-none', 'No language has that name')) as HTMLElement;
-        this.keyboard = new Keyboard(LABELS, function (text) { self.find(text); }, LINES);
-        // Delete key with YouTube's backspace icon, as in Search
-        var del = this.keyboard.keyEl(LABELS.del) as HTMLElement;
-        setText(del, '');
-        del.appendChild(icon('backspace', 'bd-key-icon'));
+        this.keyboard = youtubeKeyboard(['hijklmn', 'opqrstu', 'vwxyz-'], function (text) { self.find(text); });
         var keys = this.el.appendChild(h('div', 'by-langs-keys')) as HTMLElement;
         keys.appendChild(this.keyboard.el);
         setShown(this.el, false);
@@ -117,8 +106,11 @@ export class LanguagePicker {
         var typed = words(text);
         var first: Language[] = [];
         var then: Language[] = [];
-        languages().forEach(function (l) {
-            var name = words(l.name);
+        var all = languages();
+        // (the names as matched, made once)
+        names = names || all.map(function (l) { return words(l.name); });
+        all.forEach(function (l, i) {
+            var name = names![i];
             if (!typed || name.indexOf(typed) === 0 || name.indexOf(' ' + typed) >= 0 || l.code.toLowerCase() === typed) {
                 first.push(l);
             } else if (name.indexOf(typed) > 0) {
@@ -151,6 +143,9 @@ export class LanguagePicker {
         setShown(this.none, !this.found.length);
     }
 }
+
+/** The languages' names as find() matches them (words), in languages() order */
+var names: string[] | null = null;
 
 /** Normalise for matching: lower case, single spaces, no brackets or dashes, accents of YouTube's names removed
  * ("Chinese (Traditional)": "chinese traditional"; "Māori": "maori") */

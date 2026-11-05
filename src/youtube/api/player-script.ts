@@ -21,7 +21,7 @@
 
 import { getText } from '../../core/http.js';
 import { load, save } from '../../core/store.js';
-import { answer, tvPage, youtubePage } from './youtube.js';
+import { answer, forgetTvPage, tvPage, youtubePage } from './youtube.js';
 
 export interface PlayerScript {
     /** Transform a stream URL's n parameter */
@@ -31,7 +31,7 @@ export interface PlayerScript {
 }
 
 /** The transform's location: the function name and its two arguments */
-export interface NTransform {
+interface NTransform {
     fn: string;
     a: number;
     b: number;
@@ -41,7 +41,10 @@ export interface NTransform {
 var IDLE_MS = 60000;
 /** Give up if the script has not run by then */
 var RUN_MS = 20000;
-/** A script that failed to run is not tried again for this long (each try costs ~1.8 s and ~45 MB on the TV) */
+/** An n asked of the worker gives up after this (also the self-test: a worker that hangs or died answers nothing) */
+var ASK_MS = 5000;
+/** A script it cannot use (another shape, or it does not run) is not tried again for this long: each use would fetch
+ * and search its 2.5 MB again, and a run costs ~1.8 s and ~45 MB on the TV */
 var FAILED_MS = 5 * 60000;
 /** Where the solver job keeps its code for each script (players/<id>/<name>.js), tried in turn: GitHub itself
  * (fresh within minutes), then a CDN (it may lag hours behind a new version, but answers when GitHub does not) */
@@ -74,15 +77,17 @@ var idleTimer = 0;
 var kept: { file: string; code: string }[] = load<{ file: string; code: string }[]>(KEPT_KEY) || [];
 
 /** The TV player script's signature timestamp, and its n transform (which waits for the script to run in its worker,
- * so /player can be asked meanwhile). Loaded on demand: again after a failure to load, FAILED_MS after a failure to
- * run, or after being dropped IDLE_MS after its last use. */
+ * so /player can be asked meanwhile). Loaded on demand: again after a failed fetch, FAILED_MS after a script it cannot
+ * use (another shape, or it does not run), or after being dropped IDLE_MS after its last use. */
 export function playerScript(): Promise<PlayerScript> {
     clearTimeout(idleTimer);
     if (!script) {
         var made: Promise<PlayerScript> = script = Promise.all<any>([tvPage(), youtubePage()]).then(function (got) {
             var found = PLAYER_PATH.exec(got[0].html);
             if (!found) {
-                throw new Error('No TV player script');
+                // (a page without it, e.g. an interstitial: the next try asks for the page again)
+                forgetTvPage();
+                throw lasting('No TV player script');
             }
             var file = found[1] + '/' + found[2] + '.js';
             var w = got[1] as Window;
@@ -91,28 +96,28 @@ export function playerScript(): Promise<PlayerScript> {
                     throw new Error('The TV player script: ' + r.status);
                 }
                 var js = r.text;
-                var sts = +(/signatureTimestamp:(\d+)/.exec(js) || [])[1];
+                // (as yt-dlp finds it: a space or the short name would not lose it; a whole name, not the end of another)
+                var sts = +(/\b(?:signatureTimestamp|sts)\s*:\s*(\d{5})/.exec(js) || [])[1];
                 if (!sts || js.lastIndexOf(END) < 0) {
-                    throw new Error('The TV player script has an unexpected shape');
+                    throw lasting('The TV player script has an unexpected shape');
                 }
-                var ran = run(js, file);
+                var ran = runSoon(js, file);
                 ran.then(null, function (e: Error) {
                     if (script === made) {
-                        var failed = script = Promise.reject(e);
-                        failed.then(null, function () { return undefined; });
-                        setTimeout(function () {
-                            if (script === failed) {
-                                script = null;
-                            }
-                        }, FAILED_MS);
+                        keepFailed(e);
                     }
                 });
                 return { sts: sts, n: function (v: string) { return ran.then(function (n) { return n(v); }); } };
             });
         });
-        made.then(null, function () {
+        made.then(null, function (e: Error) {
+            // A script of another shape waits as one that failed to run; one not fetched (the network) is asked again
             if (script === made) {
-                script = null;
+                if ((e as Error & { lasting?: boolean }).lasting) {
+                    keepFailed(e);
+                } else {
+                    script = null;
+                }
             }
         });
     }
@@ -120,21 +125,62 @@ export function playerScript(): Promise<PlayerScript> {
     asked.then(function () {
         if (script === asked) {
             clearTimeout(idleTimer);
-            idleTimer = setTimeout(drop, IDLE_MS) as unknown as number;
+            // (only this script: one that failed meanwhile keeps its FAILED_MS)
+            idleTimer = setTimeout(function () {
+                if (script === asked) {
+                    drop();
+                }
+            }, IDLE_MS) as unknown as number;
         }
     }, function () { return undefined; });
     return script;
 }
 
-/** The script running in its worker with its transform: found by its old shape, else through its stream URL builder
- * as yt-dlp's solver finds it (urlBuilders), else by the solver job's code for the script (file: <id>/<name>.js;
- * kept from an earlier run: no download) */
+/** A failure that stays as long as YouTube's script does (not the network's) */
+function lasting(message: string): Error {
+    var e = new Error(message) as Error & { lasting?: boolean };
+    e.lasting = true;
+    return e;
+}
+
+/** The script failed with e: kept for FAILED_MS */
+function keepFailed(e: Error): void {
+    var failed = script = Promise.reject(e);
+    failed.then(null, function () { return undefined; });
+    setTimeout(function () {
+        if (script === failed) {
+            script = null;
+        }
+    }, FAILED_MS);
+}
+
+/** run() a tick later, so /player is asked first (the search and the worker's start block a while). A function of its
+ * own: inside playerScript the waiting closure would share n()'s scope, keeping the script's text (2.5 MB) alive as
+ * long as the script is cached */
+function runSoon(js: string, file: string): Promise<(v: string) => Promise<string>> {
+    return new Promise<void>(function (ok) { setTimeout(ok, 0); }).then(function () { return run(js, file); });
+}
+
+/** The script running in its worker with its transform. The solver job's code kept for this script comes first: it
+ * is kept only where the other ways failed for it, each a whole run in a worker (~1.8 s on the TV) */
 function run(js: string, file: string): Promise<(v: string) => Promise<string>> {
+    return keptFor(file) ? fromJob(js, file).then(null, function () { return search(js, file); }) : search(js, file);
+}
+
+/** The solver job's code kept for a script (undefined: none) */
+function keptFor(file: string): { file: string; code: string } | undefined {
+    return kept.filter(function (k) { return k.file === file; })[0];
+}
+
+/** The transform found by its old shape, else through its stream URL builder as yt-dlp's solver finds it
+ * (urlBuilders), else by the solver job's code for the script (file: <id>/<name>.js; kept from an earlier run: no
+ * download) */
+function search(js: string, file: string): Promise<(v: string) => Promise<string>> {
     var found = findNTransform(js);
-    var own = found ? start(atEnd(js, exportOf(found))) : Promise.reject(new Error('The n transform was not found'));
+    var own = found ? startTransform(atEnd(js, exportOf(found))) : Promise.reject(new Error('The n transform was not found'));
     return own.then(null, function (e: Error) {
         var builders = urlBuilders(js);
-        return builders.length ? start(atEnd(js, builderExport(builders))) : Promise.reject(e);
+        return builders.length ? startTransform(atEnd(js, builderExport(builders))) : Promise.reject(e);
     }).then(null, function (e: Error) {
         return fromJob(js, file).then(null, function (other: Error) {
             throw new Error(e.message + ' (solved: ' + other.message + ')');
@@ -144,9 +190,9 @@ function run(js: string, file: string): Promise<(v: string) => Promise<string>> 
 
 /** The script running with the solver job's code for it: kept, else downloaded (and kept once it runs) */
 function fromJob(js: string, file: string): Promise<(v: string) => Promise<string>> {
-    var known = kept.filter(function (k) { return k.file === file; })[0];
+    var known = keptFor(file);
     if (known) {
-        return start(atEnd(js, known.code)).then(null, function (e: Error) {
+        return startTransform(atEnd(js, known.code)).then(null, function (e: Error) {
             // Downloaded again next time
             kept = kept.filter(function (k) { return k !== known; });
             save(KEPT_KEY, kept);
@@ -154,7 +200,7 @@ function fromJob(js: string, file: string): Promise<(v: string) => Promise<strin
         });
     }
     return solved(file).then(function (code) {
-        return start(atEnd(js, code)).then(function (n) {
+        return startTransform(atEnd(js, code)).then(function (n) {
             kept = [{ file: file, code: code }].concat(kept.filter(function (k) { return k.file !== file; })).slice(0, KEPT_COUNT);
             save(KEPT_KEY, kept);
             return n;
@@ -173,16 +219,34 @@ function solved(file: string): Promise<string> {
 
 /** Run a script (in parts) that sets self.__bolliN in a worker and call the transform by message (checked to actually
  * change an n) */
-function start(parts: string[]): Promise<(v: string) => Promise<string>> {
+export function startTransform(parts: string[]): Promise<(v: string) => Promise<string>> {
     removeWorker();
     var url = URL.createObjectURL(new Blob([STUB].concat(parts, [TAIL]), { type: 'text/javascript' }));
     var w = worker = new Worker(url);
     var asked: { [id: number]: (reply: { v?: string; error?: string }) => void } = {};
     var asks = 0;
+    var started = false;
+    // The worker failed (an ask got no reply, or it died): what waits is told; once started, it goes with its script
+    // (the next use starts them again; kept, it would cost every video ASK_MS)
+    var fail = function (message: string): void {
+        for (var id in asked) {
+            var told = asked[id];
+            delete asked[id];
+            told({ error: message });
+        }
+        if (started && worker === w) {
+            drop();
+        }
+    };
     var n = function (v: string): Promise<string> {
         return new Promise<string>(function (resolve, reject) {
             var id = ++asks;
+            var timer = setTimeout(function () {
+                // (not "did not answer": that is the network's, api/youtube.ts noAnswer, and this is the worker's)
+                fail('The n transform gave no reply');
+            }, ASK_MS);
             asked[id] = function (reply) {
+                clearTimeout(timer);
                 if (reply.error) {
                     reject(new Error(reply.error));
                 } else {
@@ -193,14 +257,20 @@ function start(parts: string[]): Promise<(v: string) => Promise<string>> {
         });
     };
     var ran = new Promise<(v: string) => Promise<string>>(function (resolve, reject) {
-        var timer = setTimeout(function () {
+        // Ran, failed or timed out: its script URL goes
+        var settle = function (): void {
+            clearTimeout(timer);
             URL.revokeObjectURL(url);
+        };
+        var timer = setTimeout(function () {
+            settle();
             reject(new Error('The TV player script did not run'));
         }, RUN_MS);
         w.onerror = function (e) {
-            clearTimeout(timer);
-            URL.revokeObjectURL(url);
-            reject(new Error('The TV player script failed: ' + e.message));
+            settle();
+            var message = 'The TV player script failed: ' + e.message;
+            reject(new Error(message));
+            fail(message);
         };
         w.onmessage = function (e) {
             var d = e.data;
@@ -212,8 +282,7 @@ function start(parts: string[]): Promise<(v: string) => Promise<string>> {
                 }
                 return;
             }
-            clearTimeout(timer);
-            URL.revokeObjectURL(url);
+            settle();
             if (d.ready !== 'function') {
                 reject(new Error('The n transform did not run'));
                 return;
@@ -222,6 +291,7 @@ function start(parts: string[]): Promise<(v: string) => Promise<string>> {
                 if (v === 'abcdefghijklmnop') {
                     reject(new Error('The n transform did not run'));
                 } else {
+                    started = true;
                     resolve(n);
                 }
             }, reject);

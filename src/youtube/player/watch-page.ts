@@ -5,7 +5,9 @@
 // built as soon as the details arrive and kept while hidden, so Down shows them at once. Lists open in the side
 // panel (ui/side-panel.ts), the comments over the video as YouTube's (comments-view.ts). Up from the buttons
 // focuses the bar (Left/Right jump); the page hides after HIDE_MS
-// without a key while the video plays. It also holds the video's details (e.g. the video YouTube plays next).
+// without a key while the video plays. It also holds the video's details (e.g. the video YouTube plays next). Its
+// likes and dislikes show beside the views once the dislikes are known, as Return YouTube Dislike estimates them (asked
+// when it shows a video: api/dislikes.ts; Settings: Dislike counts).
 // Related layout sizes come from the theme (metrics.watch), the rest from themes/<id>.css.
 
 import { h, setShown, setSrc, setText, toggleClass, translate } from '../../core/dom.js';
@@ -14,16 +16,18 @@ import { clock } from '../../core/time.js';
 import { RowStack } from '../../ui/row-stack.js';
 import { rowHeight, TileRow } from '../../ui/tile-row.js';
 import { dearrowTitle } from '../api/dearrow.js';
+import { dislikes, shortCount } from '../api/dislikes.js';
 import { dots, Page, Video, videoOf } from '../api/feed.js';
+import { prefs } from '../api/prefs.js';
 import { Segment } from '../api/sponsorblock.js';
 import { Comments, comments, WatchInfo } from '../api/watch.js';
-import { apply, drawSubscribe, openSaveTo, pressSubscribe } from '../ui/account.js';
+import { apply, openSaveTo, pressSubscribe, subscribed } from '../ui/account.js';
 import { icon, setIcon } from '../ui/icons.js';
 import { Pills } from '../ui/pills.js';
 import { PanelLine, paragraphs, SidePanel } from '../ui/side-panel.js';
 import { metrics, themed } from '../ui/theme.js';
-import { VideoTiles } from '../views/videos.js';
-import { bufferedEnd, lengthOf } from './dash.js';
+import { gridLines, VideoTiles } from '../views/tiles.js';
+import { bufferedEnd } from './engine.js';
 import { liveShare, LiveSpan, liveTime } from './live-engine.js';
 import { BarMarks } from './bar-marks.js';
 import { CommentsView } from './comments-view.js';
@@ -42,6 +46,8 @@ export interface WatchActions {
     jump(seconds: number): void;
     previous(): void;
     next(): void;
+    /** The video Next plays (the queue's next, else YouTube's; null: none) */
+    nextVideo(): Video | null;
     play(video: Video): void;
     channel(page: Page): void;
     subtitles(): void;
@@ -52,6 +58,8 @@ export interface WatchActions {
     restPage(page: Page): void;
     /** A live stream's window (null: a video) */
     live(): LiveSpan | null;
+    /** The video's length (s; 0 unknown) */
+    length(): number;
     /** The comments of video id opened (null: closed): offered to the phone meanwhile, as YouTube's TV app does */
     comments(id: string | null): void;
 }
@@ -107,6 +115,9 @@ export class WatchPage {
     private channel = '';
     /** The video is in a playlist (as far as known) */
     private saved = false;
+    /** Return YouTube Dislike's count for the video (null: none known), and whether it was asked for */
+    private dislikeCount: number | null = null;
+    private dislikesAsked = false;
     /** The comments over the video, as YouTube's player shows them */
     private comments: CommentsView;
     /** Incremented per video, so late replies for the previous one are dropped */
@@ -116,7 +127,8 @@ export class WatchPage {
     /** YouTube's "Includes paid promotion" under the title (hidden: none) */
     private paid: HTMLElement;
 
-    constructor(parent: HTMLElement, private video: HTMLVideoElement, private actions: WatchActions) {
+    /** before: its place in parent (else last) */
+    constructor(parent: HTMLElement, private video: HTMLVideoElement, private actions: WatchActions, before?: Node) {
         var self = this;
         this.el = h('div', 'by-watch');
         this.el.appendChild(h('div', 'by-watch-shade'));
@@ -182,7 +194,7 @@ export class WatchPage {
         add(center, icon('previous', 'by-watch-button by-watch-icon'), function () { self.actions.previous(); });
         this.playAt = this.buttons.count;
         add(center, this.playButton, function () { self.actions.toggle(); });
-        add(center, icon('next', 'by-watch-button by-watch-icon'), function () { self.actions.next(); }, function () { return !!self.upcoming(); });
+        add(center, icon('next', 'by-watch-button by-watch-icon'), function () { self.actions.next(); }, function () { return !!self.actions.nextVideo(); });
         add(group, this.likeButton, function () { self.like('LIKE'); }, has('like'));
         add(group, this.dislikeButton, function () { self.like('DISLIKE'); }, has('like'));
         this.commentsAt = this.buttons.count;
@@ -208,7 +220,7 @@ export class WatchPage {
             self.arm();
         };
         setShown(this.el, false);
-        parent.appendChild(this.el);
+        parent.insertBefore(this.el, before || null);
         ['play', 'pause', 'timeupdate', 'progress'].forEach(function (type) {
             video.addEventListener(type, function () {
                 if (self.shown) {
@@ -237,6 +249,8 @@ export class WatchPage {
         this.commentsAhead = null;
         this.info = null;
         this.saved = false;
+        this.dislikeCount = null;
+        this.dislikesAsked = false;
         this.description = '';
         this.stack.setRows([]);
         this.marks.draw([], [], 0);
@@ -283,16 +297,14 @@ export class WatchPage {
         }
         this.channel = info.channel || this.channel;
         this.drawMeta();
+        this.askDislikes();
         setSrc(this.avatar, info.avatar);
         var m = metrics().watch;
         this.tiles = new VideoTiles();
         var self = this;
         this.tiles.shown = function () { return self.stack.rows; };
-        var items = this.tiles.items(info.related);
-        var lines: TileRow[] = [];
-        for (var i = 0; i < items.length; i += 3) {
-            lines.push(new TileRow({ title: '', shape: m.tile, layout: m.rows, items: items.slice(i, i + 3), noTitle: true, noWrap: true }));
-        }
+        // Three a line (they arrive during a start, the page hidden: tiles built once drawn)
+        var lines = gridLines(this.tiles.items(info.related), 3, m.tile, m.rows);
         this.stack.setRows(lines);
         this.stack.setFocused(this.zone === 'related');
         this.setStatus(lines.length ? '' : 'No related videos.');
@@ -334,10 +346,34 @@ export class WatchPage {
         }
         this.place();
         this.update();
-        // The subscription may have changed on the channel page meanwhile
+        // The subscription may have changed on the channel page meanwhile, Dislike counts in Settings
         this.drawAccount();
+        this.drawMeta();
+        this.askDislikes();
         this.arm();
         this.onShown(true);
+    }
+
+    /** Return YouTube Dislike's count, once the page shows the video with its details (only then: each video asked for
+     * goes to its server) */
+    private askDislikes(): void {
+        if (this.dislikesAsked || !this.shown || !this.info || !prefs().dislikes) {
+            return;
+        }
+        this.dislikesAsked = true;
+        var self = this;
+        var gen = this.gen;
+        dislikes(this.id).then(function (n) {
+            if (gen === self.gen) {
+                self.dislikeCount = n;
+                self.drawMeta();
+            }
+        }, function () {
+            // Asked again the next time the page shows the video
+            if (gen === self.gen) {
+                self.dislikesAsked = false;
+            }
+        });
     }
 
     /** Hides the page (related tiles and pictures are kept for next time) */
@@ -384,7 +420,7 @@ export class WatchPage {
             var row = self.stack.row;
             var buttons = self.zone === 'buttons';
             var video = self.zone === 'related' && row ? self.tiles.video(row.focused) :
-                buttons && self.buttons.at === self.playAt + 1 ? self.upcoming() : null;
+                buttons && self.buttons.at === self.playAt + 1 ? self.actions.nextVideo() : null;
             var page = video ? video.page : buttons && self.buttons.at === self.channelAt && self.info ? self.info.channelPage : null;
             var token = buttons && self.buttons.at === self.commentsAt && self.info ? self.info.comments : '';
             if (page) {
@@ -531,7 +567,7 @@ export class WatchPage {
         var info = this.info;
         var lines: PanelLine[] = [{
             label: this.title.textContent || '',
-            under: info ? dots([info.views, info.published, info.likes ? info.likes + ' likes' : '']) : ''
+            under: info ? dots([info.views, info.published].concat(this.votes())) : ''
         }];
         if (this.channel) {
             lines.push({ label: this.channel, under: info ? info.subscribers : '' });
@@ -561,24 +597,33 @@ export class WatchPage {
     /** "Channel • 23M views • 11y ago" */
     private drawMeta(): void {
         var info = this.info;
-        // Channel name left as is: themed() would rewrite "NBA 2K" as a count
-        setText(this.meta, dots([this.channel, info ? themed(info.views) : '', info ? themed(info.age) : '']));
+        // Channel name left as is: themed() would rewrite "NBA 2K" as a count; likes and dislikes once the dislikes
+        // are known
+        var votes = this.dislikeCount !== null && prefs().dislikes ? this.votes() : [];
+        setText(this.meta, dots([this.channel, info ? themed(info.views) : '', info ? themed(info.age) : ''].concat(votes.map(themed))));
+    }
+
+    /** "12K likes", "345 dislikes" (those known) */
+    private votes(): string[] {
+        var likes = this.info && this.info.likes;
+        return [likes ? likes + ' likes' : '', this.dislikeCount !== null && prefs().dislikes ? shortCount(this.dislikeCount) + ' dislikes' : ''];
     }
 
     /** Draws the subscribed, liked, disliked and saved states as YouTube does */
     private drawAccount(): void {
         var info = this.info;
-        // Subscribed: a round bell button (OK: bell options, Unsubscribe), else the Subscribe pill
-        var sub = info && info.subscribe;
+        // Subscribed: a round bell button (OK: bell options, Unsubscribe), else the Subscribe pill (each drawn only
+        // when it changes: every show draws them)
         var el = this.subscribeButton;
-        el.removeAttribute('data-icon');
-        drawSubscribe(el, sub, 'by-watch-subscribe--on');
-        var bell = !!(sub && sub.subscribed);
-        toggleClass(el, 'by-watch-pill', !bell);
-        toggleClass(el, 'by-watch-icon', bell);
+        var bell = subscribed(info && info.subscribe);
         if (bell) {
             setIcon(el, 'bell');
+        } else {
+            el.removeAttribute('data-icon');
+            setText(el, 'Subscribe');
         }
+        toggleClass(el, 'by-watch-pill', !bell);
+        toggleClass(el, 'by-watch-icon', bell);
         var status = info && info.like ? info.like.status : '';
         setIcon(this.likeButton, status === 'LIKE' ? 'liked' : 'like');
         setIcon(this.dislikeButton, status === 'DISLIKE' ? 'disliked' : 'dislike');
@@ -608,7 +653,7 @@ export class WatchPage {
     /** Updates the time, the bar (fills scaled, written only on change) and the play-pause icon */
     private update(): void {
         var v = this.video;
-        var d = lengthOf(v);
+        var d = this.actions.length();
         var t = v.currentTime;
         var span = this.actions.live();
         // The segment's or chapter's name after the time, as on YouTube; live: LIVE or how far behind, over the

@@ -3,7 +3,10 @@
 
 import { h } from '../../core/dom.js';
 import { Format } from '../api/streams.js';
-import { bufferedEnd } from './dash.js';
+import { bufferedEnd } from './engine.js';
+
+/** A video element with the TV browser's frame counts */
+export type CountedVideo = HTMLVideoElement & { webkitDroppedFrameCount?: number; webkitDecodedFrameCount?: number };
 
 var EVERY_MS = 1000;
 
@@ -44,7 +47,7 @@ export class StatsBox {
 
     /** A video loaded: frame counts continue across videos on a kept pipeline, so count from here */
     loaded(): void {
-        var v = this.v as HTMLVideoElement & { webkitDroppedFrameCount?: number; webkitDecodedFrameCount?: number };
+        var v = this.v as CountedVideo;
         this.dropped = v.webkitDroppedFrameCount || 0;
         this.decoded = v.webkitDecodedFrameCount || 0;
     }
@@ -57,7 +60,7 @@ export class StatsBox {
     }
 
     private write(): void {
-        var v = this.v as HTMLVideoElement & { webkitDroppedFrameCount?: number; webkitDecodedFrameCount?: number };
+        var v = this.v as CountedVideo;
         var s = this.of();
         var codec = function (f: Format | null): string { return f ? (/codecs="([^"]+)"/.exec(f.mime) || ['', '?'])[1] + ' (' + f.itag + ')' : '-'; };
         var res = function (f: Format | null): string { return f ? f.height + 'p' + (f.fps || '') : '-'; };

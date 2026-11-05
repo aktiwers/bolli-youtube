@@ -9,6 +9,7 @@
 import { knownAvatar, noteAvatar } from './avatars.js';
 import { all, commandsOf, first, get, nextOf, Page, pageOf, picture, rowsOf, text, Video } from './feed.js';
 import { forgetKept, Keeper } from './kept-pages.js';
+import { offThreadJson } from './off-thread.js';
 import { forgetPages } from './page-store.js';
 import { innertube, innertubeText, objectAt } from './youtube.js';
 
@@ -36,6 +37,8 @@ export interface WatchInfo {
     subscribe: Subscribe | null;
     /** Its chapters, in order (empty: none) */
     chapters: Chapter[];
+    /** A live stream's chat: the token for its first messages ('' none; api/live-chat.ts) */
+    chat: string;
 }
 
 /** A chapter of a video: its name, where it begins (s), YouTube's picture of it ('' none) */
@@ -65,19 +68,37 @@ export interface SaveOption {
     remove: any;
 }
 
-/** InnerTube endpoints for the commands the app sends, with the command's fields as body; likes by status (LIKES) */
-var ENDPOINTS: { [command: string]: string } = {
-    subscribeEndpoint: 'subscription/subscribe',
-    unsubscribeEndpoint: 'subscription/unsubscribe',
-    modifyChannelNotificationPreferenceEndpoint: 'notification/modify_channel_preference',
-    playlistEditEndpoint: 'browse/edit_playlist',
-    clearWatchHistoryEndpoint: 'history/clear_watch_history',
-    clearSearchHistoryEndpoint: 'history/clear_search_history',
-    // History's Pause watch history (its page's button; Settings' is a setting)
-    pauseWatchHistoryEndpoint: 'history/pause_watch_history',
-    resumeWatchHistoryEndpoint: 'history/resume_watch_history'
-};
 var LIKES: { [status: string]: string } = { LIKE: 'like/like', DISLIKE: 'like/dislike', INDIFFERENT: 'like/removelike' };
+
+/** The commands the app sends: the InnerTube endpoint and body each makes of its fields */
+var REQUESTS: { [command: string]: (e: any) => [string, { [key: string]: unknown }] } = {
+    feedbackEndpoint: function (e) { return ['feedback', { feedbackTokens: [e.feedbackToken], isFeedbackTokenUnencrypted: false, shouldMerge: false }]; },
+    // One of the account's on/off settings (Settings' History & data)
+    setSettingEndpoint: function (e) { return ['account/set_setting', { settingItemId: e.settingItemId, newValue: { boolValue: !!e.boolValue } }]; },
+    // A comment's Like or Dislike, on or off
+    performCommentActionEndpoint: function (e) { return ['comment/perform_comment_action', { actions: [e.action] }]; },
+    likeEndpoint: function (e) { return [LIKES[e.status] || LIKES.INDIFFERENT, { target: e.target, params: e.likeParams || e.dislikeParams || e.removeLikeParams }]; },
+    subscribeEndpoint: asIs('subscription/subscribe'),
+    unsubscribeEndpoint: asIs('subscription/unsubscribe'),
+    modifyChannelNotificationPreferenceEndpoint: asIs('notification/modify_channel_preference'),
+    playlistEditEndpoint: asIs('browse/edit_playlist'),
+    clearWatchHistoryEndpoint: asIs('history/clear_watch_history'),
+    clearSearchHistoryEndpoint: asIs('history/clear_search_history'),
+    // History's Pause watch history (its page's button; Settings' is a setting)
+    pauseWatchHistoryEndpoint: asIs('history/pause_watch_history'),
+    resumeWatchHistoryEndpoint: asIs('history/resume_watch_history')
+};
+
+/** A command sent to endpoint with its own fields as the body */
+function asIs(endpoint: string): (e: any) => [string, { [key: string]: unknown }] {
+    return function (e) {
+        var body: { [key: string]: unknown } = {};
+        for (var key in e) {
+            body[key] = e[key];
+        }
+        return [endpoint, body];
+    };
+}
 
 export interface Comment {
     author: string;
@@ -117,14 +138,13 @@ var infos = new Keeper<WatchInfo>(5 * 60 * 1000, 3, true, true);
 var nextTexts = new Keeper<string>(5 * 60 * 1000, 3, false, true);
 
 /** A video's watch page details; notes its channel's picture. The reply is usually fetched earlier (for the channel
- * picture, on tile focus or a start) and parsed only once playback runs, since parsing delays a start ~0.35 s */
+ * picture, on tile focus or a start); it is parsed off the main thread, since a start runs meanwhile (here, parsing
+ * its 150-200 KB took 30-140 ms) */
 export function watchInfo(id: string): Promise<WatchInfo> {
-    return infos.get(id, function () {
-        return nextText(id).then(function (reply) {
-            var info = watchInfoOf(JSON.parse(reply));
-            noteAvatar(info.channel, info.avatar);
-            return info;
-        });
+    // Kept as the worker's JSON: each caller parses its own copy once
+    return infos.getJson(id, function () { return offThreadJson(nextText(id), 'watch', watchInfoOf); }).then(function (info) {
+        noteAvatar(info.channel, info.avatar);
+        return info;
     });
 }
 
@@ -194,6 +214,18 @@ export function forgetSaves(): void {
     recent = {};
 }
 
+/** The account's writes, sent one after another */
+var writes: Promise<unknown> = Promise.resolve();
+
+/** Runs task once the writes before it are done, worked or not: two quick presses (like, then unlike) reach YouTube in
+ * their order (sent at once, either could be applied last) */
+export function inTurn<T>(task: () => Promise<T>): Promise<T> {
+    var done = writes.then(task);
+    var none = function (): undefined { return undefined; };
+    writes = done.then(none, none);
+    return done;
+}
+
 /** Sends one of YouTube's commands (a like, a subscription, the bell, a playlist edit, feedback such as "Not
  * interested", an account setting, clearing a history) as its TV app does. Clears cached replies before and after
  * (they may show the old state), and stored channel pages when a subscription changes. */
@@ -202,7 +234,7 @@ export function run(command: any): Promise<unknown> {
     var subscription = commandsOf(command).some(function (c: any) {
         return !!(c.subscribeEndpoint || c.unsubscribeEndpoint || c.modifyChannelNotificationPreferenceEndpoint);
     });
-    return send(command).then(function (r) {
+    return inTurn(function () { return send(command); }).then(function (r) {
         // Again when done: replies fetched meanwhile may show the old state
         forgetKept();
         if (subscription) {
@@ -224,55 +256,20 @@ function send(command: any): Promise<unknown> {
 
 /** The request that sends command (null: unsupported) */
 function requestOf(command: any): (() => Promise<unknown>) | null {
-    var feedback = command.feedbackEndpoint;
-    if (feedback) {
-        return function () {
-            return innertube('feedback', { feedbackTokens: [feedback.feedbackToken], isFeedbackTokenUnencrypted: false, shouldMerge: false });
-        };
-    }
-    // One of the account's on/off settings (Settings' History & data)
-    var setting = command.setSettingEndpoint;
-    if (setting) {
-        return function () {
-            return innertube('account/set_setting', { settingItemId: setting.settingItemId, newValue: { boolValue: !!setting.boolValue } });
-        };
-    }
-    // A comment's Like or Dislike, on or off
-    var vote = command.performCommentActionEndpoint;
-    if (vote) {
-        return function () {
-            return innertube('comment/perform_comment_action', { actions: [vote.action] });
-        };
-    }
-    var like = command.likeEndpoint;
-    if (like) {
-        return function () {
-            return innertube(LIKES[like.status] || LIKES.INDIFFERENT, { target: like.target, params: like.likeParams || like.dislikeParams || like.removeLikeParams });
-        };
-    }
-    for (var name in ENDPOINTS) {
+    for (var name in REQUESTS) {
         if (command[name]) {
-            return endpointRequest(name, command);
+            var asked = REQUESTS[name](command[name]);
+            return function () {
+                return innertube(asked[0], asked[1]).then(function (r) {
+                    if (command.playlistEditEndpoint) {
+                        noteEdit(command.playlistEditEndpoint);
+                    }
+                    return r;
+                });
+            };
         }
     }
     return null;
-}
-
-/** command sent to ENDPOINTS[name] with its fields */
-function endpointRequest(name: string, command: any): () => Promise<unknown> {
-    return function () {
-        var e = command[name];
-        var body: { [key: string]: unknown } = {};
-        for (var key in e) {
-            body[key] = e[key];
-        }
-        return innertube(ENDPOINTS[name], body).then(function (r) {
-            if (command.playlistEditEndpoint) {
-                noteEdit(command.playlistEditEndpoint);
-            }
-            return r;
-        });
-    };
 }
 
 /** Parses a /next reply */
@@ -314,7 +311,8 @@ export function watchInfoOf(reply: any): WatchInfo {
         commentCount: text(get(panel('comment-item-section'), 'header', 'engagementPanelTitleHeaderRenderer', 'contextualInfo')),
         like: likeOf(likeButton),
         subscribe: subscribeOf(subscribeButton),
-        chapters: chaptersOf(reply)
+        chapters: chaptersOf(reply),
+        chat: get(results, 'conversationBar', 'liveChatRenderer', 'continuations', 0, 'reloadContinuationData', 'continuation') || ''
     };
 }
 

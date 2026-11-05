@@ -1,11 +1,16 @@
 // The chapter row, as in YouTube's TV player: a video's chapters as cards in a row over the info bar's time line
-// (YouTube's picture of each with its start time over it, its name under it), the selected one ringed. The row
-// scrolls to keep the selected card in the middle; pictures load only for the cards in view and one on either side.
+// (a picture of each with its start time over it, its name under it), the selected one ringed. The picture is the
+// video's frame where the chapter begins, from its storyboard (YouTube's TV replies give every chapter the video's
+// own thumbnail), or YouTube's picture of the chapter where those differ. The row scrolls to keep the selected card
+// in the middle; pictures load only for the cards in view and one on either side (while the row is closed, through
+// pictures of their own: a hidden card's background is not fetched).
 
-import { h, setSrc, toggleClass, translate } from '../../core/dom.js';
+import { h, toggleClass, translate } from '../../core/dom.js';
 import { clock } from '../../core/time.js';
+import { Storyboard, StoryboardFrame, storyboardFrame } from '../api/streams.js';
 import { Chapter } from '../api/watch.js';
 import { chapterIndex } from './bar-marks.js';
+import { paintFrame } from './seek-preview.js';
 
 /** A card's width, the gap after it and its picture's height (layout px), and how many cards show at once: seven fill
  * the info bar's 1168 px exactly */
@@ -18,9 +23,16 @@ export class ChapterRow {
     private el: HTMLElement;
     private strip: HTMLElement;
     private chapters: Chapter[] = [];
-    /** The cards and their pictures (made once per video, when first needed) */
+    /** The cards and their pictures (made once per video, when first needed), and what each picture shows */
     private cards: HTMLElement[] = [];
-    private pictures: HTMLImageElement[] = [];
+    private pictures: HTMLElement[] = [];
+    private painted: string[] = [];
+    /** YouTube's pictures of the chapters differ (else the storyboard's frames show) */
+    private own = false;
+    /** The video's storyboard (null: none, as for a live stream) */
+    private board: Storyboard | null = null;
+    /** The sheets fetched ahead (prefetch) */
+    private warm: HTMLImageElement[] = [];
     /** The selected chapter (-1: closed) */
     private at = -1;
 
@@ -52,9 +64,22 @@ export class ChapterRow {
         }
         this.close();
         this.chapters = chapters;
+        this.own = chapters.some(function (c) { return c.picture !== chapters[0].picture; });
         this.cards = [];
         this.pictures = [];
+        this.painted = [];
+        // (the previous video's sheets let go)
+        this.warm.forEach(function (picture) { picture.removeAttribute('src'); });
+        this.warm = [];
         this.strip.innerHTML = '';
+    }
+
+    /** The video's storyboard, for the chapters' frames */
+    setFrames(sb: Storyboard | null): void {
+        if (sb !== this.board) {
+            this.board = sb;
+            this.painted = [];
+        }
     }
 
     /** Opens with the chapter playing at t (s) selected */
@@ -77,10 +102,24 @@ export class ChapterRow {
 
     /** The pictures around the chapter playing at t (s) fetched ahead, so the row opens with them */
     prefetch(t: number): void {
-        if (this.has) {
-            this.make();
-            this.load(first(Math.max(0, chapterIndex(this.chapters, t)), this.chapters.length));
+        if (!this.has) {
+            return;
         }
+        this.make();
+        var from = first(Math.max(0, chapterIndex(this.chapters, t)), this.chapters.length);
+        this.load(from);
+        var urls: string[] = [];
+        for (var i = Math.max(0, from - 1); i < Math.min(this.chapters.length, from + SHOWN + 1); i++) {
+            var url = this.pictureOf(this.chapters[i]);
+            if (url && urls.indexOf(url) < 0) {
+                urls.push(url);
+            }
+        }
+        this.warm = urls.map(function (u) {
+            var picture = new Image();
+            picture.src = u;
+            return picture;
+        });
     }
 
     private select(at: number): void {
@@ -99,11 +138,40 @@ export class ChapterRow {
         }
     }
 
-    /** The pictures of the cards shown from card from on, and of one on either side */
+    /** The pictures of the cards shown from card from on, and of one on either side (each drawn once) */
     private load(from: number): void {
+        var sb = this.board;
         for (var i = Math.max(0, from - 1); i < Math.min(this.chapters.length, from + SHOWN + 1); i++) {
-            setSrc(this.pictures[i], this.chapters[i].picture);
+            var c = this.chapters[i];
+            var f = this.frameOf(c);
+            var shows = f ? f.url + ' ' + f.col + ' ' + f.row : c.picture || '';
+            if (this.painted[i] === shows) {
+                continue;
+            }
+            this.painted[i] = shows;
+            var style = this.pictures[i].style;
+            if (f && sb) {
+                paintFrame(style, sb, f, CARD, PICTURE, Math.max(CARD / sb.w, PICTURE / sb.h), true);
+            } else if (c.picture) {
+                style.backgroundImage = 'url("' + c.picture + '")';
+                style.backgroundSize = 'cover';
+                style.backgroundPosition = '50% 50%';
+            }
         }
+    }
+
+    /** The storyboard's frame where chapter c begins (its first a second or more into it: its very start is often a
+     * cut or black; the middle of that frame's time, so rounding never gives the one before); null: YouTube's
+     * pictures of the chapters differ, or no storyboard */
+    private frameOf(c: Chapter): StoryboardFrame | null {
+        var sb = this.board;
+        return sb && !this.own ? storyboardFrame(sb, (Math.ceil((c.start + 1) * 1000 / sb.interval) + 0.5) * sb.interval / 1000) : null;
+    }
+
+    /** The picture chapter c's card shows: a storyboard sheet, or YouTube's picture of it ('' none) */
+    private pictureOf(c: Chapter): string {
+        var f = this.frameOf(c);
+        return f ? f.url : c.picture || '';
     }
 
     /** The cards, without their pictures (once per video) */
@@ -117,7 +185,7 @@ export class ChapterRow {
             card.style.marginRight = GAP + 'px';
             var frame = card.appendChild(h('div', 'by-chapter-frame')) as HTMLElement;
             frame.style.height = PICTURE + 'px';
-            this.pictures.push(frame.appendChild(h('img', 'by-chapter-img')) as HTMLImageElement);
+            this.pictures.push(frame.appendChild(h('div', 'by-chapter-img')) as HTMLElement);
             frame.appendChild(h('div', 'by-chapter-time', clock(this.chapters[i].start)));
             card.appendChild(h('div', 'by-chapter-title', this.chapters[i].title));
             this.cards.push(this.strip.appendChild(card) as HTMLElement);

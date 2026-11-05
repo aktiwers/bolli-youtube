@@ -18,10 +18,8 @@ import { icon } from '../ui/icons.js';
 import { Pills } from '../ui/pills.js';
 import { PanelLine, paragraphs, SidePanel } from '../ui/side-panel.js';
 import { metrics, themed } from '../ui/theme.js';
-import { fadeIn, FeedTexts, FeedView, SearchBar } from './videos.js';
+import { fadeIn, FeedHost, FeedTexts, FeedView, SearchBar } from './videos.js';
 
-/** Focus resting this long on a sub page button prefetches that page (as on a tile) */
-var REST_MS = 1500;
 /** A stored page this old is shown, then refreshed in the background */
 var RENEW_MS = 30 * 60 * 1000;
 /** Placeholder for the channel's rows once the feed owns them */
@@ -41,7 +39,7 @@ export interface KnownChannel {
     fresh?: boolean;
 }
 
-export class ChannelView implements View {
+export class ChannelView extends FeedHost implements View {
     el: HTMLElement;
     private head: HTMLElement;
     private banner: HTMLImageElement;
@@ -56,24 +54,23 @@ export class ChannelView implements View {
     private buttons = new Pills('by-pill--focused');
     private subscribeButton: HTMLElement | null = null;
     private rowsBox: HTMLElement;
-    private feed: FeedView;
     private panel: SidePanel;
     private channel: Channel | null = null;
     private at: Place = 'buttons';
     private focused = true;
     /** Sub pages by button index */
     private pageAt: { [at: number]: Page } = {};
-    private restTimer = 0;
     /** The description shown (fitted: trimmed to three lines after layout) */
     private said = '';
     private fitted = false;
     /** Name and avatar shown from `known` before YouTube's reply */
     private early = false;
 
-    /** open: OK on a tile; openPage: opens a sub page over this one; ahead: prefetches a sub page; search: OK on the
-     * search bar; known: name and avatar to show at once */
+    /** open: OK on a tile; openPage: opens a sub page over this one; search: OK on the search bar; known: name and
+     * avatar to show at once */
     constructor(page: Page, texts: FeedTexts, private open: (video: Video) => void, private openPage: (page: Page) => void,
-        private ahead: (page: Page) => void, search: (voice: boolean) => void, known?: KnownChannel) {
+        search: (voice: boolean) => void, known?: KnownChannel) {
+        super();
         var self = this;
         this.el = h('div', 'by-channel');
         this.banner = h('img', 'by-channel-banner bd-fade') as HTMLImageElement;
@@ -133,11 +130,6 @@ export class ChannelView implements View {
         this.place();
     }
 
-    /** The rows (or a message instead) have arrived */
-    get settled(): boolean {
-        return this.feed.settled;
-    }
-
     show(): void {
         restoreImages(this.el);
         setShown(this.el, true);
@@ -148,36 +140,15 @@ export class ChannelView implements View {
     }
 
     hide(): void {
-        clearTimeout(this.restTimer);
         this.panel.close();
         setShown(this.el, false);
         this.feed.hide();
         releaseImages(this.el);
     }
 
-    /** A video covers it (or not): fresh rows are swapped in out of sight */
-    cover(covered: boolean): void {
-        this.feed.cover(covered);
-    }
-
-    renewIfOld(): void {
-        this.feed.renewIfOld();
-    }
-
-    putFresh(): void {
-        this.feed.putFresh();
-    }
-
-    setProgress(id: string, progress: number): void {
-        this.feed.setProgress(id, progress);
-    }
-
-    removeVideo(id: string): void {
-        this.feed.removeVideo(id);
-    }
-
-    reload(): void {
-        this.feed.reload();
+    /** Closed for good (Back): its rows stop as well */
+    destroy(): void {
+        this.feed.destroy();
     }
 
     setFocused(focused: boolean): void {
@@ -188,11 +159,6 @@ export class ChannelView implements View {
         this.bar.setFocused(focused && this.at === 'bar');
     }
 
-    retry(quiet?: boolean): boolean {
-        return this.feed.retry(quiet);
-    }
-
-    /** The focused tile's video (null while focus is in the header) */
     /** Play mix's preview while the focus rests on it, played in the banner after its delay, as YouTube's (null:
      * none) */
     headerPreview(): { id: string; frame: HTMLElement; delay: number; sound: boolean } | null {
@@ -206,6 +172,7 @@ export class ChannelView implements View {
         toggleClass(this.el, 'by-channel--preview', on);
     }
 
+    /** The focused tile's video (null while focus is in the header) */
     focusedVideo(): Video | null {
         return this.at === 'rows' ? this.feed.focusedVideo() : null;
     }
@@ -245,12 +212,10 @@ export class ChannelView implements View {
         switch (code) {
             case KEY.LEFT:
             case KEY.RIGHT:
-                if (this.buttons.move(code === KEY.LEFT ? -1 : 1)) {
-                    this.restSoon();
-                }
+                this.buttons.move(code === KEY.LEFT ? -1 : 1);
                 return true;
             case KEY.DOWN:
-                if (this.feed.hasRows) {
+                if (this.feed.focusable) {
                     this.go('rows');
                 }
                 return true;
@@ -330,25 +295,21 @@ export class ChannelView implements View {
     private fitDescription(): void {
         var said = this.said;
         var line = parseFloat(window.getComputedStyle(this.description).lineHeight);
+        var fits = DESCRIPTION_LINES * line + 1;
+        var height = this.description.offsetHeight;
         // Not laid out while a video covers the app; fitted on show
-        this.fitted = this.description.offsetHeight > 0;
-        for (var i = 0; this.fitted && line && i < 8 && this.description.offsetHeight > DESCRIPTION_LINES * line + 1; i++) {
-            var cut = said.lastIndexOf(' ', Math.floor(said.length * 0.85));
-            said = said.slice(0, cut > 0 ? cut : Math.floor(said.length * 0.85));
+        this.fitted = height > 0;
+        // A seventh off at a time (by the heights' share would cut a whole line for a word on a fourth one)
+        for (var i = 0; this.fitted && line && i < 8 && height > fits; i++) {
+            said = cutAtWord(said, Math.floor(said.length * 0.85));
             setText(this.descriptionText, said);
+            height = this.description.offsetHeight;
         }
     }
 
-    /** Prefetches a sub page once focus has rested REST_MS on its button */
-    private restSoon(): void {
-        clearTimeout(this.restTimer);
-        var self = this;
-        this.restTimer = setTimeout(function () {
-            var p = self.at === 'buttons' && self.focused && !self.panel.shown ? self.pageAt[self.buttons.at] : null;
-            if (p) {
-                self.ahead(p);
-            }
-        }, REST_MS) as unknown as number;
+    /** The sub page whose button has the focus (null: none), prefetched once the focus rests there (main.ts) */
+    focusedPage(): Page | null {
+        return this.at === 'buttons' && this.focused && !this.panel.shown ? this.pageAt[this.buttons.at] || null : null;
     }
 
     /** About panel: name and subscribers, full description by paragraph, facts */
@@ -404,11 +365,13 @@ export class ChannelView implements View {
 /** About three lines of a description, cut at a word end */
 function short(description: string): string {
     var flat = description.replace(/\s+/g, ' ');
-    if (flat.length <= DESCRIPTION_CHARS) {
-        return flat;
-    }
-    var cut = flat.lastIndexOf(' ', DESCRIPTION_CHARS);
-    return flat.slice(0, cut > 0 ? cut : DESCRIPTION_CHARS);
+    return flat.length <= DESCRIPTION_CHARS ? flat : cutAtWord(flat, DESCRIPTION_CHARS);
+}
+
+/** text cut to at most n characters, at the end of a word where there is one */
+function cutAtWord(text: string, n: number): string {
+    var cut = text.lastIndexOf(' ', n);
+    return text.slice(0, cut > 0 ? cut : n);
 }
 
 /** A channel line ("@handle • 2.68M subscribers • 1.2K videos") with counts in the theme's style, handle unchanged */

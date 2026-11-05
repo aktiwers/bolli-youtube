@@ -8,8 +8,8 @@
 
 import { PROBLEM, toast } from './toast.js';
 import { dearrowTitle } from '../api/dearrow.js';
-import { Page, pageOf, Video } from '../api/feed.js';
-import { commandsOf, MenuItem, tileMenu, toastOf } from '../api/menu.js';
+import { commandsOf, MenuItem, Page, pageOf, toastOf, Video } from '../api/feed.js';
+import { tileMenu } from '../api/menu.js';
 import { run } from '../api/watch.js';
 import { openSaveTo } from './account.js';
 import { SidePanel } from './side-panel.js';

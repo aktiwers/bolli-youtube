@@ -235,6 +235,17 @@ public class MainActivity extends Activity {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
                 return false;
             }
+            // 0: no wish, the TV's own rate again (after a video)
+            if (hz <= 0) {
+                runOnUiThread(() -> {
+                    WindowManager.LayoutParams lp = getWindow().getAttributes();
+                    if (lp.preferredDisplayModeId != 0) {
+                        lp.preferredDisplayModeId = 0;
+                        getWindow().setAttributes(lp);
+                    }
+                });
+                return true;
+            }
             Display display = getWindowManager().getDefaultDisplay();
             if (Math.abs(display.getMode().getRefreshRate() - hz) < 0.1f) {
                 return true;
@@ -285,6 +296,11 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void keepScreenOn(boolean on) {
             runOnUiThread(() -> web.setKeepScreenOn(on));
+        }
+
+        @JavascriptInterface
+        public String device() {
+            return Build.MANUFACTURER + " " + Build.MODEL + ", Android " + Build.VERSION.RELEASE;
         }
 
         @JavascriptInterface

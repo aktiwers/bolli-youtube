@@ -27,7 +27,7 @@ export interface Tokens {
 }
 
 /** The scopes YouTube's TV app signs in with */
-export var SCOPES = ['http://gdata.youtube.com', 'https://www.googleapis.com/auth/youtube-paid-content'];
+var SCOPES = ['http://gdata.youtube.com', 'https://www.googleapis.com/auth/youtube-paid-content'];
 /** Where the code is entered, as YouTube's screen names it */
 export var ACTIVATE = 'yt.be/activate';
 var DEVICE_KEY = 'youtube.deviceId';

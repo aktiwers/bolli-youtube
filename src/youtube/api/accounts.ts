@@ -8,7 +8,7 @@
 // the storage, so it is signed out there too.
 
 import { load, save } from '../../core/store.js';
-import { all, Page, picture, text } from './feed.js';
+import { all, get, Page, picture, text } from './feed.js';
 import { accountKey, brandIdentity, forgetAccount, identities, Identity, identityKey, innertube, innertubeAs, isBrand } from './youtube.js';
 
 export interface Profile {
@@ -134,14 +134,8 @@ export function accountsOf(reply: unknown): Named[] {
 
 /** One of an account item's switch-command tokens (pageIdToken, accountStateToken …) */
 function tokenOf(item: any, kind: string): any {
-    var tokens = item && item.serviceEndpoint && item.serviceEndpoint.selectActiveIdentityEndpoint &&
-        item.serviceEndpoint.selectActiveIdentityEndpoint.supportedTokens || [];
-    for (var i = 0; i < tokens.length; i++) {
-        if (tokens[i] && tokens[i][kind]) {
-            return tokens[i][kind];
-        }
-    }
-    return null;
+    var tokens: any[] = get(item, 'serviceEndpoint', 'selectActiveIdentityEndpoint', 'supportedTokens') || [];
+    return tokens.filter(function (t) { return t && t[kind]; }).map(function (t) { return t[kind]; })[0] || null;
 }
 
 /** The Google account of an account (itself, or the one running a brand account), as listed */
@@ -170,7 +164,7 @@ export function ownChannel(p: Profile): Promise<Page | null> {
         return Promise.resolve(null);
     }
     return innertube('navigation/resolve_url', { url: 'https://www.youtube.com/' + p.handle }).then(function (reply: any) {
-        var id = reply && reply.endpoint && reply.endpoint.browseEndpoint && reply.endpoint.browseEndpoint.browseId;
+        var id = get(reply, 'endpoint', 'browseEndpoint', 'browseId');
         return id ? { browseId: id } : null;
     });
 }

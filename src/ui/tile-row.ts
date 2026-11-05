@@ -9,14 +9,15 @@
 // poster is ~0.6 MB); images more than a screen behind or two ahead are
 // released. Moving focus changes two class names and one transform.
 
-import { h, LAYOUT_WIDTH, setText, toggleClass, translate } from '../core/dom.js';
+import { h, LAYOUT_WIDTH, setPicture, setText, toggleClass, translate } from '../core/dom.js';
 
 export interface TileItem {
     id: string;
     title: string;
     /** The image URL (empty: no image) */
     image: string;
-    /** Shown when the image fails to load (e.g. the series' picture for an episode without a still) */
+    /** Shown when the image fails to load or comes as a stand-in (e.g. the series' picture for an episode without a
+     * still; core/dom.ts setPicture) */
     fallback?: string;
     /** A short label on the image ("Out 29 Oct", "No sources") */
     label?: string;
@@ -330,11 +331,8 @@ export class TileRow {
             item.title = title;
             if (tile) {
                 setText(tile.el.querySelector('.bd-tile-title') as HTMLElement, title);
-                if (swap) {
-                    tile.img.onerror = item.fallback ? fallBack(tile.img, item.fallback) : null;
-                    if (tile.hasImage) {
-                        tile.img.src = self.picture(index);
-                    }
+                if (swap && tile.hasImage) {
+                    setPicture(tile.img, self.picture(index), item.fallback);
                 }
             }
         });
@@ -387,7 +385,7 @@ export class TileRow {
                 if (!this.fadeIn) {
                     toggleClass(t.img, 'bd-fade--in', true);
                 }
-                t.img.src = this.picture(j);
+                setPicture(t.img, this.picture(j), this.items[j].fallback);
                 t.hasImage = true;
             } else if ((j < keepFrom || j >= keepTo) && t.hasImage) {
                 t.img.removeAttribute('src');
@@ -402,9 +400,6 @@ export class TileRow {
         if (!tile) {
             var item = this.items[index];
             tile = buildTile(item, this.shape, this.layout.under);
-            if (item.fallback) {
-                tile.img.onerror = fallBack(tile.img, item.fallback);
-            }
             tile.el.style.position = 'absolute';
             tile.el.style.left = this.left(index) + 'px';
             tile.el.style.top = '0';
@@ -463,7 +458,7 @@ export class TileRow {
             if (tile) {
                 sizeTile(tile, i === at ? self.options.wideShape as TileShape : self.shape, !!self.items[i].round);
                 if (tile.hasImage) {
-                    tile.img.src = self.picture(i);
+                    setPicture(tile.img, self.picture(i), self.items[i].fallback);
                 }
             }
         });
@@ -531,15 +526,6 @@ function sizeTile(tile: Tile, shape: TileShape, round: boolean): void {
     if (round) {
         tile.frame.style.marginLeft = tile.under.style.marginLeft = (shape.w - shape.h) / 2 + 'px';
     }
-}
-
-/** img's error handler: tries the fallback once (not again if it fails too) */
-function fallBack(img: HTMLImageElement, fallback: string): () => void {
-    return function () {
-        if (img.getAttribute('src') !== fallback) {
-            img.src = fallback;
-        }
-    };
 }
 
 function buildTile(item: TileItem, shape: TileShape, textH: number): Tile {

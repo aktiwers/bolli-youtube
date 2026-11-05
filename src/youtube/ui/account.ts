@@ -91,14 +91,20 @@ export function openSaveTo(panel: SidePanel, videoId: string, push: boolean, sav
     }, 'your playlists', push);
 }
 
-/** Draws a Subscribe button as YouTube does: Subscribe, or Subscribed (with class on) */
-export function drawSubscribe(el: HTMLElement, sub: Subscribe | null, on: string): void {
+/** Whether sub's channel is subscribed, as changed here lately (YouTube's replies lag): sub is updated to that */
+export function subscribed(sub: Subscribe | null): boolean {
     var id = sub ? channelOf(sub) : '';
     if (sub && id && subscribedNow.hasOwnProperty(id)) {
         sub.subscribed = subscribedNow[id];
     }
-    setText(el, sub && sub.subscribed ? 'Subscribed' : 'Subscribe');
-    toggleClass(el, on, !!(sub && sub.subscribed));
+    return !!(sub && sub.subscribed);
+}
+
+/** Draws a Subscribe button as YouTube does: Subscribe, or Subscribed (with class on) */
+export function drawSubscribe(el: HTMLElement, sub: Subscribe | null, on: string): void {
+    var yes = subscribed(sub);
+    setText(el, yes ? 'Subscribed' : 'Subscribe');
+    toggleClass(el, on, yes);
 }
 
 /** Shows YouTube's confirmation dialog (Settings' History & data, History's Clear all). On yes, runs the action, shows

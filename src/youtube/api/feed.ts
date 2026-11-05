@@ -32,7 +32,8 @@ export interface Video {
     /** Watched share (0..1), and YouTube's resume position (s) */
     progress?: number;
     start?: number;
-    /** The tile's long-press menu command from YouTube (api/menu.ts) */
+    /** The tile's long-press menu (api/menu.ts): its items as parsed (menuOf), else YouTube's command for it (a menu
+     * asked for as a panel; rows kept from before carry the whole command) */
     menu?: any;
     /** Round picture (a channel's) */
     round?: boolean;
@@ -262,6 +263,8 @@ export function subscriptionsOf(reply: any): Rows {
     }
     var rows = rowsOf(reply);
     rows.channels = channels;
+    // Its tabs are the channels again (334 here), never shown: drawn per channel as chips, stored and parsed each start
+    delete rows.tabs;
     return rows;
 }
 
@@ -395,7 +398,8 @@ function walk(v: any, shelf: Shelf, rows: Rows): void {
             shelf.next = nextOf(x);
             walk(x, shelf, rows);
         } else if (key === 'sectionListRenderer' || key === 'sectionListContinuation') {
-            rows.next = nextOf(x);
+            // (one inside another without a token keeps the screen's)
+            rows.next = nextOf(x) || rows.next;
             walk(x, shelf, rows);
         } else if (key === 'tvSecondaryNavRenderer') {
             // Tabs: names and tokens; the tab that carries tiles is the one shown (chosen)
@@ -436,7 +440,7 @@ function walk(v: any, shelf: Shelf, rows: Rows): void {
         } else if (key === 'feedNudgeRenderer') {
             rows.nudge = rows.nudge || nudgeOf(x);
         } else if (key === 'tileRenderer' || key === 'lockupViewModel') {
-            var video = key === 'tileRenderer' ? fromTile(x) : fromLockup(x);
+            var video = tileVideo(key, x);
             if (video) {
                 shelf.videos.push(video);
             }
@@ -472,20 +476,62 @@ export function pageOf(command: any): Page | null {
     return browse && browse.browseId ? (browse.params ? { browseId: browse.browseId, params: browse.params } : { browseId: browse.browseId }) : null;
 }
 
+/** A menu's item: its title, and YouTube's command for it (one may hold several: commandsOf) */
+export interface MenuItem {
+    title: string;
+    command: any;
+}
+
+/** A menu's items in order (old and new renderer formats alike) */
+export function itemsOf(menu: any): MenuItem[] {
+    var items: MenuItem[] = [];
+    (function walk(v: any): void {
+        if (!v || typeof v !== 'object') {
+            return;
+        }
+        for (var key in v) {
+            var x = v[key];
+            if (key === 'menuServiceItemRenderer' || key === 'menuNavigationItemRenderer') {
+                items.push({ title: text(x.text), command: x.serviceEndpoint || x.navigationEndpoint || x.command });
+            } else if (key === 'listItemViewModel') {
+                items.push({ title: text(x.title), command: get(x, 'rendererContext', 'commandContext', 'onTap', 'innertubeCommand') });
+            } else {
+                walk(x);
+            }
+        }
+    })(menu);
+    return items.filter(function (i) { return i.title && i.command; });
+}
+
+/** A tile's long-press command as kept: the items of the menu it carries (titles and commands), else as it is (a
+ * panel asked for on opening). The rest of YouTube's menu was nine tenths of a channel page's rows */
+export function menuOf(press: any): any {
+    var own = first(press, 'menuRenderer');
+    return own ? { items: itemsOf(own) } : press;
+}
+
 /** A tile's width on a 1920 px screen */
 var PICTURE_PX = 528;
 
-/** A picture URL from YouTube's list of sizes: the smallest at least a tile wide, else the largest; '//' URLs get
- * https; px: request a round picture at that size */
-export function picture(thumbs: any, px?: number): string {
+/** A picture URL from YouTube's list of sizes: the smallest at least a tile (or fill px) wide, else the largest; '//'
+ * URLs get https; px: request a round picture at that size */
+export function picture(thumbs: any, px?: number, fill?: number): string {
     var list: any[] = (thumbs && (thumbs.thumbnails || thumbs.sources)) || [];
-    var pick = list[list.length - 1];
-    // The smallest that fills a tile (a 1200 px mix picture takes the TV ~200 ms to decode)
+    var pick: any = null;
+    var largest: any = null;
+    // The smallest that fills a tile, or fill px (a 1200 px mix picture takes the TV ~200 ms to decode), in whatever
+    // order
     for (var i = 0; i < list.length; i++) {
-        if (list[i].width >= PICTURE_PX && (!pick.width || list[i].width < pick.width)) {
+        var w = +list[i].width || 0;
+        if (w >= (fill || PICTURE_PX) && (!pick || w < pick.width)) {
             pick = list[i];
         }
+        if (w && (!largest || w > largest.width)) {
+            largest = list[i];
+        }
     }
+    // None that big: the biggest; none with sizes: the last (YouTube lists them smallest first)
+    pick = pick || largest || list[list.length - 1];
     var url = pick ? String(pick.url || '') : '';
     url = url.indexOf('//') === 0 ? 'https:' + url : url;
     return px ? sized(url, px) : url;
@@ -513,6 +559,16 @@ var PLAIN_STYLES: { [style: string]: boolean } = { TILE_STYLE_YTLR_DEFAULT: true
 /** YouTube's tile styles that change a tile's shape */
 var TILE_STYLES: { [style: string]: string } = { TILE_STYLE_YTLR_SQUARE: 'square', TILE_STYLE_YTLR_GAME: 'game', TILE_STYLE_YTLR_VERTICAL_LIST: 'list',
     TILE_STYLE_YTLR_ROUND: 'round' };
+
+/** A tile's video (null: not a video, or a tile the parser fails on: left out, the screen shows the rest). Apart from
+ * walk: try/catch keeps old V8 from optimising the function it is in */
+function tileVideo(key: string, x: any): Video | null {
+    try {
+        return key === 'tileRenderer' ? fromTile(x) : fromLockup(x);
+    } catch (e) {
+        return null;
+    }
+}
 
 /** Parses a tileRenderer (Subscriptions, Home, Library, pages) */
 function fromTile(tile: any): Video | null {
@@ -608,7 +664,7 @@ function fromTile(tile: any): Video | null {
         video.wide = picture(get(header, 'onFocusThumbnail'));
     }
     if (tile.onLongPressCommand) {
-        video.menu = tile.onLongPressCommand;
+        video.menu = menuOf(tile.onLongPressCommand);
     }
     if (watched) {
         video.progress = watched / 100;
@@ -698,7 +754,7 @@ function fromLockup(lockup: any): Video | null {
     }
     var press = get(lockup, 'rendererContext', 'commandContext', 'onLongPress');
     if (press) {
-        found.menu = press;
+        found.menu = menuOf(press);
     }
     return found;
 }
@@ -815,10 +871,12 @@ export function text(t: any): string {
     return (t.runs || []).map(function (r: any) { return r.text || ''; }).join('');
 }
 
-/** v[a][b]…, or undefined where a step is missing */
-export function get(v: any, ...path: (string | number)[]): any {
-    for (var i = 0; i < path.length && v; i++) {
-        v = v[path[i]];
+/** v[a][b]…, or undefined where a step is missing (the steps are read from arguments: a rest parameter would be
+ * copied into an array on every call, ~25 per tile) */
+export function get(v: any, ...path: (string | number)[]): any;
+export function get(v: any): any {
+    for (var i = 1; i < arguments.length && v; i++) {
+        v = v[arguments[i]];
     }
     return v;
 }
