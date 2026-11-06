@@ -39,7 +39,7 @@ import { TvApp } from './player/tv-app.js';
 import { apply, askToClear } from './ui/account.js';
 import { Question } from './ui/question.js';
 import { SidePanel } from './ui/side-panel.js';
-import { applyTheme, metrics } from './ui/theme.js';
+import { applyBlack, applyTheme, metrics } from './ui/theme.js';
 import { openTileMenu } from './ui/tile-menu.js';
 import './ui/themes/youtube.js';
 import { AccountsView } from './views/accounts.js';
@@ -64,6 +64,7 @@ var root = document.getElementById('app') as HTMLElement;
 var stage = h('div', 'bd-stage');
 // Theme first: screens are laid out with its sizes
 applyTheme(prefs().theme);
+applyBlack(prefs().pureBlack);
 /** Screens that are one YouTube browse page: Library and the topic pages from the TV app's rail (/guide). Films are
  * left out: mostly paid films, which the app's player cannot play */
 var BROWSE: { [id: string]: { label: string; browseId: string } } = {

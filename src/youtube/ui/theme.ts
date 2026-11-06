@@ -6,6 +6,7 @@
 // switched by replacing <link id="theme-css">. Sizes are in 1280x720
 // layout units (index.html zooms to the screen).
 
+import { toggleClass } from '../../core/dom.js';
 import { TileLayout, TileShape } from '../../ui/tile-row.js';
 
 export interface Metrics {
@@ -132,6 +133,11 @@ export function applyTheme(id: string): Theme {
     }
     current = theme;
     return theme;
+}
+
+/** Settings › Background: pure black behind the screens instead of the theme's dark grey (themes: .by-black) */
+export function applyBlack(on: boolean): void {
+    toggleClass(document.documentElement, 'by-black', on);
 }
 
 /** The current theme's sizes */

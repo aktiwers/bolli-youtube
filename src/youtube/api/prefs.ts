@@ -8,6 +8,7 @@
 // startPicture: what shows under it until the video moves: 'tile' (its tile's picture), 'frame' (its frame where it
 // starts, from the storyboard) or 'none'.
 // videoClock: the time of day over a video in the app's player: 'off', 'left' or 'right' (the top corner).
+// pureBlack: the screens' background pure black instead of the theme's dark grey (ui/theme.ts applyBlack).
 
 import { load, save } from '../../core/store.js';
 
@@ -43,6 +44,8 @@ export interface Prefs {
     liveChat: boolean;
     /** The clock over a video in the app's player: 'off', 'left' or 'right' (player/own-player.ts) */
     videoClock: string;
+    /** The screens' background pure black (OLED: pixels off) instead of the theme's dark grey (ui/theme.ts) */
+    pureBlack: boolean;
     /** DeArrow (api/dearrow.ts): '' off, 'classic' or 'casual' */
     dearrow: string;
     /** DeArrow's options: 'thumbnails', 'frames' (a random frame where none was chosen), 'tidy' (titles tidied) */
@@ -55,7 +58,7 @@ export interface Prefs {
 export var HIGHEST = 4320;
 
 var KEY = 'youtube.prefs';
-var DEFAULTS: Prefs = { skip: ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'music_offtopic'], theme: 'youtube', startPage: 'home', quality: 0, preload: true, history: true, autoplay: true, autoplayWait: 10, stableVolume: false, previews: 'sound', captions: '', captionStyle: 'words', captionLanguages: [], startSign: true, startPicture: 'tile', sabr: false, pictures: 'sharpest', replays: true, dislikes: true, liveChat: true, videoClock: 'off', dearrow: '',
+var DEFAULTS: Prefs = { skip: ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'music_offtopic'], theme: 'youtube', startPage: 'home', quality: 0, preload: true, history: true, autoplay: true, autoplayWait: 10, stableVolume: false, previews: 'sound', captions: '', captionStyle: 'words', captionLanguages: [], startSign: true, startPicture: 'tile', sabr: false, pictures: 'sharpest', replays: true, dislikes: true, liveChat: true, videoClock: 'off', pureBlack: false, dearrow: '',
     dearrowOptions: ['thumbnails', 'frames', 'tidy'], keyboardRecent: [] };
 
 /** Read once (they are read on every key) and updated by setPref. Only changed settings are stored, so a new

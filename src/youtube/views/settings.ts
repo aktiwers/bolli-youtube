@@ -23,7 +23,7 @@ import { icon } from '../ui/icons.js';
 import { LanguagePicker } from '../ui/language-picker.js';
 import { CAPTION_STYLES } from '../player/captions.js';
 import { Question } from '../ui/question.js';
-import { applyTheme, themes } from '../ui/theme.js';
+import { applyBlack, applyTheme, themes } from '../ui/theme.js';
 
 /** A choice's value (an on/off pref's: true or false) */
 type Value = string | number | boolean;
@@ -195,7 +195,12 @@ function bolli(pages: StartPage[], more: () => void): { title: string; settings:
             { value: 'sharpest', name: 'Sharpest', note: 'the clearest pictures; they take the most memory (about 30 MB more while a video plays)' },
             { value: 'sharp', name: 'Sharp', note: 'clearer pictures, a little more memory' },
             { value: 'standard', name: 'Standard', note: 'YouTube\'s small pictures: softer on this screen, the least memory' }
-        ])
+        ]),
+        // Its picture drawn for the app, as Most replayed's
+        pref('Background', 'The colour behind the app\'s screens', 'black.png', 'pureBlack', [
+            { value: false, name: 'Dark grey', note: 'as YouTube\'s TV app' },
+            { value: true, name: 'Pure black', note: 'completely black: on an OLED TV those pixels stay off' }
+        ], function (on) { applyBlack(on === true); })
     ];
     // Only when there is more than one theme
     if (themes().length > 1) {

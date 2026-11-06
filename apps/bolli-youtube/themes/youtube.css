@@ -16,6 +16,13 @@
 body { font-family: 'Roboto', 'Inter', sans-serif; }
 
 html, body { background: #0f0f0f; }
+/* Settings › Background: pure black (OLED: those pixels off) wherever the screens' own grey shows (ui/theme.ts
+   applyBlack: by-black on <html>), and the rings that cut a gap to it around focused things */
+.by-black, .by-black body, .by-black .by-rail--open .by-rail-shade, .by-black .by-search-top, .by-black .by-langs,
+.by-black .by-feed-top, .by-black .by-question, .by-black .by-channel-top { background-color: #000; }
+.by-black .by-subs-dot { box-shadow: 0 0 0 3px #000; }
+.by-black .by-subs-pill--focused { box-shadow: 0 0 0 2px #000, 0 0 0 5px #f1f1f1; }
+.by-black .by-library-card--focused { box-shadow: 0 0 0 4px #000, 0 0 0 7px #f1f1f1; }
 
 /* The rail, as YouTube's: the logo, the sections' icons (grey; the current one white), Settings at the foot; with
    focus their names, a line under Library (the entries above move up for it), the screen pushed right. Only moves,
