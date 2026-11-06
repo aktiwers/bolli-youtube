@@ -1086,7 +1086,9 @@ function tickClock(): void {
     if (document.hidden) {
         return;
     }
-    menu.setClock(localClock(Date.now()));
+    var now = localClock(Date.now());
+    menu.setClock(now);
+    own.setClock(now);
     // Also each minute: expired replies are let go (no cache holds them through a long video)
     pruneKept();
     clockTimer = setTimeout(tickClock, 60000 - Date.now() % 60000 + 50) as unknown as number;

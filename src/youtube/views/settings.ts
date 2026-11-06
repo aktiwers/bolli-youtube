@@ -223,6 +223,13 @@ function bolli(pages: StartPage[], more: () => void): { title: string; settings:
             // Its picture drawn for the app in the style of YouTube's
             pref('Most replayed', 'A graph over the progress bar in Bolli\'s player of the parts people watch again the most, from YouTube',
                 'replays.png', 'replays', onOff('shown on videos YouTube has one for (popular ones)', 'no graph')),
+            // Its picture drawn for the app, as Most replayed's
+            pref('Clock in videos', 'The time of day in a corner of the picture while a video plays in Bolli\'s player', 'clock.png',
+                'videoClock', [
+                    { value: 'off', name: 'Off', note: 'the clock shows only on the app\'s screens' },
+                    { value: 'left', name: 'Top left', note: 'always there, also when the controls are hidden' },
+                    { value: 'right', name: 'Top right', note: 'always there, also when the controls are hidden' }
+                ]),
             pref('Streams by SABR', 'How Bolli\'s player gets the videos', pic('parent_code'), 'sabr',
                 onOff('as YouTube\'s TV app does (signed in, by SABR), as a guest when that fails', 'as a guest, signed in (by SABR) only when YouTube asks, as for an age check'))
         ] },

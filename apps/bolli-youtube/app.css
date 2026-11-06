@@ -19,6 +19,9 @@
 .by-player-poster--round { border-radius: 12px; }
 .by-player-frame { position: absolute; left: 0; top: 0; width: 100%; height: 100%; background-repeat: no-repeat; }
 .by-player-cover--out { opacity: 0; -webkit-transition: opacity .3s ease; }
+/* The clock in a top corner while a video plays (Settings › Clock in videos), under the side panels */
+.by-video-clock { position: absolute; z-index: 1; display: none; white-space: nowrap; }
+.by-player--clock-left .by-video-clock, .by-player--clock-right .by-video-clock { display: block; }
 
 /* Toasts (ui/toast.ts), over everything (YouTube's TV app too): they fade in and out */
 .by-toast { position: absolute; z-index: 60; white-space: nowrap; visibility: hidden; opacity: 0;

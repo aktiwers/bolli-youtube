@@ -11,7 +11,7 @@
 // player (onFallback). A casting phone (cast.ts) drives it through its
 // public methods and onChange.
 
-import { h, LAYOUT_HEIGHT, LAYOUT_WIDTH, setPicture, setShown, toggleClass } from '../../core/dom.js';
+import { h, LAYOUT_HEIGHT, LAYOUT_WIDTH, setPicture, setShown, setText, toggleClass } from '../../core/dom.js';
 import { KEY } from '../../core/keys.js';
 import { noteZap } from '../../core/perf.js';
 import { preferFrameRate } from '../../core/platform.js';
@@ -302,6 +302,9 @@ export class OwnPlayer {
     private peekEnded: () => void = function () { return undefined; };
     /** A ring over the preview's corners to round them like the tile's (the TV's video layer draws square) */
     private ring: HTMLElement;
+    /** The time of day over the video, at the top left or right as Settings › Clock in videos says (main.ts sets it
+     * each minute) */
+    private clock: HTMLElement;
     /** A video loaded paused in the <video>: the one Up next counts down to (Play now just plays it), or the one the
      * viewer closed (comeBack resumes it). Released when the decoder is needed. */
     /** A video loaded paused: Up next's, the closed one kept, or a rested tile's (ahead: from at, as asked) */
@@ -358,6 +361,7 @@ export class OwnPlayer {
         this.chapterRow = new ChapterRow(bar.parentNode as Node);
         this.paidChip = this.el.appendChild(paidChip()) as HTMLElement;
         toggleClass(this.paidChip, 'by-paid--start', true);
+        this.clock = this.el.appendChild(h('div', 'by-video-clock')) as HTMLElement;
         this.stats = new StatsBox(this.el, this.video, function () {
             var audio = self.audioFormat();
             return {
@@ -472,6 +476,11 @@ export class OwnPlayer {
     /** A video is active (shown, or its streams are loading) */
     get busy(): boolean {
         return !!this.want;
+    }
+
+    /** The clock's time of day ("hh:mm") */
+    setClock(text: string): void {
+        setText(this.clock, text);
     }
 
     /** Play a video (t: start position, s; queue: videos to play in order, e.g. a mix or a phone's list; picture: its
@@ -1838,6 +1847,10 @@ export class OwnPlayer {
     private view(shown: boolean): void {
         if (shown !== this.shown) {
             this.shown = shown;
+            // The clock in its corner, if on (none while hidden, so a preview in a tile has none)
+            var corner = shown ? prefs().videoClock : 'off';
+            toggleClass(this.el, 'by-player--clock-left', corner === 'left');
+            toggleClass(this.el, 'by-player--clock-right', corner === 'right');
             setShown(this.el, shown);
             this.onShown(shown);
         }

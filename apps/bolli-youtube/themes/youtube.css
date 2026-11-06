@@ -45,8 +45,13 @@ html, body { background: #0f0f0f; }
 .by-rail--open .by-rail-divider { opacity: 1; }
 .by-rail-drop { left: 100px; top: 30px; }
 
-/* The clock: top right, in a dim pill */
-.by-clock { right: 32px; top: 16px; padding: 4px 8px; border-radius: 8px; background: rgba(0, 0, 0, .3); font-size: 19px; color: #fff; }
+/* The clock: top right, in a dim pill; over a video, in the corner Settings › Clock in videos sets */
+.by-clock, .by-video-clock { top: 16px; padding: 4px 8px; border-radius: 8px; font-size: 19px; color: #fff; }
+.by-clock, .by-player--clock-right .by-video-clock { right: 32px; }
+.by-player--clock-left .by-video-clock { left: 32px; }
+/* Darker over a video, to read on its brightest scenes */
+.by-clock { background: rgba(0, 0, 0, .3); }
+.by-video-clock { background: rgba(0, 0, 0, .6); }
 
 /* Rows: the shelf's name, then the tiles: picture with rounded corners, the length on it,
    the title (two lines at most), the channel and "views • age" under it; focus: a light ring. As YouTube's: only the
@@ -342,6 +347,8 @@ html, body { background: #0f0f0f; }
 .by-volume-icon { width: 24px; height: 24px; margin-right: 14px; color: #fff; }
 .by-volume-track { width: 150px; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .28); }
 .by-volume-fill { border-radius: 3px; background: #fff; -webkit-transition: width .15s ease-out; }
+/* Under the clock when that is top right */
+.by-player--clock-right .by-volume { top: 64px; }
 .by-toast { top: 48px; right: 48px; max-width: 640px; padding: 22px 16px 22px 24px; border-radius: 12px; background: #181818; }
 .by-toast-icon { width: 24px; height: 24px; margin-right: 22px; color: #fff; }
 .by-toast-text { font-size: 19px; line-height: 24px; font-weight: 500; color: #fff; white-space: normal; }
@@ -492,6 +499,8 @@ html, body { background: #0f0f0f; }
 /* Stats for nerds: YouTube's dark box at the top left */
 .by-stats { left: 32px; top: 32px; padding: 12px 16px; border-radius: 8px; background: rgba(0, 0, 0, .7);
             font-family: monospace; font-size: 14px; line-height: 20px; color: #fff; z-index: 2; }
+/* Under the clock when that is top left */
+.by-player--clock-left .by-stats { top: 64px; }
 
 /* A channel's page, as YouTube's TV app: over everything, its banner across the top
    (to 573), the search bar over it, its picture small beside its name, handle and subscribers, three lines of its
