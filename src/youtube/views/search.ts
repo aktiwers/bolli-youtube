@@ -1,7 +1,8 @@
 // Search screen, modelled on YouTube's TV app. No rail: a round back arrow at the left (Left
 // goes to it; OK on it, or Back, returns to the previous screen). The typed text sits in a
-// fixed field at the top, above the on-screen keyboard (src/ui/keyboard.ts) in YouTube's
-// layout (the remote's number keys type digits); left of it are YouTube's suggestions for the
+// fixed field at the top, above the on-screen keyboard in YouTube's layout (ui/youtube-keyboard.ts: its language,
+// picked as in YouTube's "Select a search language", gives its letters, its words and the suggestions' language; the
+// remote's number keys type digits); left of it are YouTube's suggestions for the
 // text (api/suggest.ts), or the recent searches while nothing is typed. OK on a suggestion, or
 // Search, shows YouTube's result rows under the keyboard and focuses them: the keyboard
 // scrolls away under the field. Back returns to the keyboard; typing again replaces the
@@ -16,9 +17,12 @@ import { View } from '../../core/view.js';
 import { Keyboard } from '../../ui/keyboard.js';
 import { RowStack } from '../../ui/row-stack.js';
 import { search, Video } from '../api/feed.js';
+import { prefs, setPref } from '../api/prefs.js';
 import { keepSearch, recentSearches, Suggestion, suggestions } from '../api/suggest.js';
 import { icon, setIcon } from '../ui/icons.js';
-import { youtubeKeyboard } from '../ui/youtube-keyboard.js';
+import { KEYBOARD_LANGUAGES, keyboardFor, KeyboardLanguage, keyboardLanguage } from '../ui/keyboard-languages.js';
+import { PanelLine, SidePanel } from '../ui/side-panel.js';
+import { SearchKeyboard } from '../ui/youtube-keyboard.js';
 import { metrics } from '../ui/theme.js';
 import { brandedRows, Paging, rowH, VideoTiles } from './tiles.js';
 
@@ -27,9 +31,14 @@ var SUGGEST_MS = 80;
 /** Focus resting this long on a suggestion (or on Search) prefetches its results */
 var REST_MS = 400;
 var SUGGESTIONS_MAX = 10;
-/** YouTube's keyboard's letters after a to g (æ, ø and å where YouTube has other keys), and its Search key */
-var LETTERS = ['hijklmnæ', 'opqrstuø', "vwxyz-'å"];
-var ENTER = 'Search';
+/** Keyboard languages listed as Recent in its picker */
+var RECENT_MAX = 3;
+
+/** The recent keyboard languages with id first (and left next) */
+function recentWith(id: string, left?: string): string[] {
+    var rest = prefs().keyboardRecent.filter(function (r) { return r !== id && r !== left; });
+    return [id].concat(left && left !== id ? [left] : [], rest).slice(0, RECENT_MAX);
+}
 
 /** Where the focus is: the back arrow, the suggestions, the keyboard or the results */
 type Place = 'back' | 'list' | 'keys' | 'rows';
@@ -51,7 +60,10 @@ export class SearchView implements View {
     private back: HTMLElement;
     private list: HTMLElement;
     private status: HTMLElement;
+    private keys: SearchKeyboard;
     private keyboard: Keyboard;
+    /** The keyboard's language picker */
+    private panel: SidePanel;
     private stack = new RowStack('bd-search-rows', rowH(), metrics().searchRowsTop);
     private tiles = new VideoTiles();
     private paging = new Paging(this.tiles, 'search');
@@ -81,11 +93,17 @@ export class SearchView implements View {
         setShown(this.el, false);
         this.content = h('div', 'bd-search-content');
         this.query = h('div', 'bd-search-query');
+        // (right-to-left text from its own side)
+        this.query.setAttribute('dir', 'auto');
         this.back = icon('back', 'by-search-back');
         this.list = h('div', 'by-suggestions');
-        this.keyboard = youtubeKeyboard(LETTERS, function (text) {
+        this.keys = new SearchKeyboard(prefs().keyboardRecent[0] || keyboardFor(navigator.language), function (text) {
             self.changed(text);
-        }, ENTER);
+        });
+        this.keys.onLanguage = function () { self.pickLanguage(); };
+        // (the keyboard's height may differ: the rows' place is measured again)
+        this.keys.onLayout = function () { self.rowsTop = 0; };
+        this.keyboard = this.keys.keyboard;
         this.keyboard.onEnter = function () {
             self.submit(self.keyboard.text);
         };
@@ -102,6 +120,7 @@ export class SearchView implements View {
         this.el.appendChild(h('div', 'by-search-top'));
         this.el.appendChild(this.query);
         this.el.appendChild(this.back);
+        this.panel = new SidePanel(this.el);
         this.renderQuery();
         this.mark();
     }
@@ -149,6 +168,7 @@ export class SearchView implements View {
 
     hide(): void {
         clearTimeout(this.restTimer);
+        this.panel.close();
         setShown(this.el, false);
         this.stack.setShown(false);
     }
@@ -175,6 +195,13 @@ export class SearchView implements View {
     }
 
     onKey(code: number): boolean {
+        if (this.panel.shown) {
+            this.panel.onKey(code);
+            if (!this.panel.shown) {
+                this.mark();
+            }
+            return true;
+        }
         if (this.at !== 'rows' && this.keyboard.typeDigit(code)) {
             return true;
         }
@@ -324,7 +351,7 @@ export class SearchView implements View {
         }
         var self = this;
         this.suggestTimer = setTimeout(function () {
-            suggestions(term).then(function (list) {
+            suggestions(term, self.keys.language.id).then(function (list) {
                 if (asked === self.suggestAsked) {
                     self.showSuggestions(list.slice(0, SUGGESTIONS_MAX));
                 }
@@ -339,6 +366,7 @@ export class SearchView implements View {
             return;
         }
         clearTimeout(this.restTimer);
+        this.panel.close();
         keepSearch(term);
         this.keyboard.setValue(term);
         this.renderQuery();
@@ -445,7 +473,7 @@ export class SearchView implements View {
         var self = this;
         this.restTimer = setTimeout(function () {
             var term = (self.at === 'list' ? (self.suggested[self.pick] || { text: '' }).text :
-                self.at === 'keys' && self.keyboard.focusedLabel === ENTER ? self.keyboard.text : '').trim();
+                self.at === 'keys' && self.keyboard.focusedLabel === self.keys.enter ? self.keyboard.text : '').trim();
             if (term && term !== self.searched) {
                 self.ahead(term);
             }
@@ -454,13 +482,36 @@ export class SearchView implements View {
 
     private renderQuery(): void {
         var text = this.keyboard.text;
-        setText(this.query, text || 'Search');
+        setText(this.query, text || this.keys.hint);
         setClass(this.query, text ? 'bd-search-query' : 'bd-search-query bd-search-query--empty');
+    }
+
+    /** YouTube's "Select a search language": the ones picked lately, then all; the choice changes the keyboard and the
+     * suggestions (asked again for what is typed) */
+    private pickLanguage(): void {
+        var self = this;
+        var now = this.keys.language;
+        var line = function (l: KeyboardLanguage): PanelLine {
+            return { label: l.name, chosen: l === now, action: function () { self.setLanguage(l.id); } };
+        };
+        var head: PanelLine[] = [{ label: 'Change the language of the search keyboard and suggestions', plain: true, heading: true },
+            { label: 'Recent', heading: true }];
+        this.panel.open('Select a search language', head.concat(recentWith(now.id).map(keyboardLanguage).map(line), [{ label: 'All', heading: true }],
+            KEYBOARD_LANGUAGES.map(line)));
+        this.mark();
+    }
+
+    /** (the one left stays among the recent ones, also the TV's own the first time) */
+    private setLanguage(id: string): void {
+        setPref('keyboardRecent', recentWith(id, this.keys.language.id));
+        this.keys.setLanguage(id);
+        this.renderQuery();
+        this.suggest(this.keyboard.text.trim(), 0);
     }
 
     private mark(): void {
         var f = this.focused;
-        this.keyboard.setFocused(f && this.at === 'keys');
+        this.keyboard.setFocused(f && this.at === 'keys' && !this.panel.shown);
         this.stack.setFocused(f && this.at === 'rows');
         toggleClass(this.back, 'by-search-back--focused', f && this.at === 'back');
         for (var i = 0; i < this.items.length; i++) {

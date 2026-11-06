@@ -23,12 +23,12 @@ var RECENT_KEY = 'youtube.recentSearches';
 var RECENT_MAX = 10;
 
 /** YouTube's suggestions for text */
-export function suggestions(text: string): Promise<Suggestion[]> {
-    return kept.get(text, function () {
+export function suggestions(text: string, hl?: string): Promise<Suggestion[]> {
+    return kept.get((hl || '') + ' ' + text, function () {
         return Promise.all<any>([youtubePage(), tvClient()]).then(function (got) {
             var client = got[1].context.client;
             return get(got[0], '/complete/search?client=youtube-lr&ds=yt&xhr=t&oe=utf-8&xssi=t&hl=' +
-                encodeURIComponent(client.hl || 'en') + '&gl=' + encodeURIComponent(client.gl || '') + '&q=' +
+                encodeURIComponent(hl || client.hl || 'en') + '&gl=' + encodeURIComponent(client.gl || '') + '&q=' +
                 encodeURIComponent(text));
         }).then(suggestionsOf);
     });

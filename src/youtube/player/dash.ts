@@ -14,12 +14,10 @@
 
 import { Format } from '../api/streams.js';
 import { parseCues, parseSidx, Segment } from './containers.js';
-import { AHEAD_MB, BEHIND_MB, BEHIND_S, bufferedEnd, Engine, hopHole, jumpTarget, KEYFRAME_IN, MB, RETRIES, seekNudged, Skip, STILL_AHEAD, TICK_MS, TIMEOUT_MS } from './engine.js';
+import { AHEAD_MB, BEHIND_MB, BEHIND_S, bufferedEnd, Engine, hopHole, jumpTarget, KEYFRAME_IN, MB, RETRIES, seekNudged, Skip, STILL_AHEAD, TICK_MS, TIMEOUT_MS, windowFrom } from './engine.js';
 import { networkFailed, onNetwork, stallWatch } from './networks.js';
-import { growLength, keepPipeline, openPipeline, Pipeline, setLength, spoilingFail } from './pipeline.js';
+import { keepPipeline, openPipeline, Pipeline, setLength, setLengthSoon, spoilingFail } from './pipeline.js';
 
-/** A start's window (windowEnd): the TV is told the video ends at most this far after the start (s) */
-var WINDOW_S = 9.5;
 /** Buffer up to this far ahead of the playhead (s; and up to AHEAD_MB per track); BEHIND_S, BEHIND_MB are kept behind
  * it, so a jump back stays buffered */
 var AHEAD = 30;
@@ -619,12 +617,12 @@ export class DashEngine implements Engine {
 
     /** The start's window lifted (the video plays, or a seek moves it): the real length again, loading past it */
     private widen(): void {
-        if (!this.window || !this.pipe) {
+        if (!this.window) {
             return;
         }
         this.cutAt = this.window;
         this.window = 0;
-        growLength(this.pipe, this.length);
+        setLengthSoon(this.pipe as Pipeline, this.length);
         this.pumpAll();
     }
 
@@ -919,15 +917,13 @@ export class DashEngine implements Engine {
     }
 }
 
-/** Where a start's window ends: the end of the last video segment ending within WINDOW_S of startAt (a video segment
- * cut would lose its frames after the cut until the next keyframe; 0: none: a video ending near there anyway, or a
- * first segment longer than that) */
-export function windowEnd(video: Segment[], startAt: number, length: number): number {
-    if (length - startAt <= WINDOW_S + 1) {
-        return 0;
-    }
+/** Where a start's window ends: the end of the last video segment ending within it (a video segment cut would lose its
+ * frames after the cut until the next keyframe; 0: none: a video ending near there anyway, or a first segment longer
+ * than the window) */
+function windowEnd(video: Segment[], startAt: number, length: number): number {
+    var until = windowFrom(startAt, length);
     var end = 0;
-    for (var i = Math.max(0, segmentAt(video, startAt)); i < video.length && video[i].end <= startAt + WINDOW_S; i++) {
+    for (var i = Math.max(0, segmentAt(video, startAt)); i < video.length && video[i].end <= until; i++) {
         end = video[i].end;
     }
     return end;

@@ -6,7 +6,7 @@
 // The makers come from api/feed.ts, api/channel.ts and api/watch.ts, so
 // nothing they use may touch the page (window, document, localStorage).
 
-import { madeChannel } from './api/channel.js';
+import { liveNowOf, madeChannel } from './api/channel.js';
 import { moreOf, rowsOf, subscriptionsOf } from './api/feed.js';
 import { dataJson } from './api/off-thread.js';
 import { watchInfoOf } from './api/watch.js';
@@ -16,6 +16,7 @@ var MAKERS: { [kind: string]: (reply: any, arg: string) => unknown } = {
     more: moreOf,
     subscriptions: subscriptionsOf,
     channel: madeChannel,
+    liveNow: liveNowOf,
     watch: watchInfoOf
 };
 

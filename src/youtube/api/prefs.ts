@@ -44,6 +44,8 @@ export interface Prefs {
     dearrow: string;
     /** DeArrow's options: 'thumbnails', 'frames' (a random frame where none was chosen), 'tidy' (titles tidied) */
     dearrowOptions: string[];
+    /** The Search keyboard's languages picked lately, the one in use first (ui/keyboard-languages.ts; none: the TV's) */
+    keyboardRecent: string[];
 }
 
 /** The quality "Highest available": 8K's height, so a player picks the most the video and the device allow */
@@ -51,7 +53,7 @@ export var HIGHEST = 4320;
 
 var KEY = 'youtube.prefs';
 var DEFAULTS: Prefs = { skip: ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'music_offtopic'], theme: 'youtube', startPage: 'home', quality: 0, preload: true, history: true, autoplay: true, autoplayWait: 10, stableVolume: false, previews: 'sound', captions: '', captionStyle: 'words', captionLanguages: [], startSign: true, startPicture: 'tile', sabr: false, pictures: 'sharpest', replays: true, dislikes: true, liveChat: true, dearrow: '',
-    dearrowOptions: ['thumbnails', 'frames', 'tidy'] };
+    dearrowOptions: ['thumbnails', 'frames', 'tidy'], keyboardRecent: [] };
 
 /** Read once (they are read on every key) and updated by setPref. Only changed settings are stored, so a new
  * default still applies to the rest. */

@@ -28,7 +28,7 @@ Bolli YouTube is not made by or connected to YouTube or Google. You sign in with
 - Titles and thumbnails without clickbait from [DeArrow](https://dearrow.ajay.app), if you turn it on in Settings
 - Ad block
 - Previews when you rest on a video
-- Search with YouTube's suggestions, and voice search on Android TV (the microphone, or the remote's search key)
+- Search with YouTube's suggestions and its keyboard in 28 languages, and voice search on Android TV (the microphone, or the remote's search key)
 - Cast from YouTube on your phone
 - More than one account, with "Who's watching?"
 - No Shorts

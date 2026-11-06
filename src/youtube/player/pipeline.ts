@@ -151,17 +151,26 @@ export function setLength(pipe: Pipeline, length: number): void {
     pipe.source.duration = length;
 }
 
-/** Sets the video's duration (s) as setLength does, now, or on the next updateend while a buffer updates */
-export function growLength(pipe: Pipeline, length: number): void {
+/** Sets the video's duration (s) as setLength does (not below what is buffered), now, or on the next updateend while a
+ * buffer updates */
+export function setLengthSoon(pipe: Pipeline, length: number): void {
     pipe.length = length;
     keepLength(pipe);
 }
 
-/** Restores the set duration if the TV changed it (not while a buffer updates: on the next updateend) */
+/** Restores the set duration if the TV changed it (not while a buffer updates: on the next updateend); never below
+ * what the buffers hold (a shorter duration removes the data past it, a segment then cut off from its keyframe or its
+ * start: a start's window raised to a segment that ran longer than its nominal length) */
 function keepLength(pipe: Pipeline): void {
     var source = pipe.source;
-    if (!pipe.length || source.readyState !== 'open' || Math.abs(source.duration - pipe.length) < 0.5 ||
-        pipe.buffers.some(function (sb) { return sb.updating; })) {
+    if (!pipe.length || source.readyState !== 'open' || pipe.buffers.some(function (sb) { return sb.updating; })) {
+        return;
+    }
+    pipe.buffers.forEach(function (sb) {
+        var b = sb.buffered;
+        pipe.length = b.length ? Math.max(pipe.length, b.end(b.length - 1)) : pipe.length;
+    });
+    if (Math.abs(source.duration - pipe.length) < 0.5) {
         return;
     }
     try {

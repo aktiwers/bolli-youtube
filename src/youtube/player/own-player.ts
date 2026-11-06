@@ -21,8 +21,9 @@ import { PlayerOsd } from '../../player/osd.js';
 import { SubtitleView } from '../../player/subtitles.js';
 import { PROBLEM, skipEdge, toast } from '../ui/toast.js';
 import { knownAvatar } from '../api/avatars.js';
+import { liveNow } from '../api/channel.js';
 import { dearrowOn, dearrowPicture, dearrowTitle, dearrowWait } from '../api/dearrow.js';
-import { dots, Page, thumbnail, thumbnailFallback, Video } from '../api/feed.js';
+import { dots, Ended, Page, thumbnail, thumbnailFallback, Video } from '../api/feed.js';
 import { prefs, setPref } from '../api/prefs.js';
 import { Replays, replays } from '../api/replays.js';
 import { Segment, segmentAt, segments, skippedText } from '../api/sponsorblock.js';
@@ -33,6 +34,7 @@ import { channelPicture, watchInfo, WatchInfo } from '../api/watch.js';
 import { FillLoader } from '../ui/fill-loader.js';
 import { icon, setIcon } from '../ui/icons.js';
 import { PanelLine } from '../ui/side-panel.js';
+import { startPicture } from '../views/tiles.js';
 import { CAPTION_STYLES, Captions, loadCaptions, translationsRefused } from './captions.js';
 import { DashEngine, dropAhead, SKIP_CHAIN_S } from './dash.js';
 import { bufferedEnd, Engine, lengthOf } from './engine.js';
@@ -143,6 +145,10 @@ interface Want {
     channel: string;
     /** Where to start (s) */
     t: number;
+    /** Its tile's own picture (its start picture: startPicture), else its thumbnail */
+    picture?: string;
+    /** Played in place of an ended live stream (if it has ended too, it is not followed again) */
+    standIn?: boolean;
     /** Watch page details once fetched (not fetched again when returning to the video) */
     info?: WatchInfo | null;
     /** Choices to restore (e.g. back from the background): format, audio track, subtitles (by name), repeat */
@@ -468,11 +474,12 @@ export class OwnPlayer {
         return !!this.want;
     }
 
-    /** Play a video (t: start position, s; queue: videos to play in order, e.g. a mix or a phone's list) */
-    play(id: string, title: string, channel: string, t?: number, queue?: ListQueue | null): void {
+    /** Play a video (t: start position, s; queue: videos to play in order, e.g. a mix or a phone's list; picture: its
+     * tile's) */
+    play(id: string, title: string, channel: string, t?: number, queue?: ListQueue | null, picture?: string): void {
         this.before = [];
         this.queue = queue || null;
-        var want = { id: id, title: title, channel: channel, t: t || 0 };
+        var want = { id: id, title: title, channel: channel, t: t || 0, picture: picture };
         // In the background (cast from a phone): start when the app returns
         if (document.hidden) {
             this.away = want;
@@ -1159,15 +1166,16 @@ export class OwnPlayer {
     }
 
     /** Play another video in place of this one, from YouTube's resume point. remember: Previous returns here with its
-     * details kept (not for queue moves, which Previous walks itself). Hides the watch page. */
-    private switchTo(video: Video, remember: boolean): void {
+     * details kept (not for queue moves, which Previous walks itself); standIn: in place of an ended live stream. Hides
+     * the watch page. */
+    private switchTo(video: Video, remember: boolean, standIn?: boolean): void {
         var was = this.want;
         if (was && remember) {
-            this.before.push({ id: was.id, title: (this.streams && this.streams.title) || was.title, channel: was.channel, t: 0, info: this.watch.details });
+            this.before.push({ id: was.id, title: (this.streams && this.streams.title) || was.title, channel: was.channel, t: 0, picture: was.picture, info: this.watch.details });
             this.before = this.before.slice(-BEFORE_MAX);
         }
         this.watch.hide();
-        this.start({ id: video.id, title: video.title, channel: video.channel, t: video.start || 0 });
+        this.start({ id: video.id, title: video.title, channel: video.channel, t: video.start || 0, picture: startPicture(video), standIn: standIn });
     }
 
     /** Start want from want.t: release the previous video, fetch the streams, then play */
@@ -1267,7 +1275,7 @@ export class OwnPlayer {
             // screen at its rate
             if (ahead) {
                 if (prefs().startPicture === 'tile') {
-                    this.showPoster(want.id);
+                    this.showPoster(want);
                 }
                 preferFrameRate(displayRate(ahead.video.fps));
                 ahead.engine.hold(0);
@@ -1292,7 +1300,7 @@ export class OwnPlayer {
             // picture (or its frame there once the streams are in: load)
             this.video.style.display = 'none';
             if (prefs().startPicture === 'tile') {
-                this.showPoster(want.id);
+                this.showPoster(want);
             }
             this.load();
         }
@@ -1314,7 +1322,7 @@ export class OwnPlayer {
             // position: currentTime becomes the next video's, but the background and a phone need this one's
             if (self.want) {
                 self.want.t = self.video.currentTime;
-                self.showPoster(self.want.id);
+                self.showPoster(self.want);
             }
             self.video.style.display = 'none';
             self.subtitleView.show(null);
@@ -1329,12 +1337,12 @@ export class OwnPlayer {
         }, function () { return undefined; });
     }
 
-    /** Show the video's thumbnail (its tile's picture: in the browser's cache) full screen until a video moves or the
-     * player closes (not its last frame: the TV's video plane cannot be copied, a canvas gets black). Painted during a
-     * start, it makes the TV's first frame ~0.1 s later */
-    private showPoster(id: string): void {
+    /** Show the video's tile picture (in the browser's cache), else its thumbnail, full screen until a video moves or
+     * the player closes (not its last frame: the TV's video plane cannot be copied, a canvas gets black). Painted during
+     * a start, it makes the TV's first frame ~0.1 s later */
+    private showPoster(want: Want): void {
         this.hidePoster();
-        setPicture(this.poster, dearrowPicture(id, thumbnail(id)), thumbnailFallback(id));
+        setPicture(this.poster, want.picture || dearrowPicture(want.id, thumbnail(want.id)), want.picture ? thumbnail(want.id) : thumbnailFallback(want.id));
         setShown(this.poster, true);
     }
 
@@ -1533,12 +1541,45 @@ export class OwnPlayer {
                 self.offline();
                 return;
             }
-            // Removed or not live yet: YouTube's player could not play it either (after a switch it did play)
-            if (!why && noneCanPlay(e)) {
-                self.stop();
-                toast('This video cannot be played' + (e.reason ? ': ' + e.reason : '.'), undefined, PROBLEM);
+            // Removed, not live yet, or refused to the TV client: YouTube's player could not play it either (after a
+            // switch it did play)
+            if (!why && e.refused && e.ended && !want.standIn) {
+                self.followStream(e.ended, e.reason);
+            } else if (!why && (noneCanPlay(e) || e.refused)) {
+                self.cannotPlay(e.reason);
             } else {
                 self.fallback((why ? why + '; then ' : '') + (e.reason || e.status));
+            }
+        });
+    }
+
+    /** Close and say why the video cannot be played (YouTube's reason) */
+    private cannotPlay(reason: string): void {
+        this.stop();
+        toast('This video cannot be played' + (reason ? ': ' + reason : '.'), undefined, PROBLEM);
+    }
+
+    /** An ended live stream (its address kept, e.g. in History) plays on as its channel's stream of the same name live
+     * now (a stream running all day, started anew), found on the channel's page (not by a search: that would go into
+     * the account's search history); else the reason */
+    private followStream(ended: Ended, reason: string): void {
+        var gen = this.gen;
+        var self = this;
+        // A wait of its own for the channel's page (a big reply)
+        this.giveUpLater();
+        liveNow(ended).then(function (found) {
+            if (gen !== self.gen) {
+                return;
+            }
+            if (found) {
+                toast('This live stream has ended, so its new stream from ' + ended.channel + ' plays.', 'info');
+                self.switchTo(found, false, true);
+            } else {
+                self.cannotPlay(reason);
+            }
+        }, function () {
+            if (gen === self.gen) {
+                self.cannotPlay(reason);
             }
         });
     }
@@ -2344,7 +2385,9 @@ export class OwnPlayer {
                 }
             }, END_STUCK_MS) as unknown as number;
         }
-        if (this.moving && !this.aheadTold && length > 0 && length - v.currentTime < NEXT_AHEAD_S) {
+        // (a live stream has no end; a video's own length: a start's window may still be told)
+        var whole = this.liveSpan() ? 0 : this.length();
+        if (this.moving && !this.aheadTold && whole > 0 && whole - v.currentTime < NEXT_AHEAD_S) {
             this.aheadTold = true;
             var coming = this.loop ? null : this.following(false);
             if (coming) {

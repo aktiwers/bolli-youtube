@@ -46,6 +46,14 @@ export var RETRIES = 3;
 export var STILL_AHEAD = 3;
 /** How long a request may take (ms) */
 export var TIMEOUT_MS = 20000;
+/** A start's window (the quick start): the TV is told the video ends at most this far after the start (s) until it
+ * plays, as this TV's browser starts at once within 10 s of the end (else after ~3 s of fed video) */
+export var WINDOW_S = 9.5;
+
+/** Where a start's window may end (s; 0: none, for a start this near the end) */
+export function windowFrom(start: number, length: number): number {
+    return length - start > WINDOW_S + 1 ? start + WINDOW_S : 0;
+}
 /** A jump lands this far after the keyframe (s): inside the buffer, not just before its first frame (that seek never ends) */
 export var KEYFRAME_IN = 0.05;
 /** A hole this short just ahead of the playhead is hopped over (s); a seek still not done after SEEK_STUCK_MS is

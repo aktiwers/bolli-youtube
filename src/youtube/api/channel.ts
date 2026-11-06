@@ -8,10 +8,10 @@
 // (e.g. Videos: Latest, Popular, Oldest).
 
 import { noteAvatar } from './avatars.js';
-import { all, browseText, first, get, lineText, Page, pageKey, picture, rowsOf, Rows, text, Video } from './feed.js';
+import { all, browseText, Ended, first, get, lineText, liveNamed, Page, pageKey, picture, rowsOf, Rows, text, Video } from './feed.js';
 import { Keeper } from './kept-pages.js';
 import { hash, VERSION } from './kept-rows.js';
-import { offThreadJson } from './off-thread.js';
+import { offThread, offThreadJson } from './off-thread.js';
 import { pagesForgotten, storedPage, storePage } from './page-store.js';
 import { Subscribe, subscribeOf } from './watch.js';
 import { account, NO_TOKEN } from './youtube.js';
@@ -149,6 +149,17 @@ function opened(key: string): void {
         unopened.splice(unopened.indexOf(was), 1);
         setTimeout(was.keep, 0);
     }
+}
+
+/** The stream live now on an ended live stream's channel page with its title (null: none): from the page as it is now,
+ * looked for off the main thread, kept nowhere */
+export function liveNow(ended: Ended): Promise<Video | null> {
+    return offThread(browseText({ browseId: ended.channelId }), 'liveNow', liveNowOf, JSON.stringify(ended));
+}
+
+/** liveNow's finding in a channel reply (arg: the ended stream as JSON; the worker's maker: parse-worker.ts) */
+export function liveNowOf(reply: any, arg: string): Video | null {
+    return liveNamed(rowsOf(reply), JSON.parse(arg)) || null;
 }
 
 /** A channel reply made into the app's Channel, rows stamped with the time (the worker's maker: parse-worker.ts) */

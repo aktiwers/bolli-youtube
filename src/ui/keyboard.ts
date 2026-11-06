@@ -4,7 +4,9 @@
 // and optionally enter: onEnter). Left/Right wrap within a line; Up/Down go
 // to the key under the same spot. Up on the first line and Down on the last
 // are not handled, so the surrounding screen can move focus. Only the keys
-// losing and gaining focus are restyled.
+// losing and gaining focus are restyled. A layout can be swapped (setLayout),
+// an empty label is a gap no focus lands on, keys can run actions (actions)
+// and what a key types can be worked out from the text (typer).
 
 import { h, setClass } from '../core/dom.js';
 import { digit, KEY } from '../core/keys.js';
@@ -37,22 +39,38 @@ export class Keyboard {
     private marked: Key | null = null;
     /** Called when the enter key is pressed */
     onEnter: () => void = function () { return undefined; };
+    /** Keys that run something instead of typing, by label */
+    actions: { [label: string]: () => void } = {};
+    /** The text after a key types (default: the key added at the end), and after Delete (default: its last character
+     * gone) */
+    typer: (text: string, key: string) => string = function (text, key) { return text + key; };
+    eraser: (text: string) => string = function (text) { return text.slice(0, -1); };
 
     /** onChange: gets the text after each key; lines: custom keys, line by line (special keys by their labels),
      * instead of the default layout */
     constructor(private labels: KeyboardLabels, private onChange: (text: string) => void, lines?: string[][]) {
-        lines = lines || [
+        this.el = h('div', 'bd-keyboard');
+        this.setLayout(labels, lines || [
             'abcdefghijklmno'.split(''),
             'pqrstuvwxyzæøå'.split('').concat([labels.del]),
             '1234567890'.split('').concat([labels.space, labels.clear])
-        ];
+        ]);
+    }
+
+    /** Other keys (and labels for the special ones): the focus on the key labelled focus, else on the same key, else
+     * as near its place as the new lines allow */
+    setLayout(labels: KeyboardLabels, lines: string[][], focus?: string): void {
+        var was = this.keys.length ? this.focusedLabel : '';
+        this.labels = labels;
         var wide: { [label: string]: number } = {};
         wide[labels.space] = labels.spaceUnits || 3;
         wide[labels.clear] = 2;
         if (labels.enter) {
             wide[labels.enter] = 2;
         }
-        this.el = h('div', 'bd-keyboard');
+        this.el.innerHTML = '';
+        this.keys = [];
+        this.marked = null;
         for (var l = 0; l < lines.length; l++) {
             var lineEl = h('div', 'bd-keyboard-line');
             var keys: Key[] = [];
@@ -60,14 +78,36 @@ export class Keyboard {
             for (var k = 0; k < lines[l].length; k++) {
                 var label = lines[l][k];
                 var units = wide[label] || 1;
-                var el = h('div', keyClass(units, false), label);
+                var el = h('div', label ? keyClass(units, false) : 'bd-key bd-key--gap', label);
                 lineEl.appendChild(el);
-                keys.push({ label: label, el: el, start: start, units: units });
+                if (label) {
+                    keys.push({ label: label, el: el, start: start, units: units });
+                }
                 start += units;
             }
             this.el.appendChild(lineEl);
             this.keys.push(keys);
         }
+        this.line = Math.min(this.line, this.keys.length - 1);
+        this.col = Math.max(0, Math.min(this.col, this.keys[this.line].length - 1));
+        var at = this.find(focus || was);
+        if (at) {
+            this.line = at[0];
+            this.col = at[1];
+        }
+        this.mark();
+    }
+
+    /** The line and place of the key with this label (null: none) */
+    private find(label: string): number[] | null {
+        for (var l = 0; label && l < this.keys.length; l++) {
+            for (var k = 0; k < this.keys[l].length; k++) {
+                if (this.keys[l][k].label === label) {
+                    return [l, k];
+                }
+            }
+        }
+        return null;
     }
 
     get onFirstLine(): boolean {
@@ -81,14 +121,8 @@ export class Keyboard {
 
     /** The key element with this label, or null */
     keyEl(label: string): HTMLElement | null {
-        for (var l = 0; l < this.keys.length; l++) {
-            for (var k = 0; k < this.keys[l].length; k++) {
-                if (this.keys[l][k].label === label) {
-                    return this.keys[l][k].el;
-                }
-            }
-        }
-        return null;
+        var at = this.find(label);
+        return at ? this.keys[at[0]][at[1]].el : null;
     }
 
     /** Focus is on the leftmost key (Left would wrap to the right) */
@@ -151,14 +185,16 @@ export class Keyboard {
     }
 
     private press(label: string): void {
-        if (label === this.labels.enter) {
+        if (this.actions[label]) {
+            this.actions[label]();
+        } else if (label === this.labels.enter) {
             this.onEnter();
         } else if (label === this.labels.del) {
-            this.setText(this.text.slice(0, -1));
+            this.setText(this.eraser(this.text));
         } else if (label === this.labels.clear) {
             this.setText('');
         } else {
-            this.type(label === this.labels.space ? ' ' : label);
+            this.setText(this.typer(this.text, label === this.labels.space ? ' ' : label));
         }
     }
 

@@ -64,6 +64,14 @@ export interface Video {
     wide?: string;
 }
 
+/** A live stream that has ended: its id, title, and its channel's name and id */
+export interface Ended {
+    id: string;
+    title: string;
+    channel: string;
+    channelId: string;
+}
+
 /** A YouTube browse page: a playlist, a channel, History, … */
 export interface Page {
     browseId: string;
@@ -286,6 +294,23 @@ function channelOf(tab: any, opens: Page): Page | null {
 /** YouTube's results for query (cached, so a term typed again, e.g. after Delete, shows them at once) */
 export function search(query: string): Promise<Rows> {
     return searches.getJson(query, function () { return askSearch(query); });
+}
+
+/** The first video in rows live now from the ended stream's channel with its title (spaces, punctuation and emoji
+ * aside: a stream started anew may change them), not the ended one itself (still marked live a while) */
+export function liveNamed(rows: Rows, ended: Ended): Video | undefined {
+    var squeeze = function (t: string): string {
+        return t.toLowerCase().replace(/[\s!-\/:-@\[-`{-~\u2000-\u2bff\ufe0f\ud800-\udfff]+/g, '');
+    };
+    var wanted = squeeze(ended.title);
+    var same = function (v: Video): boolean {
+        return !!v.live && v.id !== ended.id && v.channel === ended.channel && squeeze(v.title) === wanted;
+    };
+    var found: Video | undefined;
+    for (var i = 0; i < rows.shelves.length && !found; i++) {
+        found = rows.shelves[i].videos.filter(same)[0];
+    }
+    return found;
 }
 
 /** Prefetches query's results (the focus rests on a suggestion or on Search) */

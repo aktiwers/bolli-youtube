@@ -168,9 +168,9 @@ html, body { background: #0f0f0f; }
 .by-page-back--focused, .by-search-back--focused { background: #f1f1f1; color: #0f0f0f; }
 
 /* Search, as YouTube's TV app draws it: the field as a pill at the top (no microphone: there is no voice
-   search), YouTube's keyboard under it (plain letters, the focused one on a light square; Delete as
-   its icon; Space, Clear and Search as grey keys), its suggestions left of it (what is typed plain, the rest bold),
-   the results under them */
+   search), YouTube's keyboard under it (plain letters, the focused one on a light square; Delete, &123 and the
+   language key at the row ends, Delete and the language as icons; Space, Clear and Search as grey keys, as wide as
+   their words), its suggestions left of it (what is typed plain, the rest bold), the results under them */
 .bd-search-query { left: 104px; top: 44px; width: 676px; height: 48px; line-height: 48px; padding: 0 20px; border-radius: 24px;
                    background: #303030; font-size: 24px; font-weight: 700; color: #f1f1f1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bd-search-query--empty { color: #8a8a8a; }
@@ -178,13 +178,13 @@ html, body { background: #0f0f0f; }
 .bd-keyboard { margin: 116px 0 0 480px; }
 .bd-keyboard-line { height: 44px; white-space: nowrap; font-size: 0; }
 .bd-key { width: 44px; height: 44px; line-height: 44px; margin: 0; border-radius: 8px; background: transparent;
-          font-size: 24px; font-weight: 400; color: #f1f1f1; text-transform: uppercase; }
+          font-size: 24px; font-weight: 400; color: #f1f1f1; text-transform: uppercase; vertical-align: top; }
 .bd-key--focused { background: #f1f1f1; color: #0f0f0f; }
-.bd-key--wide2 { width: 88px; height: 36px; line-height: 36px; margin: 12px 8px 0 0; background: #303030;
-                                 font-size: 16px; font-weight: 700; }
+.bd-key--wide2 { width: auto; min-width: 88px; height: 36px; line-height: 36px; margin: 12px 8px 0 0; padding: 0 12px;
+                 box-sizing: border-box; background: #303030; font-size: 16px; font-weight: 700; }
 .bd-keyboard-line:last-child .bd-key:first-child { margin-left: 10px; }
-.bd-keyboard-line:first-child .bd-key:last-child { width: 64px; color: #f1f1f1; }
-.bd-keyboard-line:first-child .bd-key--focused:last-child { color: #0f0f0f; }
+.bd-key[data-side] { width: 64px; font-size: 18px; font-weight: 500; color: #f1f1f1; }
+.bd-key--focused[data-side] { color: #0f0f0f; }
 .bd-key-icon { display: inline-block; width: 28px; height: 28px; vertical-align: middle; }
 .bd-search-status { margin: 24px 0 0 104px; height: 28px; line-height: 28px; font-size: 19px; color: #aaa; }
 .by-suggestions { left: 104px; top: 112px; width: 360px; }
@@ -445,6 +445,8 @@ html, body { background: #0f0f0f; }
 .by-line { margin-bottom: 4px; padding: 12px 16px; border-radius: 12px; color: #f1f1f1; }
 .by-line--choice { padding-right: 56px; }
 .by-line-label { font-size: 18px; font-weight: 500; line-height: 26px; white-space: pre-line; word-wrap: break-word; }
+.by-line--heading { padding-top: 16px; padding-bottom: 4px; }
+.by-line--heading .by-line-label { font-size: 14px; font-weight: 700; line-height: 20px; color: #aaa; }
 .by-line--plain .by-line-label { font-size: 16px; font-weight: 400; line-height: 24px; }
 .by-line-under { font-size: 14px; line-height: 20px; color: #aaa; }
 .by-line-under { margin-top: 4px; }

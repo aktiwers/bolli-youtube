@@ -51,7 +51,7 @@ import { debugHooks } from './debug.js';
 import { ChannelView, KnownChannel } from './views/channel.js';
 import { SettingsView } from './views/settings.js';
 import { FeedOptions, FeedTexts, FeedView, KeptFeed } from './views/videos.js';
-import { noteWatched, watchedAt } from './views/tiles.js';
+import { noteWatched, startPicture, watchedAt } from './views/tiles.js';
 import { SubscriptionsView } from './views/subscriptions.js';
 import { LibraryView } from './views/library.js';
 
@@ -809,7 +809,7 @@ function play(video: Video): void {
         // A video closed a moment ago (e.g. Back by mistake) resumes as it was, with its play list if any
         var queue = video.list ? new ListQueue(video.list, video.id, video.repeat) : null;
         if (!own.comeBack(video.id, queue || undefined)) {
-            own.play(video.id, video.title, video.channel, t, queue);
+            own.play(video.id, video.title, video.channel, t, queue, startPicture(video));
         }
         // A taken-over preview now belongs to the player
         preview.stop();

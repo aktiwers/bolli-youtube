@@ -16,11 +16,11 @@
 import { getText, HttpError, postJson } from '../../core/http.js';
 import { android } from '../../core/platform.js';
 import { load, save } from '../../core/store.js';
-import { text } from './feed.js';
+import { Ended, text } from './feed.js';
 import { subtitleLanguages } from './languages.js';
 import { playerScript } from './player-script.js';
 import { SabrClient } from './sabr.js';
-import { freshSignIn, innertube, noAnswer, tvClient } from './youtube.js';
+import { freshSignIn, innertube, lastAccount, noAnswer, tvClient } from './youtube.js';
 
 var PLAYER = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
 var VISITOR = 'https://www.youtube.com/sw.js_data';
@@ -170,6 +170,13 @@ export interface NoStreams {
     reason: string;
     /** The video's length (s) when YouTube tells it anyway (an age check) */
     length?: number;
+    /** The TV client, asked as YouTube's player asks (signed in, or as a guest where there is no account), got only an
+     * error message (no offer, no way on, not a bot check) */
+    asYouTube?: boolean;
+    /** Both ways failed alike and the TV client's answer was asYouTube: YouTube's player gets the same */
+    refused?: boolean;
+    /** A live stream that has ended, as YouTube still describes it */
+    ended?: Ended;
 }
 
 /** The visitor id: the stored one while recent (unless fresh), else a new one */
@@ -249,7 +256,7 @@ export function noneCanPlay(e: NoStreams): boolean {
 
 /** A video's streams for the own player: as a guest, else via SABR (age check, members only); sabrFirst reverses
  * the order, as does the method that worked lately (sabrFirstNow). If both fail, rejects with the first reason (and the
- * other's). */
+ * other's), or the TV client's where both were refused alike (refused). */
 export function playableStreams(id: string, sabrFirst: boolean): Promise<Streams> {
     var sabr = sabrFirstNow(sabrFirst);
     var first = sabr ? sabrStreams(id) : streams(id);
@@ -268,6 +275,13 @@ export function playableStreams(id: string, sabrFirst: boolean): Promise<Streams
             only.only = true;
             return only;
         }, function (other: NoStreams) {
+            // Refused alike, as YouTube's player would be: the TV client's reason, as that player shows it (with the
+            // guest's details of an ended live stream)
+            var tv = sabr ? e : other;
+            var guest = sabr ? other : e;
+            if (tv.asYouTube && guest.status === tv.status) {
+                throw { status: tv.status, reason: tv.reason, refused: true, ended: guest.ended } as NoStreams;
+            }
             throw { status: e.status, reason: e.reason + (other.reason ? ' (' + (sabr ? 'as a guest' : 'SABR') + ': ' + other.reason + ')' : '') } as NoStreams;
         });
     });
@@ -335,7 +349,19 @@ function askSabr(id: string, reloadToken: string): Promise<Streams> {
             var reply = got[2] || {};
             var playable = reply.playabilityStatus || {};
             if (playable.status !== 'OK') {
-                throw { status: playable.status || 'NO_REPLY', reason: playable.reason || '' } as NoStreams;
+                // (the line under the reason that YouTube's player shows too)
+                var message = playable.errorScreen && playable.errorScreen.playerErrorMessageRenderer;
+                var reason = playable.reason || '';
+                var under = message ? text(message.subreason) : '';
+                var failed = { status: playable.status || 'NO_REPLY', reason: under && under !== reason ? (reason ? reason + (/[.!?]$/.test(reason) ? ' ' : '. ') : '') + under : reason } as NoStreams;
+                if (!message || message.proceedButton || botCheck(playable)) {
+                    throw failed;
+                }
+                // Not signed in: as YouTube's player only if there is no account (else its token may just have failed)
+                return (got[1] ? Promise.resolve('') : lastAccount()).then(function (key) {
+                    failed.asYouTube = !key;
+                    throw failed;
+                });
             }
             var url = reply.streamingData && reply.streamingData.serverAbrStreamingUrl;
             var config = reply.playerConfig && reply.playerConfig.mediaCommonConfig && reply.playerConfig.mediaCommonConfig.mediaUstreamerRequestConfig &&
@@ -369,6 +395,11 @@ function askSabr(id: string, reloadToken: string): Promise<Streams> {
     });
 }
 
+/** A playability status saying the client looks like a bot (not about the video) */
+function botCheck(playable: any): boolean {
+    return /bot/i.test(playable.reason || '');
+}
+
 /** A failure as NoStreams: an HTTP or other error gets status HTTP and its message */
 function noStreams(e: NoStreams | { message: string }): NoStreams {
     return (e as NoStreams).reason !== undefined ? e as NoStreams : { status: 'HTTP', reason: (e as { message: string }).message };
@@ -394,10 +425,12 @@ function ask(id: string, again: boolean): Promise<Streams> {
             return streamsOf(reply);
         }
         // A bot check (not an age check, private video etc.): retry with a new visitor id
-        if (!again && playable.status === 'LOGIN_REQUIRED' && /bot/i.test(playable.reason || '')) {
+        if (!again && playable.status === 'LOGIN_REQUIRED' && botCheck(playable)) {
             return ask(id, true);
         }
-        throw { status: playable.status || 'NO_REPLY', reason: playable.reason || '', length: +(reply && reply.videoDetails && reply.videoDetails.lengthSeconds) || undefined } as NoStreams;
+        var details = reply && reply.videoDetails || {};
+        throw { status: playable.status || 'NO_REPLY', reason: playable.reason || '', length: +details.lengthSeconds || undefined,
+            ended: details.isLiveContent && !details.isLive && details.title && details.channelId ? { id: id, title: details.title, channel: details.author || '', channelId: details.channelId } : undefined } as NoStreams;
     }, function (e: HttpError | NoStreams) {
         throw noStreams(e);
     });

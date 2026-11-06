@@ -2,7 +2,7 @@
 // lists (settings, description, comments, About): a title over a column of lines navigated with
 // Up/Down (the list scrolls to keep the focused line in view; a list opens on its chosen line).
 // A line is a choice (OK picks it; the chosen one has a checkmark; the panel closes unless the
-// line stays, then the list is redrawn to show the change) or text to read. A list pushed over
+// line stays, then the list is redrawn to show the change), text to read, or a heading the focus passes over. A list pushed over
 // another returns to it on Back (or Left); otherwise Back closes the panel. Styled by
 // themes/<id>.css (by-panel, by-line).
 
@@ -20,6 +20,8 @@ export interface PanelLine {
     under?: string;
     /** Body text, not a choice's weight */
     plain?: boolean;
+    /** Above the lines it heads: not focused */
+    heading?: boolean;
     /** A choice: the one chosen has the checkmark */
     chosen?: boolean;
     action?: () => void;
@@ -120,7 +122,8 @@ export class SidePanel {
     private add(lines: PanelLine[]): void {
         var self = this;
         lines.forEach(function (line) {
-            var el = h('div', 'by-line' + (line.plain ? ' by-line--plain' : '') + (line.action ? ' by-line--choice' : ''));
+            var el = h('div', 'by-line' + (line.plain ? ' by-line--plain' : '') + (line.heading ? ' by-line--heading' : '') +
+                (line.action ? ' by-line--choice' : ''));
             el.appendChild(h('div', 'by-line-label', line.label));
             if (line.under) {
                 el.appendChild(h('div', 'by-line-under', line.under));
@@ -145,7 +148,7 @@ export class SidePanel {
         switch (code) {
             case KEY.UP:
             case KEY.DOWN:
-                this.focus(this.focused + (code === KEY.UP ? -1 : 1));
+                this.focus(this.step(this.focused, code === KEY.UP ? -1 : 1));
                 break;
             case KEY.OK:
                 var line = this.lines[this.focused] ? this.lines[this.focused].line : null;
@@ -188,12 +191,25 @@ export class SidePanel {
                 at = i;
             }
         }
-        this.focus(Math.max(0, at));
+        this.focus(at < 0 ? this.step(-1, 1) : at);
     }
 
-    /** Focuses a line, scrolling the list to keep it in view */
+    /** The line way (1 down, -1 up) from index that is not a heading (none: index) */
+    private step(index: number, way: number): number {
+        for (var i = index + way; i >= 0 && i < this.lines.length; i += way) {
+            if (!this.lines[i].line.heading) {
+                return i;
+            }
+        }
+        return index;
+    }
+
+    /** Focuses a line (past a heading), scrolling the list to keep it in view */
     private focus(index: number): void {
         var to = Math.max(0, Math.min(this.lines.length - 1, index));
+        if (this.lines[to] && this.lines[to].line.heading) {
+            to = this.step(to, 1);
+        }
         if (this.lines[this.focused]) {
             toggleClass(this.lines[this.focused].el, 'by-line--focused', false);
         }

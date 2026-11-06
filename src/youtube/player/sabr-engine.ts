@@ -17,13 +17,16 @@
 // video's networks while there is one (networks.ts).
 // Fails as 'expired' (403, or the server wants a fresh /player reply), 'protection' (device
 // attestation wanted), 'sabr' (server error or empty answers), 'network', 'media'.
+// A start tells the TV the video ends WINDOW_S after it (a resume start: after its keyframe) and appends no video
+// segment ending past that, the audio cut there, until it plays (the quick start, as dash.ts's): then the real length,
+// and the audio segment across the window appended again from the cut on (kept: not asked of the server again).
 
 import { base64Bytes, BufferedRange, FormatId, SabrAnswer, SabrReader, sabrRequest, SabrSegment } from '../api/sabr.js';
 import { Format, Sabr } from '../api/streams.js';
 import { youtubePage } from '../api/youtube.js';
-import { AHEAD_MB, BEHIND_MB, BEHIND_S, bufferedEnd, Engine, hopHole, jumpTarget, KEYFRAME_IN, MB, RETRIES, seekNudged, STILL_AHEAD, TICK_MS, TIMEOUT_MS } from './engine.js';
+import { AHEAD_MB, BEHIND_MB, BEHIND_S, bufferedEnd, Engine, hopHole, jumpTarget, KEYFRAME_IN, MB, RETRIES, seekNudged, STILL_AHEAD, TICK_MS, TIMEOUT_MS, windowFrom } from './engine.js';
 import { networkFailed, onNetwork, stallWatch } from './networks.js';
-import { keepPipeline, openPipeline, Pipeline, setLength, spoilingFail } from './pipeline.js';
+import { keepPipeline, openPipeline, Pipeline, setLength, setLengthSoon, spoilingFail } from './pipeline.js';
 
 /** Request more once less than this is buffered ahead of the playhead (s), unless more than AHEAD_MB of the track is;
  * trimmed to half once BEHIND_S or BEHIND_MB lie behind it */
@@ -171,6 +174,12 @@ export class SabrEngine implements Engine {
     private pending = -1;
     private snap = false;
     private stuckTimer = 0;
+    /** The start's window (s; 0: none), the real length, the audio segment across it, where it ended (-1: the audio's
+     * append window reset) */
+    private window = 0;
+    private length = 0;
+    private cut: SabrSegment | null = null;
+    private cutAt = -1;
 
     /** onFail: 'expired', 'protection', 'sabr', 'network', 'media' */
     private onFail: (why: string) => void;
@@ -187,9 +196,12 @@ export class SabrEngine implements Engine {
         var self = this;
         this.tracks = [new Track(video, PICTURE), new Track(audio, SOUND)];
         this.startAt = startAt;
+        this.length = Math.max(video.duration, audio.duration) || 1;
         if (startAt > 0) {
             this.pending = startAt;
             this.snap = true;
+        } else {
+            this.openWindow(0);
         }
         this.pump();
         // The pipeline the previous video left if it fits these formats, else a fresh one
@@ -201,7 +213,7 @@ export class SabrEngine implements Engine {
                 return;
             }
             try {
-                setLength(pipe, Math.max(video.duration, audio.duration) || 1);
+                setLength(pipe, self.window || self.length);
                 self.tracks.forEach(function (track, i) {
                     track.sb = pipe.buffers[i];
                 });
@@ -221,6 +233,7 @@ export class SabrEngine implements Engine {
             self.on('seeked', function () { clearTimeout(self.stuckTimer); });
             self.on('waiting', function () { self.hop(); });
             self.on('loadedmetadata', function () { self.settle(); });
+            self.on('playing', function () { self.lift(); });
             self.on('error', function () { self.onFail('media'); });
             self.timer = setInterval(function () {
                 self.hop();
@@ -242,6 +255,7 @@ export class SabrEngine implements Engine {
         if (!this.tracks.length) {
             return;
         }
+        this.lift();
         this.pending = t;
         this.snap = false;
         this.restart(t);
@@ -276,6 +290,28 @@ export class SabrEngine implements Engine {
     private on(event: string, listener: () => void): void {
         this.listeners[event] = listener;
         this.video.addEventListener(event, listener);
+    }
+
+    /** The start's window from start (s), once the start is known; the told length now, or once the buffers are free
+     * (only the inits can be in) */
+    private openWindow(start: number): void {
+        this.window = windowFrom(start, this.length);
+        if (this.window && this.pipe) {
+            setLengthSoon(this.pipe, this.window);
+        }
+    }
+
+    /** The start's window lifted (the video plays, or a seek moves it): the real length */
+    private lift(): void {
+        if (!this.window) {
+            return;
+        }
+        this.cutAt = this.window;
+        this.window = 0;
+        if (this.pipe) {
+            setLengthSoon(this.pipe, this.length);
+        }
+        this.pump();
     }
 
     /** Where the playhead is or is going (s; until the pipeline is in, currentTime may be the previous video's) */
@@ -507,6 +543,7 @@ export class SabrEngine implements Engine {
         // A resume start whose video answer had no segment: play from the requested time
         if (this.snap && track.kind === PICTURE) {
             this.snap = false;
+            this.openWindow(this.pending);
         }
         this.pump();
     }
@@ -519,6 +556,7 @@ export class SabrEngine implements Engine {
                 this.pending = h.startMs / 1000 + KEYFRAME_IN;
             }
             this.snap = false;
+            this.openWindow(this.pending);
             this.pump();
         }
     }
@@ -542,13 +580,52 @@ export class SabrEngine implements Engine {
         return taken;
     }
 
-    /** Appends the track's next segment (one at a time) */
+    /** Appends the track's next segment (one at a time): none past the start's window (no window at all for a first
+     * video segment longer than it), the audio cut there; once lifted, the audio's cut segment again from the cut on */
     private feed(track: Track): void {
         var sb = track.sb;
-        if (this.stopped || !sb || sb.updating || !track.queue.length) {
+        if (this.stopped || !sb || sb.updating) {
             return;
         }
-        var seg = track.queue.shift() as SabrSegment;
+        if (track.kind === SOUND && this.cutAt >= 0 && !this.window) {
+            var again = this.cut;
+            this.cut = null;
+            sb.appendWindowEnd = Infinity;
+            if (again) {
+                sb.appendWindowStart = this.cutAt;
+                try {
+                    sb.appendBuffer(again.data);
+                } catch (e) {
+                    // Full: again once more is trimmed
+                    this.cut = again;
+                    if ((e as Error).name !== 'QuotaExceededError') {
+                        this.onFail('media');
+                    }
+                }
+                return;
+            }
+            sb.appendWindowStart = 0;
+            this.cutAt = -1;
+        }
+        var seg = track.queue[0];
+        if (!seg) {
+            return;
+        }
+        if (this.window && !seg.init) {
+            var end = (seg.startMs + seg.durationMs) / 1000;
+            if (track.kind === PICTURE && end > this.window + 0.01 && !track.pieces.some(function (p) { return p.appended; })) {
+                this.lift();
+            } else if (track.kind === PICTURE ? end > this.window + 0.01 : seg.startMs / 1000 >= this.window) {
+                return;
+            }
+            if (track.kind === SOUND) {
+                sb.appendWindowEnd = this.window;
+                if (end > this.window) {
+                    this.cut = seg;
+                }
+            }
+        }
+        track.queue.shift();
         try {
             sb.appendBuffer(seg.data);
             track.full = false;

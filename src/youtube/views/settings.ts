@@ -184,45 +184,9 @@ function dearrowOptions(): Setting {
     return several('DeArrow options', 'What DeArrow changes besides the titles its users wrote.', 'dearrow.png', 'dearrowOptions', function () { return options; });
 }
 
-/** The app's own settings (pages: possible start pages; more: Subtitles' "More languages") */
-function bolli(pages: StartPage[], more: () => void): Setting[] {
-    var settings = [
-        autoplay(),
-        pref('Video quality', 'The quality videos start at', pic('clear_search_history'), 'quality', [
-            { value: 0, name: 'Auto', note: 'as good as the video and the connection allow, up to 4K' },
-            { value: HIGHEST, name: 'Highest available', note: 'the best the video has, up to 8K where the TV plays it' },
-            { value: 2160, name: '4K (2160p)', note: 'or the closest below it' },
-            { value: 1440, name: '1440p (2K)', note: 'or the closest below it' },
-            { value: 1080, name: '1080p (HD)', note: 'or the closest below it' },
-            { value: 720, name: '720p', note: 'or the closest below it' },
-            { value: 480, name: '480p', note: 'or the closest below it' }
-        ]),
-        subtitles(more),
-        pref('Subtitle style', 'How YouTube\'s automatic subtitles appear', pic('language'), 'captionStyle', CAPTION_STYLES),
-        pref('Previews', 'The video whose tile you rest on plays in the tile (in Bolli\'s player)', pic('clear_watch_history'), 'previews', [
-            { value: 'sound', name: 'With sound', note: '' },
-            { value: 'muted', name: 'Without sound', note: '' },
-            { value: 'off', name: 'Off', note: '' }
-        ]),
-        sponsorBlock(),
-        // Its picture drawn for the app in the style of YouTube's
-        pref('Most replayed', 'A graph over the progress bar in Bolli\'s player of the parts people watch again the most, from YouTube',
-            'replays.png', 'replays', onOff('shown on videos YouTube has one for (popular ones)', 'no graph')),
-        // Its picture drawn for the app, as Most replayed's
-        pref('Dislike counts', 'How many dislike a video, on its watch page beside the likes, as Return YouTube Dislike estimates them',
-            'dislikes.png', 'dislikes', onOff('asked of returnyoutubedislike.com for each video whose watch page you open', 'no count')),
-        // Its picture drawn for the app, as Most replayed's
-        pref('Live chat', 'A live stream\'s chat beside the picture in Bolli\'s player (also in the player\'s settings)', 'chat.png',
-            'liveChat', onOff('the latest messages at the right of the picture', 'no chat')),
-        // DeArrow's logo (from github.com/ajayyy/DeArrow, based on Twemoji), bundled with the app
-        pref('DeArrow', 'Titles and thumbnails DeArrow\'s users submit, in place of clickbait', 'dearrow.png', 'dearrow', [
-            { value: '', name: 'Off', note: 'YouTube\'s titles and thumbnails' },
-            { value: 'classic', name: 'Classic', note: 'DeArrow\'s titles and thumbnails wherever its users submitted them' },
-            { value: 'casual', name: 'Casual', note: 'YouTube\'s own titles where DeArrow\'s users voted them fine (funny, clever, descriptive), DeArrow\'s elsewhere' }
-        ]),
-        dearrowOptions(),
-        pref('History', 'What you watch in Bolli\'s player, told to YouTube', pic('privacy_and_terms'), 'history',
-            onOff('it goes into your YouTube history, and YouTube remembers where you stopped', 'Bolli\'s player tells YouTube nothing of what you watch')),
+/** The app's own settings, under headings (pages: possible start pages; more: Subtitles' "More languages") */
+function bolli(pages: StartPage[], more: () => void): { title: string; settings: Setting[] }[] {
+    var browsing = [
         // Any page of the rail
         pref('Start page', 'The screen the app starts on', pic('location'), 'startPage', function () {
             return pages.map(function (p) { return { value: p.id, name: p.label, note: '' }; });
@@ -231,26 +195,72 @@ function bolli(pages: StartPage[], more: () => void): Setting[] {
             { value: 'sharpest', name: 'Sharpest', note: 'the clearest pictures; they take the most memory (about 30 MB more while a video plays)' },
             { value: 'sharp', name: 'Sharp', note: 'clearer pictures, a little more memory' },
             { value: 'standard', name: 'Standard', note: 'YouTube\'s small pictures: softer on this screen, the least memory' }
-        ]),
-        pref('Videos start sooner', 'The video or page whose tile you rest on gets ready', pic('send_feedback'), 'preload',
-            onOff('it opens about a second sooner', '')),
-        pref('Loading sign', 'What shows while a video starts in Bolli\'s player', pic('reset_app'), 'startSign',
-            onOff('the channel\'s picture fills up', 'the screen stays dark until the video plays')),
-        pref('Start picture', 'What shows behind the loading sign while a video starts in Bolli\'s player, until it moves', pic('reset_app'), 'startPicture', [
-            { value: 'tile', name: 'The tile\'s picture', note: 'sharp, at once; it melts into the video once that moves' },
-            { value: 'frame', name: 'The frame it starts on', note: 'the very picture it opens with, blurry: from YouTube\'s seek previews' },
-            { value: 'none', name: 'None', note: 'dark until the video plays: its picture comes soonest' }
-        ]),
-        pref('Streams by SABR', 'How Bolli\'s player gets the videos', pic('parent_code'), 'sabr',
-            onOff('as YouTube\'s TV app does (signed in, by SABR), as a guest when that fails', 'as a guest, signed in (by SABR) only when YouTube asks, as for an age check'))
+        ])
     ];
     // Only when there is more than one theme
     if (themes().length > 1) {
-        settings.push(pref('Theme', 'How the app looks', '', 'theme', function () {
+        browsing.push(pref('Theme', 'How the app looks', '', 'theme', function () {
             return themes().map(function (t) { return { value: t.id, name: t.name, note: '' }; });
         }, function (id) { applyTheme(String(id)); }));
     }
-    return settings;
+    return [
+        { title: 'Playback', settings: [
+            autoplay(),
+            pref('Video quality', 'The quality videos start at', pic('clear_search_history'), 'quality', [
+                { value: 0, name: 'Auto', note: 'as good as the video and the connection allow, up to 4K' },
+                { value: HIGHEST, name: 'Highest available', note: 'the best the video has, up to 8K where the TV plays it' },
+                { value: 2160, name: '4K (2160p)', note: 'or the closest below it' },
+                { value: 1440, name: '1440p (2K)', note: 'or the closest below it' },
+                { value: 1080, name: '1080p (HD)', note: 'or the closest below it' },
+                { value: 720, name: '720p', note: 'or the closest below it' },
+                { value: 480, name: '480p', note: 'or the closest below it' }
+            ]),
+            pref('History', 'What you watch in Bolli\'s player, told to YouTube', pic('privacy_and_terms'), 'history',
+                onOff('it goes into your YouTube history, and YouTube remembers where you stopped', 'Bolli\'s player tells YouTube nothing of what you watch')),
+            // Its picture drawn for the app, as Most replayed's
+            pref('Live chat', 'A live stream\'s chat beside the picture in Bolli\'s player (also in the player\'s settings)', 'chat.png',
+                'liveChat', onOff('the latest messages at the right of the picture', 'no chat')),
+            // Its picture drawn for the app in the style of YouTube's
+            pref('Most replayed', 'A graph over the progress bar in Bolli\'s player of the parts people watch again the most, from YouTube',
+                'replays.png', 'replays', onOff('shown on videos YouTube has one for (popular ones)', 'no graph')),
+            pref('Streams by SABR', 'How Bolli\'s player gets the videos', pic('parent_code'), 'sabr',
+                onOff('as YouTube\'s TV app does (signed in, by SABR), as a guest when that fails', 'as a guest, signed in (by SABR) only when YouTube asks, as for an age check'))
+        ] },
+        { title: 'Subtitles', settings: [
+            subtitles(more),
+            pref('Subtitle style', 'How YouTube\'s automatic subtitles appear', pic('language'), 'captionStyle', CAPTION_STYLES)
+        ] },
+        { title: 'Starting videos', settings: [
+            pref('Videos start sooner', 'The video or page whose tile you rest on gets ready', pic('send_feedback'), 'preload',
+                onOff('it opens about a second sooner', '')),
+            pref('Previews', 'The video whose tile you rest on plays in the tile (in Bolli\'s player)', pic('clear_watch_history'), 'previews', [
+                { value: 'sound', name: 'With sound', note: '' },
+                { value: 'muted', name: 'Without sound', note: '' },
+                { value: 'off', name: 'Off', note: '' }
+            ]),
+            pref('Loading sign', 'What shows while a video starts in Bolli\'s player', pic('reset_app'), 'startSign',
+                onOff('the channel\'s picture fills up', 'the screen stays dark until the video plays')),
+            pref('Start picture', 'What shows behind the loading sign while a video starts in Bolli\'s player, until it moves', pic('reset_app'), 'startPicture', [
+                { value: 'tile', name: 'The tile\'s picture', note: 'sharp, at once; it melts into the video once that moves' },
+                { value: 'frame', name: 'The frame it starts on', note: 'the very picture it opens with, blurry: from YouTube\'s seek previews' },
+                { value: 'none', name: 'None', note: 'dark until the video plays: its picture comes soonest' }
+            ])
+        ] },
+        { title: 'Browsing', settings: browsing },
+        { title: 'Add-ons', settings: [
+            sponsorBlock(),
+            // DeArrow's logo (from github.com/ajayyy/DeArrow, based on Twemoji), bundled with the app
+            pref('DeArrow', 'Titles and thumbnails DeArrow\'s users submit, in place of clickbait', 'dearrow.png', 'dearrow', [
+                { value: '', name: 'Off', note: 'YouTube\'s titles and thumbnails' },
+                { value: 'classic', name: 'Classic', note: 'DeArrow\'s titles and thumbnails wherever its users submitted them' },
+                { value: 'casual', name: 'Casual', note: 'YouTube\'s own titles where DeArrow\'s users voted them fine (funny, clever, descriptive), DeArrow\'s elsewhere' }
+            ]),
+            dearrowOptions(),
+            // Its picture drawn for the app, as Most replayed's
+            pref('Dislike counts', 'How many dislike a video, on its watch page beside the likes, as Return YouTube Dislike estimates them',
+                'dislikes.png', 'dislikes', onOff('asked of returnyoutubedislike.com for each video whose watch page you open', 'no count'))
+        ] }
+    ];
 }
 
 /** Linking a phone: by casting on the same network, or with a TV code from another (YouTube's steps) */
@@ -372,7 +382,9 @@ export class SettingsView implements View {
         panel.appendChild(this.body);
         this.el.appendChild(panel);
         var self = this;
-        this.addGroup('Bolli', bolli(pages, function () { self.moreLanguages(); }));
+        bolli(pages, function () { self.moreLanguages(); }).forEach(function (group) {
+            self.addGroup(group.title, group.settings);
+        });
         this.addGroup('Link TV & phone', LINK);
         this.ownCount = this.items.length;
         this.aboutHead = this.addGroup('Bolli YouTube', [about()])[0];

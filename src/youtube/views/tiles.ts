@@ -206,6 +206,12 @@ function ownImage(v: Video): string {
     return v.poster || v.image || thumbnail(v.id);
 }
 
+/** The picture of its own a video's tile shows focused, which its start shows too (in the browser's cache by then): a
+ * poster tile's wide one, a mix's (DeArrow's where it has one); '' none (the start shows the video's thumbnail) */
+export function startPicture(v: Video): string {
+    return v.poster ? v.wide || '' : v.image ? dearrowPicture(v.id, v.image) : '';
+}
+
 /** Lengths looked up from videos' streams (also the previews' start), for the session: 'LIVE', '' (none known) */
 var lengths: { [id: string]: Promise<string> } = {};
 var looking = 0;

@@ -9,17 +9,21 @@
 // moves by whole segments, back at most to the window's start and forward to the head; a viewer following it live (not
 // after their own jump, seek or pause) who fell behind by a stall catches up (keepUp). A 403 fails as 'expired', other
 // errors as 'network' after retries. prefetchLive fetches a start ahead (its tile rests in focus): the head's number and both tracks'
-// first segments, which the next start of those formats takes while fresh.
+// first segments, which the next start of those formats takes while fresh. A start tells the TV the stream ends just
+// after the whole segments within WINDOW_S of it, and feeds no more until it plays (the quick start, as dash.ts's): then
+// the day-long length comes back.
 
 import { clock, progress } from '../../core/time.js';
 import { Format, Live } from '../api/streams.js';
 import { oneFragment, segmentStart } from './containers.js';
-import { BEHIND_S, bufferedEnd, Engine, KEYFRAME_IN, RETRIES, STILL_AHEAD, TICK_MS } from './engine.js';
-import { keepPipeline, openPipeline, Pipeline, setLength, spoilingFail } from './pipeline.js';
+import { BEHIND_S, bufferedEnd, Engine, KEYFRAME_IN, RETRIES, STILL_AHEAD, TICK_MS, WINDOW_S } from './engine.js';
+import { keepPipeline, openPipeline, Pipeline, setLength, setLengthSoon, spoilingFail } from './pipeline.js';
 import { note } from './play-log.js';
 
 /** Segments behind the head a start begins at (YouTube's own players stay about this far behind) */
 var START_BEHIND = 3;
+/** A live stream's length past its base: a day of playing on */
+var DAY_S = 86400;
 /** Buffer up to this far ahead of the playhead (s; BEHIND_S kept behind it) */
 var AHEAD_S = 15;
 /** A request for the next segment waits until YouTube has made it (~5 s) */
@@ -110,6 +114,8 @@ export class LiveEngine implements Engine {
     private latest = -1;
     /** A jump's or the start's segment (-1: none): once its video is in, the playhead moves to its start */
     private landing = -1;
+    /** The start's window (lift): the segment no track feeds until the stream plays (-1: none) */
+    private windowSq = -1;
     /** The start fetched ahead this one takes (null: none) */
     private early: typeof early = null;
     private onFail: (why: string) => void;
@@ -224,6 +230,7 @@ export class LiveEngine implements Engine {
 
     stop(): void {
         this.stopped = true;
+        this.windowSq = -1;
         clearInterval(this.timer);
         for (var event in this.listeners) {
             this.video.removeEventListener(event, this.listeners[event]);
@@ -252,9 +259,13 @@ export class LiveEngine implements Engine {
     private open(): void {
         var self = this;
         var pipe = this.pipe as Pipeline;
+        var start = Math.max(0, this.head - START_BEHIND);
+        // The start's window: the whole segments within WINDOW_S of the start (and a little over them: a segment runs
+        // a few ms longer than its nominal length)
+        var whole = Math.floor((WINDOW_S - 0.5) / this.live.segment);
+        this.windowSq = whole > 0 ? start + whole : -1;
         try {
-            // Long enough for a day of playing on
-            setLength(pipe, this.base + 86400);
+            setLength(pipe, this.base + (this.windowSq >= 0 ? whole * this.live.segment + 0.5 : DAY_S));
             this.tracks.forEach(function (t, i) {
                 t.sb = pipe.buffers[i];
             });
@@ -262,7 +273,6 @@ export class LiveEngine implements Engine {
             this.onFail('media');
             return;
         }
-        var start = Math.max(0, this.head - START_BEHIND);
         this.tracks.forEach(function (t) { t.sq = start; });
         this.landing = start;
         pipe.onUpdate = function (i) {
@@ -275,12 +285,18 @@ export class LiveEngine implements Engine {
             }
         };
         this.on('error', function () { self.onFail('media'); });
-        this.on('playing', function () { self.keepUp(); });
+        // (its data may be in before the metadata: then nothing else would land it during the start's window)
+        this.on('loadedmetadata', function () { self.land(); });
+        this.on('playing', function () {
+            self.lift();
+            self.keepUp();
+        });
         // Played after a pause: the viewer's resume (a stall's end fires 'playing' only), or a start (following again
         // once near the head)
         this.on('play', function () { self.following = false; });
-        // (Also what an update did not take: a full buffer is trimmed and appended to again)
+        // (Also what an update did not take: a full buffer is trimmed and appended to again; a landing missed)
         this.timer = setInterval(function () {
+            self.land();
             self.tracks.forEach(function (t) { self.trim(t); });
             self.feedAll();
             self.pump();
@@ -358,12 +374,6 @@ export class LiveEngine implements Engine {
         }
         if (isNaN(this.shift)) {
             this.shift = this.base - own;
-            var shift = this.shift;
-            this.tracks.forEach(function (t) {
-                if (t.sb) {
-                    t.sb.timestampOffset = shift;
-                }
-            });
         }
         this.starts[sq] = own + this.shift;
         this.latest = Math.max(this.latest, sq);
@@ -377,12 +387,16 @@ export class LiveEngine implements Engine {
         }
     }
 
-    /** Appends the track's next fetched segment once its buffer is free */
+    /** Appends the track's next fetched segment once its buffer is free, setting the shift there (setting it on a busy
+     * buffer throws); none past the start's window */
     private feed(t: LiveTrack): void {
-        if (!t.sb || t.sb.updating || !t.waiting.length || isNaN(this.shift)) {
+        if (!t.sb || t.sb.updating || !t.waiting.length || isNaN(this.shift) || this.windowSq >= 0 && t.sq - t.waiting.length >= this.windowSq) {
             return;
         }
         try {
+            if (t.sb.timestampOffset !== this.shift) {
+                t.sb.timestampOffset = this.shift;
+            }
             t.sb.appendBuffer(t.waiting[0]);
             t.waiting.shift();
         } catch (e) {
@@ -395,8 +409,8 @@ export class LiveEngine implements Engine {
 
     /** Moves the playhead to the landing segment's start once both tracks hold it (and the video has its metadata) */
     private land(): void {
-        var at = this.starts[this.landing];
-        if (this.landing >= 0 && at !== undefined && this.video.readyState >= 1 && this.buffered(this.tracks[0], at + KEYFRAME_IN) &&
+        var at = this.landing >= 0 ? this.starts[this.landing] : undefined;
+        if (at !== undefined && this.video.readyState >= 1 && this.buffered(this.tracks[0], at + KEYFRAME_IN) &&
             this.buffered(this.tracks[1], at + KEYFRAME_IN)) {
             this.video.currentTime = at + KEYFRAME_IN;
             note('live', 'landed at ' + this.landing);
@@ -440,9 +454,19 @@ export class LiveEngine implements Engine {
         this.video.addEventListener(event, listener);
     }
 
+    /** The start's window lifted (the stream plays, or a jump moves it): the day-long length, the rest fed */
+    private lift(): void {
+        if (this.windowSq >= 0) {
+            this.windowSq = -1;
+            setLengthSoon(this.pipe as Pipeline, this.base + DAY_S);
+            this.feedAll();
+        }
+    }
+
     /** Plays from segment sq (within the window and up to the head): from the buffer if it holds it, else fetched
      * anew */
     private goTo(sq: number): void {
+        this.lift();
         // (Not the oldest segment itself: it may be gone by the time it is asked for)
         var first = this.head - Math.floor(this.live.dvr / this.live.segment) + 2;
         sq = Math.min(this.head, Math.max(first, sq));
