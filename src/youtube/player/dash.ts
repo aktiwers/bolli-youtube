@@ -1,7 +1,7 @@
 // DASH engine of the player: plays a video's separate video and audio formats (api/streams.ts: MP4 with a sidx
 // index, WebM with Cues) through Media Source. Each track first fetches its head (init and index, plus the first
 // piece of media when starting at 0, saving a round trip), then its segments in ~1 s ranged requests (YouTube
-// throttles one long request), up to AHEAD s / AHEAD_MB ahead; media the player will skip (skips: SponsorBlock's)
+// throttles one long request), up to AHEAD s / AHEAD_MB ahead (engine.ts roomAhead); media the player will skip (skips: SponsorBlock's)
 // is not loaded, the time and bytes ahead count on past it. Data behind is trimmed at segment starts and only
 // between segments: a trim with a segment half appended makes the TV's Media Source drop the rest of it.
 // Jumps land on keyframes (segment starts): the TV's decoder decodes from the previous keyframe at ~2.3x speed.
@@ -14,7 +14,7 @@
 
 import { Format } from '../api/streams.js';
 import { parseCues, parseSidx, Segment } from './containers.js';
-import { AHEAD_MB, BEHIND_MB, BEHIND_S, bufferedEnd, Engine, hopHole, jumpTarget, KEYFRAME_IN, MB, RETRIES, seekNudged, Skip, STILL_AHEAD, TICK_MS, TIMEOUT_MS, windowFrom } from './engine.js';
+import { BEHIND_MB, BEHIND_S, bufferedEnd, Engine, hopHole, jumpTarget, KEYFRAME_IN, MB, RETRIES, roomAhead, seekNudged, Skip, STILL_AHEAD, TICK_MS, TIMEOUT_MS, windowFrom } from './engine.js';
 import { networkFailed, onNetwork, stallWatch } from './networks.js';
 import { keepPipeline, openPipeline, Pipeline, setLength, setLengthSoon, spoilingFail } from './pipeline.js';
 
@@ -201,6 +201,18 @@ class Track {
     byteAt(t: number): number {
         var i = Math.min(segmentAt(this.segments, t), this.segments.length - 1);
         return this.segments[i].from;
+    }
+
+    /** The time at byte at of the segment loading (next), its bytes taken as spread evenly over its time (a segment can
+     * be over 40 MB); past the last segment its end */
+    timeNear(at: number): number {
+        var s = this.segments[this.next];
+        if (!s) {
+            var last = this.segments[this.segments.length - 1];
+            return last ? last.end : 0;
+        }
+        var size = s.to - s.from + 1;
+        return s.start + Math.max(0, Math.min(1, (at - s.from) / size)) * (s.end - s.start);
     }
 }
 
@@ -717,7 +729,8 @@ export class DashEngine implements Engine {
             this.endIfDone();
             return;
         }
-        if (aheadOf(sb.buffered, now, skips) > (this.most || AHEAD) || this.bytesAhead(track, now, skips) > AHEAD_MB * MB) {
+        // (how far ahead its loading is: a hole at the playhead does not lift the byte limit)
+        if (!roomAhead(aheadOf(sb.buffered, now, skips), this.bytesAhead(track, now, skips), this.most || AHEAD, track.timeNear(track.pos) - now)) {
             return;
         }
         var segment = segments[track.next];

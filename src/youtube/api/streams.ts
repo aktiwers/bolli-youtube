@@ -210,19 +210,29 @@ var visiting: Promise<string> | null = null;
  * fetched again (own-player.ts failed). */
 var KEEP_MS = 60 * 60 * 1000;
 var KEEP_COUNT = 12;
+/** Streams come well within a second (a cold SABR start, its player script first: ~4 s). A request still on its way
+ * after this long has likely hung (a connection gone dead lets it wait out its time limits, a minute and more along
+ * both methods): it is shared with later callers only this long, and patient asks again then, then after twice as
+ * long each time, AGAIN times (asks at 0, 3, 9 and 21 s; counted, not timed: the TV's clock can jump) */
+var STUCK_MS = 3000;
+var AGAIN = 3;
+/** A SABR start from cold first fetches and runs YouTube's player script (~4 s): its requests count as hung only after
+ * this long */
+var SABR_STUCK_MS = 8000;
 /** How long a /player reply's tracking URLs stay usable */
 var TRACKING_MS = 10 * 60 * 1000;
-var kept: { id: string; sabr: boolean; at: number; streams: Promise<Streams> }[] = [];
+/** at: when it was asked, or answered once done */
+var kept: { id: string; sabr: boolean; at: number; done: boolean; streams: Promise<Streams> }[] = [];
 
-/** A video's streams as a guest (cached for KEEP_MS); rejects with NoStreams */
-export function streams(id: string): Promise<Streams> {
-    return keep(id, false, function () { return ask(id, false); });
+/** A video's streams as a guest (cached for KEEP_MS; fresh: asked anew, past the cache); rejects with NoStreams */
+export function streams(id: string, fresh?: boolean): Promise<Streams> {
+    return keep(id, false, function () { return ask(id, false); }, fresh);
 }
 
 /** A video's streams as the account, via SABR (cached like streams; reloadToken: a reload's, Sabr.reloadToken); rejects
  * with NoStreams */
-export function sabrStreams(id: string, reloadToken?: string): Promise<Streams> {
-    return keep(id, true, function () { return askSabr(id, reloadToken || ''); });
+export function sabrStreams(id: string, reloadToken?: string, fresh?: boolean): Promise<Streams> {
+    return keep(id, true, function () { return askSabr(id, reloadToken || ''); }, fresh);
 }
 
 /** The method that worked lately where the other failed for reasons not the video's own (SABR or as a guest): it goes
@@ -256,16 +266,22 @@ export function noneCanPlay(e: NoStreams): boolean {
 
 /** A video's streams for the own player: as a guest, else via SABR (age check, members only); sabrFirst reverses
  * the order, as does the method that worked lately (sabrFirstNow). If both fail, rejects with the first reason (and the
- * other's), or the TV client's where both were refused alike (refused). */
-export function playableStreams(id: string, sabrFirst: boolean): Promise<Streams> {
+ * other's), or the TV client's where both were refused alike (refused). With asking (a viewer waiting), each method's
+ * request is asked again if it hangs (patient), and the other method asked only while asking says they are still
+ * wanted (asking(sabr, again): the method about to be asked, and whether as a hanging request's ask again). */
+export function playableStreams(id: string, sabrFirst: boolean, asking?: Asking): Promise<Streams> {
     var sabr = sabrFirstNow(sabrFirst);
-    var first = sabr ? sabrStreams(id) : streams(id);
-    return first.then(null, function (e: NoStreams) {
-        // Removed, an upcoming live stream, or no network: the other method cannot play it either
-        if (noneCanPlay(e) || noAnswer(e)) {
+    var by = function (viaSabr: boolean): Promise<Streams> {
+        var ask = function (fresh: boolean): Promise<Streams> { return viaSabr ? sabrStreams(id, '', fresh) : streams(id, fresh); };
+        return asking ? patient(ask, function () { return asking(viaSabr, true); }, stuckFor(viaSabr)) : ask(false);
+    };
+    return by(sabr).then(null, function (e: NoStreams) {
+        // Removed, an upcoming live stream, or no network: the other method cannot play it either; nor is it asked once
+        // the viewer has gone
+        if (noneCanPlay(e) || noAnswer(e) || asking && !asking(!sabr, false)) {
             throw e;
         }
-        return (sabr ? streams(id) : sabrStreams(id)).then(function (s) {
+        return by(!sabr).then(function (s) {
             learnMethod(!sabr, e);
             // A copy is marked: the kept one serves later plays, which try the first method again
             var only = {} as Streams;
@@ -292,23 +308,115 @@ export function streamsKept(id: string, sabr: boolean): boolean {
     return !!keptOf(id, sabr, Date.now());
 }
 
-/** A video's streams kept by this method, still fresh at now */
+/** A video's streams kept by this method at now: answered within KEEP_MS, or on their way for less than stuck */
 function keptOf(id: string, sabr: boolean, now: number): typeof kept[0] | undefined {
-    return kept.filter(function (k) { return k.id === id && k.sabr === sabr && now - k.at < KEEP_MS; })[0];
+    return kept.filter(function (k) { return k.id === id && k.sabr === sabr && now - k.at < (k.done ? KEEP_MS : stuckFor(sabr)); })[0];
 }
 
-function keep(id: string, sabr: boolean, asking: () => Promise<Streams>): Promise<Streams> {
+/** How long a request by this method may be on its way before it counts as hung */
+export function stuckFor(sabr: boolean): number {
+    return sabr ? SABR_STUCK_MS : STUCK_MS;
+}
+
+function keep(id: string, sabr: boolean, asking: () => Promise<Streams>, fresh?: boolean): Promise<Streams> {
     var now = Date.now();
     var had = keptOf(id, sabr, now);
-    if (had) {
+    // (fresh: past one on its way, not past streams that came)
+    if (had && (had.done || !fresh)) {
         return had.streams;
     }
     var asked = asking();
-    kept = kept.filter(function (k) { return !(k.id === id && k.sabr === sabr); }).concat([{ id: id, sabr: sabr, at: now, streams: asked }]).slice(-KEEP_COUNT);
-    asked.then(null, function () {
-        kept = kept.filter(function (k) { return k.streams !== asked; });
+    var entry = { id: id, sabr: sabr, at: now, done: false, streams: asked };
+    kept = kept.filter(function (k) { return !(k.id === id && k.sabr === sabr); }).concat([entry]).slice(-KEEP_COUNT);
+    asked.then(function () {
+        entry.done = true;
+        entry.at = Date.now();
+    }, function () {
+        kept = kept.filter(function (k) { return k !== entry; });
     });
     return asked;
+}
+
+/** A viewer waiting for streams, asked before a request beyond the first (sabr: its method; again: a hanging request
+ * asked again, else the other method's first): false once they are no longer wanted */
+export type Asking = (sabr: boolean, again: boolean) => boolean;
+
+/** ask(false)'s streams, asked again while none have come (ask(true): a new request, past the cache): wait (by
+ * default STUCK_MS) later, then after twice as long each time, AGAIN times, and at once when the network comes back; again() first, false once
+ * they are no longer wanted. The first streams that come are taken. A failure with an answer from YouTube (about the
+ * video, a refusal, an odd reply) is the answer at once; one with none waits for the requests still on their way and
+ * those planned, and once none are left rejects with the last failure. */
+export function patient(ask: (fresh: boolean) => Promise<Streams>, again: () => boolean, first?: number): Promise<Streams> {
+    return new Promise<Streams>(function (resolve, reject) {
+        var open = 0;
+        var done = false;
+        var timer = 0;
+        var wait = first || STUCK_MS;
+        var left = AGAIN;
+        var last: NoStreams | null = null;
+        // (not in the tests' fake window)
+        var hears = typeof window.addEventListener === 'function';
+        var noMore = function (): void {
+            clearTimeout(timer);
+            timer = 0;
+            if (hears) {
+                window.removeEventListener('online', anew);
+            }
+        };
+        var settle = function (): void {
+            done = true;
+            noMore();
+        };
+        // The next ask after wait (then twice as long), AGAIN of them
+        var plan = function (): void {
+            clearTimeout(timer);
+            timer = left-- > 0 ? setTimeout(anew, wait) as unknown as number : 0;
+            wait *= 2;
+        };
+        var anew = function (): void {
+            if (done) {
+                return;
+            }
+            if (!again()) {
+                // No longer wanted: settled by the requests on their way, at once if none
+                noMore();
+                if (!open) {
+                    settle();
+                    reject(last || { status: 'NO_REPLY', reason: 'no longer wanted' } as NoStreams);
+                }
+                return;
+            }
+            take(ask(true));
+            plan();
+        };
+        var take = function (asked: Promise<Streams>): void {
+            open++;
+            asked.then(function (s) {
+                if (!done) {
+                    settle();
+                    resolve(s);
+                }
+            }, function (e: NoStreams) {
+                open--;
+                last = e;
+                if (!done && (!unanswered(e) || !open && !timer)) {
+                    settle();
+                    reject(e);
+                }
+            });
+        };
+        if (hears) {
+            window.addEventListener('online', anew);
+        }
+        take(ask(false));
+        plan();
+    });
+}
+
+/** A failure with no answer from YouTube at all (the network down, a request timed out, a server error): worth asking
+ * again; any other is YouTube's answer (about the video, a refusal, an odd reply) */
+export function unanswered(e: NoStreams): boolean {
+    return noAnswer(e) || e.status === 'HTTP' && /^(timeout|network error|HTTP 5\d\d)$/.test(e.reason || '');
 }
 
 /** A SABR /player request's playback context: the player script's signature timestamp, and a reload's token if any */

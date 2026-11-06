@@ -24,11 +24,12 @@
 import { base64Bytes, BufferedRange, FormatId, SabrAnswer, SabrReader, sabrRequest, SabrSegment } from '../api/sabr.js';
 import { Format, Sabr } from '../api/streams.js';
 import { youtubePage } from '../api/youtube.js';
-import { AHEAD_MB, BEHIND_MB, BEHIND_S, bufferedEnd, Engine, hopHole, jumpTarget, KEYFRAME_IN, MB, RETRIES, seekNudged, STILL_AHEAD, TICK_MS, TIMEOUT_MS, windowFrom } from './engine.js';
+import { BEHIND_MB, BEHIND_S, bufferedEnd, Engine, hopHole, jumpTarget, KEYFRAME_IN, MB, RETRIES, roomAhead, seekNudged, STILL_AHEAD, TICK_MS, TIMEOUT_MS, windowFrom } from './engine.js';
 import { networkFailed, onNetwork, stallWatch } from './networks.js';
 import { keepPipeline, openPipeline, Pipeline, setLength, setLengthSoon, spoilingFail } from './pipeline.js';
 
-/** Request more once less than this is buffered ahead of the playhead (s), unless more than AHEAD_MB of the track is;
+/** Request more once less than this is buffered ahead of the playhead (s), unless more than AHEAD_MB of the track is
+ * (engine.ts roomAhead);
  * trimmed to half once BEHIND_S or BEHIND_MB lie behind it */
 var READAHEAD_S = 10;
 /** Answers in a row that bring a track nothing new before it gives up */
@@ -333,7 +334,7 @@ export class SabrEngine implements Engine {
         var now = Date.now();
         this.tracks.forEach(function (track) {
             var ahead = track.ahead(t);
-            if (!track.doneFrom(t) && ahead.end - t < (self.most || READAHEAD_S) && ahead.bytes < AHEAD_MB * MB && !track.xhr && now >= track.waitUntil &&
+            if (!track.doneFrom(t) && roomAhead(ahead.end - t, ahead.bytes, self.most || READAHEAD_S) && !track.xhr && now >= track.waitUntil &&
                 !(self.snap && track.kind === SOUND)) {
                 self.ask(track);
             }

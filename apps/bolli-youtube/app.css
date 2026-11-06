@@ -117,6 +117,9 @@
 .by-watch-bar { position: relative; clear: both; }
 /* The bar's fills are scaled (no layout as the video plays), the knob is its own */
 .by-watch-loaded, .by-watch-played { position: absolute; left: 0; top: 0; width: 100%; height: 100%; -webkit-transform-origin: 0 0; -webkit-transform: scaleX(0); }
+/* The info bar's loaded stretch (own-player.ts setLoaded), under its played part (positioned to stay over it) */
+.by-osd-loaded { position: absolute; left: 0; top: 0; width: 100%; height: 100%; -webkit-transform-origin: 0 0; -webkit-transform: scaleX(0); }
+.by-player .osd-fill { position: relative; }
 .by-watch-knob { position: absolute; display: none; }
 .by-watch--bar .by-watch-knob { display: block; }
 .by-watch-marker { position: absolute; }

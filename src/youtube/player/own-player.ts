@@ -28,8 +28,7 @@ import { prefs, setPref } from '../api/prefs.js';
 import { Replays, replays } from '../api/replays.js';
 import { Segment, segmentAt, segments, skippedText } from '../api/sponsorblock.js';
 import { WatchReport } from '../api/stats.js';
-import { noAnswer } from '../api/youtube.js';
-import { AudioTrack, AUTO_LINES, base, Caption, captionIn, captionList, learnMethod, forgetStreams, Format, kindOf, noneCanPlay, NoStreams, pickFormat, playableStreams, sabrStreams, Storyboard, storyboardFrame, streams, Streams } from '../api/streams.js';
+import { Asking, AudioTrack, AUTO_LINES, base, Caption, captionIn, captionList, learnMethod, forgetStreams, Format, kindOf, noneCanPlay, NoStreams, patient, pickFormat, playableStreams, sabrStreams, Storyboard, storyboardFrame, streams, Streams, stuckFor, unanswered } from '../api/streams.js';
 import { channelPicture, watchInfo, WatchInfo } from '../api/watch.js';
 import { FillLoader } from '../ui/fill-loader.js';
 import { icon, setIcon } from '../ui/icons.js';
@@ -71,8 +70,12 @@ var COVER_FADE_MS = 300;
 /** The seek frames at the playhead are fetched this long after the picture moves (ms: after the start's own
  * downloads), so a first jump shows its frame at once */
 var FRAMES_AHEAD_MS = 4000;
-/** A video not playing this long after OK goes to YouTube's player */
+/** A video not playing this long after OK goes to YouTube's player; one with no streams yet (YouTube not answering)
+ * waits on while they are asked for again (api/streams.ts patient, load again), checked every NO_STREAMS_CHECK_MS, up
+ * to NO_STREAMS_MS from the first ask (a TV offline: until the network is back or the viewer leaves, told so once) */
 var START_GIVE_UP_MS = 15000;
+var NO_STREAMS_MS = 45000;
+var NO_STREAMS_CHECK_MS = 5000;
 /** A quality switch takes effect this far ahead (s), beyond what the TV's decoder already holds (removing buffer
  * under the decoder fails) */
 var QUALITY_SWITCH_S = 10;
@@ -86,6 +89,10 @@ var END_SKIP_S = 1;
  * before the sound): the time standing this near the end this long ends it here */
 var END_STUCK_S = 0.5;
 var END_STUCK_MS = 1500;
+/** How often the info bar's loaded stretch is redrawn while paused (ms; playing: on each timeupdate), until it stood
+ * this many times in a row */
+var LOADED_MS = 1000;
+var LOADED_STILL = 3;
 /** How often a moving video is checked for a picture that stands while it should play (Stalls) */
 var STALL_CHECK_MS = 1000;
 /** The next video is preloaded this long before the end (s) */
@@ -203,6 +210,12 @@ export class OwnPlayer {
     private upNext: UpNext;
     /** SponsorBlock segments on the info bar's progress bar */
     private osdMarks: BarMarks;
+    /** What is loaded ahead on the info bar's progress bar, a lighter stretch past the played part (as YouTube's player
+     * and the watch page have it), and its scale as last written */
+    private osdLoaded: HTMLElement;
+    private osdLoadedAt = '';
+    /** Redraws the loaded stretch while paused with the info bar up (keepLoaded) */
+    private loadedTimer = 0;
     /** The seek preview over the info bar (the watch page has its own) */
     private osdSeek: SeekPreview;
     /** The chapters to pick from over the info bar's time line (Up), and whether opening it paused the video (it plays
@@ -246,6 +259,10 @@ export class OwnPlayer {
     private track: Captions | null = null;
     /** Incremented per start, so late replies for an earlier start are dropped */
     private gen = 0;
+    /** When this start first asked for its streams (loads after no answer keep it), and whether the TV being offline was
+     * told (giveUpLater) */
+    private firstAskedAt = 0;
+    private toldOffline = false;
     /** This start's ways tried after its engine failed (failed, nextStep) */
     private tries = noTries();
     private askedAt = 0;
@@ -355,6 +372,8 @@ export class OwnPlayer {
             close: function () { self.stop(); }
         });
         var bar = this.el.querySelector('.osd-bar') as HTMLElement;
+        // Under the played part and the marks
+        this.osdLoaded = bar.insertBefore(h('span', 'by-osd-loaded'), bar.firstChild) as HTMLElement;
         this.osdMarks = new BarMarks(bar, bar.querySelector('.osd-marker'));
         this.osdSeek = new SeekPreview(bar);
         this.osdReplays = new ReplayGraph(bar);
@@ -389,6 +408,7 @@ export class OwnPlayer {
         });
         this.video.addEventListener('timeupdate', function () { self.tick(); });
         this.video.addEventListener('pause', function () {
+            self.keepLoaded();
             if (self.report) {
                 self.report.pause(self.video.currentTime);
             }
@@ -1246,6 +1266,7 @@ export class OwnPlayer {
         this.chapterRow.set([]);
         this.showKeys();
         this.osd.setTime('', 0);
+        this.setLoaded(0);
         this.osd.setMessage('');
         this.watch.setVideo(want.id, want.title, want.channel);
         // A returning video keeps its details; else they are asked for now, beside the streams
@@ -1505,16 +1526,23 @@ export class OwnPlayer {
         this.showChat();
     }
 
-    /** Fetch want's streams (or use asked: the other method's, after the engine failed for why), then play from
-     * want.t */
-    private load(asked?: Promise<Streams>, why?: string): void {
+    /** Fetch want's streams (source: the other method's or renewed ones, after the engine failed for why; else
+     * playableStreams), then play from want.t. Its requests are asked again while they hang (api/streams.ts patient) as
+     * long as this load is the player's; with no answer at all the streams are asked for again (again: such a load)
+     * while the TV is offline or within NO_STREAMS_MS of the first ask. */
+    private load(source?: (asking: Asking) => Promise<Streams>, why?: string, again?: boolean): void {
         var want = this.want as Want;
         var gen = ++this.gen;
         this.askedAt = Date.now();
+        if (!again) {
+            this.firstAskedAt = this.askedAt;
+            this.toldOffline = false;
+        }
         this.moving = false;
         var self = this;
+        var asking: Asking = function (sabr, anew) { return self.stillAsking(gen, sabr, anew); };
         this.giveUpLater();
-        (asked || playableStreams(want.id, prefs().sabr)).then(function (s) {
+        (source ? source(asking) : playableStreams(want.id, prefs().sabr, asking)).then(function (s) {
             if (gen !== self.gen) {
                 return;
             }
@@ -1545,9 +1573,16 @@ export class OwnPlayer {
             if (gen !== self.gen) {
                 return;
             }
-            // No answer (network down): YouTube's player could not play it either
-            if (noAnswer(e)) {
-                self.offline();
+            note('no streams', want.id + ': ' + e.status + (e.reason ? ' ' + e.reason : ''));
+            // No answer at all (the network down, YouTube not answering): asked for again a moment later (at once once
+            // the network is back) while the TV is offline or the first ask is recent; else YouTube's player could not
+            // play it either
+            if (unanswered(e)) {
+                if (navigator.onLine === false || Date.now() - self.firstAskedAt < NO_STREAMS_MS) {
+                    self.loadAgain(gen, source, why);
+                } else {
+                    self.notAnswering();
+                }
                 return;
             }
             // Removed, not live yet, or refused to the TV client: YouTube's player could not play it either (after a
@@ -1560,6 +1595,21 @@ export class OwnPlayer {
                 self.fallback((why ? why + '; then ' : '') + (e.reason || e.status));
             }
         });
+    }
+
+    /** The load gen after no answer at all, again: once the network is back, else NO_STREAMS_CHECK_MS later (if still
+     * the player's) */
+    private loadAgain(gen: number, source: ((asking: Asking) => Promise<Streams>) | undefined, why: string | undefined): void {
+        var self = this;
+        var go = function (): void {
+            window.removeEventListener('online', go);
+            clearTimeout(timer);
+            if (gen === self.gen) {
+                self.load(source, why, true);
+            }
+        };
+        var timer = setTimeout(go, NO_STREAMS_CHECK_MS);
+        window.addEventListener('online', go);
     }
 
     /** Close and say why the video cannot be played (YouTube's reason) */
@@ -1597,27 +1647,86 @@ export class OwnPlayer {
     private giveUpLater(): void {
         var self = this;
         var gen = this.gen;
-        clearTimeout(this.startTimer);
-        this.startTimer = setTimeout(function () {
+        var check = function (): void {
             // Paused: the picture does not move until play
             if (gen !== self.gen || self.moving || self.held) {
                 return;
             }
-            // No streams yet: YouTube has not answered (network down), so its player could not play it either; else the
-            // other codecs and the other method before YouTube's player
+            // No streams yet: YouTube has not answered; they are asked for again meanwhile, so the start waits on (an
+            // offline TV said so once: it plays once the network is back), then ends (YouTube's player could not play it
+            // either); else the other codecs and the other method before YouTube's player
             if (!self.streams) {
-                self.offline();
+                var waited = Date.now() - self.firstAskedAt;
+                var offline = navigator.onLine === false;
+                if (offline || waited < NO_STREAMS_MS) {
+                    if (offline && !self.toldOffline) {
+                        self.toldOffline = true;
+                        toast('No internet connection: the video starts once it is back.', 'info');
+                    }
+                    self.startTimer = setTimeout(check, NO_STREAMS_CHECK_MS) as unknown as number;
+                    return;
+                }
+                note('gave up', (self.want as Want).id + ': no streams after ' + Math.round(waited / 1000) + ' s');
+                self.notAnswering();
             } else {
                 // Nothing came at all: the downloads, not the codec (another codec would wait as long again)
                 self.failed(self.video.buffered.length ? 'it did not start' : 'nothing came');
             }
-        }, START_GIVE_UP_MS) as unknown as number;
+        };
+        clearTimeout(this.startTimer);
+        this.startTimer = setTimeout(check, START_GIVE_UP_MS) as unknown as number;
     }
 
-    /** YouTube does not answer (network down): close and say so */
-    private offline(): void {
+    /** The info bar's loaded stretch: what is buffered on from where it plays (a pending jump's target), over the
+     * video's length or a live stream's window */
+    private showLoaded(): void {
+        var v = this.video;
+        var span = this.liveSpan();
+        var whole = this.moving ? this.length() : this.format ? this.format.duration : 0;
+        this.setLoaded(span ? liveShare(bufferedEnd(v.buffered, v.currentTime, 1), span) : whole ? bufferedEnd(v.buffered, this.position(), 1) / whole : 0);
+    }
+
+    /** While paused with the info bar up, its loaded stretch follows what still comes in (no timeupdate then), until
+     * it stands LOADED_STILL times in a row (loading done) */
+    private keepLoaded(still?: number): void {
+        var self = this;
+        clearTimeout(this.loadedTimer);
+        if (this.video.paused && this.osd.shown) {
+            var was = this.osdLoadedAt;
+            this.showLoaded();
+            var standing = this.osdLoadedAt === was ? (still || 0) + 1 : 0;
+            if (standing < LOADED_STILL) {
+                this.loadedTimer = setTimeout(function () { self.keepLoaded(standing); }, LOADED_MS) as unknown as number;
+            }
+        }
+    }
+
+    /** The info bar's loaded stretch up to share of the bar (0..1; a scale transform, written only on change) */
+    private setLoaded(share: number): void {
+        var scale = Math.max(0, Math.min(1, share)).toFixed(3);
+        if (scale !== this.osdLoadedAt) {
+            this.osdLoadedAt = scale;
+            this.osdLoaded.style.webkitTransform = 'scaleX(' + scale + ')';
+        }
+    }
+
+    /** Whether streams for the load gen are still wanted (by SABR or as a guest; anew: a hanging request asked again,
+     * noted in the play log) */
+    private stillAsking(gen: number, sabr: boolean, anew: boolean): boolean {
+        if (gen !== this.gen) {
+            return false;
+        }
+        if (anew) {
+            note('streams again', (this.want as Want).id + (sabr ? ' (SABR)' : '') + ': no answer yet');
+        }
+        return true;
+    }
+
+    /** YouTube does not answer: close and say so (no internet only when the TV says it is offline: YouTube can go
+     * unanswered on a working network) */
+    private notAnswering(): void {
         this.stop();
-        toast('No internet connection.', undefined, PROBLEM);
+        toast(navigator.onLine === false ? 'No internet connection.' : 'YouTube is not answering. Try again in a moment.', undefined, PROBLEM);
     }
 
     /** Play the format from t (stops the previous engine; the position is want.t until the picture moves) */
@@ -1692,11 +1801,19 @@ export class OwnPlayer {
                 // Renew via the method that played (SABR: with the token of a reload its server asked for)
                 tries.renewedAt = Date.now();
                 forgetStreams(want.id);
-                this.load(s.sabr ? sabrStreams(want.id, s.sabr.reloadToken) : streams(want.id));
+                this.load(function (asking) {
+                    return patient(function (fresh) {
+                        return s.sabr ? sabrStreams(want.id, s.sabr.reloadToken, fresh) : streams(want.id, fresh);
+                    }, function () { return asking(!!s.sabr, true); }, stuckFor(!!s.sabr));
+                });
             } else {
                 tries.switched = true;
                 tries.kinds = {};
-                this.load(s.sabr ? streams(want.id) : sabrStreams(want.id), why);
+                this.load(function (asking) {
+                    return patient(function (fresh) {
+                        return s.sabr ? streams(want.id, fresh) : sabrStreams(want.id, '', fresh);
+                    }, function () { return asking(!s.sabr, true); }, stuckFor(!s.sabr));
+                }, why);
             }
         }
     }
@@ -1733,7 +1850,14 @@ export class OwnPlayer {
             }
         };
         forgetStreams(want.id);
-        streams(want.id).then(function (fresh) {
+        patient(function (anew) { return streams(want.id, anew); }, function () {
+            // (only for this renewal: not once another video, engine or start took over)
+            if (self.want !== want || self.engine !== engine) {
+                return false;
+            }
+            note('streams again', want.id + ': no answer yet (renewal)');
+            return true;
+        }).then(function (fresh) {
             if (self.want !== want) {
                 return;
             }
@@ -1869,6 +1993,7 @@ export class OwnPlayer {
     private showOsd(withText: boolean): void {
         this.tick();
         this.osd.show(withText);
+        this.keepLoaded();
         // A jump's frames and the chapter row's pictures ready before they show (the pictures not while a jump starts:
         // its video comes first)
         this.osdSeek.prefetch(this.video.currentTime);
@@ -2411,6 +2536,7 @@ export class OwnPlayer {
         if (this.osd.shown && span) {
             // Live: LIVE, or how far behind the head (a pending jump's), on a bar over the stream's window
             this.osd.setTime(liveTime(this.target >= 0 ? this.target : v.currentTime, span), liveShare(v.currentTime, span));
+            this.showLoaded();
         } else if (this.osd.shown) {
             // The time and the name of the chapter row's selected chapter, else where a pending jump lands, else where it
             // plays (still starting: where it starts, of its format's length; the element may hold the previous video)
@@ -2420,6 +2546,7 @@ export class OwnPlayer {
             var at = chosen ? chosen.start : this.target >= 0 ? this.target : now;
             this.osd.setTime(dots([clock(at) + (whole ? ' / ' + clock(whole) : ''), chosen ? chosen.title : this.osdMarks.nameAt(at)]),
                 whole ? now / whole : 0);
+            this.showLoaded();
         }
         this.subtitleView.show(this.track ? this.track.textAt(v.currentTime) : null);
         this.stats.tick();

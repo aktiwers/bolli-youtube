@@ -425,7 +425,8 @@ html, body { background: #0f0f0f; }
 .by-watch-controls { left: 64px; top: 438px; width: 1152px; }
 .by-watch-times { height: 22px; font-size: 14px; line-height: 22px; color: #e6e6e6; }
 .by-watch-bar { margin-top: 10px; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .3); }
-.by-watch-loaded { background: rgba(255, 255, 255, .45); }
+.by-watch-loaded, .by-osd-loaded { background: rgba(255, 255, 255, .45); }
+.by-osd-loaded { border-radius: 3px; }
 .by-watch-played { background: #f1f1f1; }
 .by-watch--bar .by-watch-played { background: #f00; }
 .by-watch-knob { top: -5px; width: 16px; height: 16px; margin-left: -8px; border-radius: 8px; background: #f00; }

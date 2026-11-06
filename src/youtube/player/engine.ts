@@ -40,6 +40,17 @@ export var AHEAD_MB = 32;
 export var BEHIND_MB = 16;
 export var BEHIND_S = 20;
 export var MB = 1024 * 1024;
+/** Loading less than this far ahead of the playhead (s), AHEAD_MB holds no loading back: a dense part of a video
+ * (4K: a 5 s segment of over 40 MB) plays on instead of standing at the end of what came (the buffer's own limit still
+ * holds: a full append waits for a trim) */
+export var ALWAYS_AHEAD_S = 6;
+
+/** Whether a track may load more: at most most s buffered ahead, and at most AHEAD_MB unless its loading is less than
+ * ALWAYS_AHEAD_S ahead of the playhead (reach, s; by default what is buffered: a hole at the playhead then counts as
+ * none) */
+export function roomAhead(seconds: number, bytes: number, most: number, reach?: number): boolean {
+    return seconds <= most && (bytes <= AHEAD_MB * MB || (reach === undefined ? seconds : reach) < ALWAYS_AHEAD_S);
+}
 export var TICK_MS = 500;
 /** A failed request is tried RETRIES times more, then again while at least STILL_AHEAD s are buffered ahead */
 export var RETRIES = 3;

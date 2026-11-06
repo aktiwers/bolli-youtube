@@ -17,6 +17,8 @@ var STARTED_ID = 'youtube';
 /** The TV client's number (X-YouTube-Client-Name) */
 var TVHTML5 = '7';
 var TIMEOUT_MS = 15000;
+/** A request from the page not settled TIMEOUT_MS plus this long after it went fails as unanswered (its page gone) */
+var GUARD_MS = 2000;
 /** A token this close to expiry is not used (TOKEN_MARGIN_MS); tokens are renewed this early (RENEW_EARLY_MS) */
 var TOKEN_MARGIN_MS = 60 * 1000;
 var RENEW_EARLY_MS = 5 * 60 * 1000;
@@ -68,6 +70,8 @@ export interface TvClient {
 }
 
 var page: Promise<Window> | null = null;
+/** The window page gave (null: none yet) */
+var pageWindow: Window | null = null;
 var tv: Promise<TvPage> | null = null;
 /** When the /tv page (and so the client details in use) was fetched (a run of days asks again after CLIENT_FRESH_MS:
  * the player version and client version move on) */
@@ -76,9 +80,20 @@ var client: Promise<Client> | null = null;
 /** client came from the cache */
 var clientKept = false;
 
-/** The hidden youtube.com page: the frame index.html started, else a new one (made again after a failure). Once it
- * is loaded, the token's early renewal is scheduled. */
+/** The hidden youtube.com page: the frame index.html started, else a new one (made again after a failure, and when
+ * the page it gave is gone: its requests would all go unanswered). Once it is loaded, the token's early renewal is
+ * scheduled. */
 export function youtubePage(): Promise<Window> {
+    if (page && pageWindow && !alive(pageWindow)) {
+        var gone = pageWindow;
+        [].forEach.call(document.getElementsByTagName('iframe'), function (f: HTMLIFrameElement) {
+            if (f.contentWindow === gone && f.parentNode) {
+                f.parentNode.removeChild(f);
+            }
+        });
+        page = null;
+        pageWindow = null;
+    }
     if (!page) {
         var started = document.getElementById(STARTED_ID) as HTMLIFrameElement | null;
         if (started) {
@@ -87,8 +102,14 @@ export function youtubePage(): Promise<Window> {
         } else {
             page = loaded(newFrame());
         }
-        page.then(renewAhead, function () {
-            page = null;
+        var made = page;
+        made.then(function (w) {
+            pageWindow = w;
+            renewAhead(w);
+        }, function () {
+            if (page === made) {
+                page = null;
+            }
         });
     }
     return page;
@@ -144,15 +165,21 @@ function loaded(frame: HTMLIFrameElement): Promise<Window> {
 /** frame's window when it holds youtube.com's robots.txt with storage (null: not, or not yet) */
 export function usable(frame: HTMLIFrameElement): Window | null {
     var w = frame.contentWindow as Window;
-    try {
-        if (w.location.pathname === '/robots.txt' && w.localStorage) {
-            mark('frame');
-            return w;
-        }
-    } catch (e) {
-        // Cross-origin: not youtube.com
+    if (w && alive(w)) {
+        mark('frame');
+        return w;
     }
     return null;
+}
+
+/** Whether w still holds youtube.com's robots.txt with storage (not if its frame was removed or went elsewhere) */
+function alive(w: Window): boolean {
+    try {
+        return !w.closed && w.location.pathname === '/robots.txt' && !!w.localStorage;
+    } catch (e) {
+        // Cross-origin: not youtube.com
+        return false;
+    }
 }
 
 /** YouTube's /tv page dropped, so the next use fetches it again (one without what was looked for in it) */
@@ -839,19 +866,37 @@ function stored(w: Window, key: string): unknown {
  * status */
 export function answer(w: Window, method: string, url: string, body: string | null, headers: { [name: string]: string }): Promise<{ status: number; text: string }> {
     return new Promise<{ status: number; text: string }>(function (resolve, reject) {
-        var xhr = new (w as unknown as { XMLHttpRequest: typeof XMLHttpRequest }).XMLHttpRequest();
-        xhr.open(method, url);
-        for (var name in headers) {
-            xhr.setRequestHeader(name, headers[name]);
-        }
-        xhr.timeout = TIMEOUT_MS;
-        xhr.onload = function () {
-            resolve({ status: xhr.status, text: xhr.responseText });
-        };
-        xhr.onerror = xhr.ontimeout = xhr.onabort = function () {
+        var unanswered = function (): void {
+            clearTimeout(guard);
             reject(new Error('YouTube did not answer'));
         };
-        xhr.send(body);
+        // Also this app's own timer: the page's (xhr.timeout) goes with the page, which would leave the request, and
+        // whatever waits on it (a token renewal, the player script), unsettled for good
+        var guard = setTimeout(function () {
+            try {
+                xhr.abort();
+            } catch (e) {
+                // (the page gone)
+            }
+            unanswered();
+        }, TIMEOUT_MS + GUARD_MS);
+        try {
+            var xhr = new (w as unknown as { XMLHttpRequest: typeof XMLHttpRequest }).XMLHttpRequest();
+            xhr.open(method, url);
+            for (var name in headers) {
+                xhr.setRequestHeader(name, headers[name]);
+            }
+            xhr.timeout = TIMEOUT_MS;
+            xhr.onload = function () {
+                clearTimeout(guard);
+                resolve({ status: xhr.status, text: xhr.responseText });
+            };
+            xhr.onerror = xhr.ontimeout = xhr.onabort = unanswered;
+            xhr.send(body);
+        } catch (e) {
+            // The page gone before the request went
+            unanswered();
+        }
     });
 }
 
