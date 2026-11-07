@@ -2,8 +2,8 @@
 // refused the client it is asked as): the last failure of each, for diagnosis (localStorage bolli.v1.youtube.failures:
 // { what: { at, status, body } }).
 
-import { HttpError } from '../../core/http.js';
-import { load, save } from '../../core/store.js';
+import { HttpError } from '../core/http.js';
+import { load, save } from '../core/store.js';
 
 var KEY = 'youtube.failures';
 

@@ -10,7 +10,7 @@
 // videoClock: the time of day over a video in the app's player: 'off', 'left' or 'right' (the top corner).
 // pureBlack: the screens' background pure black instead of the theme's dark grey (ui/theme.ts applyBlack).
 
-import { load, save } from '../../core/store.js';
+import { load, save } from '../core/store.js';
 
 export interface Prefs {
     skip: string[];

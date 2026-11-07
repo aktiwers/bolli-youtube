@@ -7,7 +7,7 @@
 // minutes. Signing out removes a Google account with its brand accounts, as on YouTube; YouTube AdFree shares
 // the storage, so it is signed out there too.
 
-import { load, save } from '../../core/store.js';
+import { load, save } from '../core/store.js';
 import { all, get, Page, picture, text } from './feed.js';
 import { accountKey, brandIdentity, forgetAccount, identities, Identity, identityKey, innertube, innertubeAs, isBrand } from './youtube.js';
 

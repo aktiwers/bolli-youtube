@@ -5,7 +5,7 @@
 import { Page, Video } from './api/feed.js';
 import { offThreadStats } from './api/off-thread.js';
 import { prefs, reloadPrefs, setPref } from './api/prefs.js';
-import { forgetStreams, streams } from './api/streams.js';
+import { forgetStreams, sabrStreams, streams } from './api/streams.js';
 import { identities, innertube, innertubeAs } from './api/youtube.js';
 import { Cast } from './cast.js';
 import { OwnPlayer, startFormats } from './player/own-player.js';
@@ -50,6 +50,15 @@ export function debugHooks(app: DebugApp): void {
         streams(id).then(function (s) {
             debug.reply = { videos: s.videos.map(function (f) { return f.itag + ' ' + f.height + 'p ' + f.mime; }), audios: s.audios.length, start: !!startFormats(s), paid: s.paid || null };
         }, function (e) { debug.reply = { error: e }; });
+    };
+    // sabr(id): the formats the signed-in method (SABR) gets for a video and the time it took, or why it failed
+    debug.sabr = function (id: string): void {
+        debug.reply = null;
+        var t0 = Date.now();
+        forgetStreams(id);
+        sabrStreams(id).then(function (s) {
+            debug.reply = { ms: Date.now() - t0, videos: s.videos.map(function (f) { return f.itag; }), audios: s.audios.map(function (t) { return t.format.itag; }) };
+        }, function (e) { debug.reply = { ms: Date.now() - t0, error: e }; });
     };
     // section(id): shows a section as the rail does, focused
     debug.section = app.section;

@@ -5,10 +5,14 @@
 // lines, likes and replies). OK on a comment opens its Replies over the dimmed
 // video: the comment in full with Like, Dislike and Report, "Reply as …",
 // then the replies as cards (each opening its own). Back goes back a view,
-// then closes. Parts are fetched as the focus nears a list's end.
+// then closes. Parts are fetched as the focus nears a list's end. A click (the
+// Magic Remote's pointer) is OK on the card or button under it; beside the
+// panel it is Back.
 
-import { h, setShown, setSrc, setText, toggleClass, translate } from '../../core/dom.js';
-import { KEY } from '../../core/keys.js';
+import { h, setShown, setSrc, setText, toggleClass, translate } from '../core/dom.js';
+import { tr } from '../core/i18n.js';
+import { KEY } from '../core/keys.js';
+import { holding, takesPointer } from '../core/pointer.js';
 import { dots } from '../api/feed.js';
 import { Comment, Comments, comments, run, Toggle } from '../api/watch.js';
 import { icon, setIcon } from '../ui/icons.js';
@@ -19,8 +23,8 @@ var AHEAD = 4;
 /** Space kept above and below the focused card as the list scrolls (px) */
 var MARGIN = 12;
 /** YouTube's steps for commenting from the phone (its TV app shows them on "Use your phone") */
-var STEPS = ['1   Open the YouTube app on a mobile device', '2   Connect to the same account as this TV',
-    'Need any help? Make sure that both devices are signed in to the same account, then restart the YouTube mobile app.'];
+var STEPS = ['1   ' + tr('Open the YouTube app on a mobile device'), '2   ' + tr('Connect to the same account as this TV'),
+    tr('Need any help? Make sure that both devices are signed in to the same account, then restart the YouTube mobile app.')];
 
 interface Item {
     el: HTMLElement;
@@ -72,17 +76,38 @@ export class CommentsView {
         this.el.appendChild(this.panel);
         setShown(this.el, false);
         parent.appendChild(this.el);
+        var self = this;
+        takesPointer(this.panel, function (target) {
+            var level = self.levels[self.levels.length - 1];
+            var i = level ? holding(level.items, target) : -1;
+            var item = i >= 0 ? level.items[i] : null;
+            // (the comment replied to: only its buttons, not its text: OK there would vote)
+            var button = item && item.buttons ? holding(item.buttons.map(function (b) { return { el: b }; }), target) : -1;
+            if (!item || item.buttons && button < 0) {
+                return null;
+            }
+            if (item.buttons) {
+                item.button = button;
+            }
+            self.focus(level, i);
+            return {};
+        });
     }
 
     get shown(): boolean {
         return this.levels.length > 0;
     }
 
+    /** The panel while open (null: closed): the pointer's layer, a click beside it is Back (core/pointer.ts) */
+    layer(): HTMLElement | null {
+        return this.shown ? this.panel : null;
+    }
+
     /** Opens a video's comments (count: as YouTube shows it); first: their first part, if already fetched */
     open(token: string, count: string, first?: Promise<Comments>): void {
         this.clear();
         setShown(this.el, true);
-        this.push('Comments', count, token, first);
+        this.push(tr('Comments'), count, token, first);
     }
 
     close(): void {
@@ -145,7 +170,7 @@ export class CommentsView {
             this.add(level, items);
             return;
         }
-        this.add(level, [this.note('Loading comments …')]);
+        this.add(level, [this.note(tr('Loading comments …'))]);
         this.more(level, first);
     }
 
@@ -200,7 +225,7 @@ export class CommentsView {
                 level.items = [];
                 level.at = 0;
                 if (!items.length) {
-                    items.push(self.note(level.title === 'Comments' ? 'No comments yet.' : 'No replies yet.'));
+                    items.push(self.note(level === self.levels[0] ? tr('No comments yet.') : tr('No replies yet.')));
                 }
             }
             self.add(level, items);
@@ -209,7 +234,7 @@ export class CommentsView {
             if (gen === self.gen && starting && self.levels.indexOf(level) >= 0) {
                 level.list.innerHTML = '';
                 level.items = [];
-                self.add(level, [self.note('Could not load the comments.')]);
+                self.add(level, [self.note(tr('Could not load the comments.'))]);
             }
         });
     }
@@ -265,13 +290,13 @@ export class CommentsView {
         if (item.kind === 'handoff') {
             var self = this;
             // The phone's YouTube app offers the comment box meanwhile (cast.ts: YouTube's hand-off)
-            this.push('To add comments and replies', '', '', undefined, STEPS.map(function (step) { return self.note(step); }));
+            this.push(tr('To add comments and replies'), '', '', undefined, STEPS.map(function (step) { return self.note(step); }));
         } else if (item.kind === 'comment' && item.comment && item.comment.detail) {
-            this.push('Replies', '', item.comment.detail);
+            this.push(tr('Replies'), '', item.comment.detail);
         } else if (item.kind === 'focal' && item.comment && item.buttons) {
             var c = item.comment;
             if (item.button === 2 || !c.vote) {
-                toast('Report comments in YouTube\'s app on your phone', 'info');
+                toast(tr('Report comments in YouTube\'s app on your phone'), 'info');
             } else {
                 this.vote(item, c, item.button === 0 ? c.vote.like : c.vote.dislike, item.button === 0 ? c.vote.dislike : c.vote.like);
             }
@@ -296,7 +321,7 @@ export class CommentsView {
                 other.on = otherWas;
                 self.drawVote(item, c);
             }
-            toast('YouTube did not take that. Try again.', undefined, PROBLEM);
+            toast(tr('YouTube did not take that. Try again.'), undefined, PROBLEM);
         });
     }
 

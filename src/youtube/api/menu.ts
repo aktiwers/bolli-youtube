@@ -6,6 +6,7 @@
 // saves. One item's command may hold several (commandExecutorCommand).
 
 import { first, get, itemsOf, MenuItem, menuOf, Video } from './feed.js';
+import { tr } from '../core/i18n.js';
 import { Keeper } from './kept-pages.js';
 import { innertube } from './youtube.js';
 
@@ -29,8 +30,8 @@ export function tileMenu(video: Video): Promise<MenuItem[]> {
         });
     }
     return Promise.resolve([
-        { title: 'Play', command: { watchEndpoint: { videoId: video.id } } },
-        { title: 'Save to Watch later', command: { playlistEditEndpoint: { playlistId: 'WL', actions: [{ addedVideoId: video.id, action: 'ACTION_ADD_VIDEO' }] } } },
-        { title: 'Save to playlist', command: { addToPlaylistEndpoint: { videoId: video.id } } }
+        { title: tr('Play'), command: { watchEndpoint: { videoId: video.id } } },
+        { title: tr('Save to Watch later'), command: { playlistEditEndpoint: { playlistId: 'WL', actions: [{ addedVideoId: video.id, action: 'ACTION_ADD_VIDEO' }] } } },
+        { title: tr('Save to playlist'), command: { addToPlaylistEndpoint: { videoId: video.id } } }
     ]);
 }

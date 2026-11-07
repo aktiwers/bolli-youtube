@@ -7,8 +7,9 @@
 // Shorts is dropped as everywhere in the app. A sub page is a page with tabs
 // (e.g. Videos: Latest, Popular, Oldest).
 
+import { language } from '../core/i18n.js';
 import { noteAvatar } from './avatars.js';
-import { all, browseText, Ended, first, get, lineText, liveNamed, Page, pageKey, picture, rowsOf, Rows, text, Video } from './feed.js';
+import { all, browseText, Ended, first, get, lineText, liveNamed, Page, pageKey, paramBytes, picture, rowsOf, Rows, text, Video } from './feed.js';
 import { Keeper } from './kept-pages.js';
 import { hash, VERSION } from './kept-rows.js';
 import { offThread, offThreadJson } from './off-thread.js';
@@ -109,7 +110,8 @@ function asked(p: Page, fresh: boolean, open: boolean): Promise<string> {
     // Fetched for this account: store it only if the cache was not cleared meanwhile
     var forgets = pagesForgotten();
     return account().then(function (id) {
-        var store = id && id.indexOf(NO_TOKEN) < 0 ? VERSION + '|' + hash(id) + '|' + key : '';
+        // (per account and the app's language, the page's texts being in it; English as before languages)
+        var store = id && id.indexOf(NO_TOKEN) < 0 ? VERSION + '|' + (language() === 'en' ? '' : language() + '|') + hash(id) + '|' + key : '';
         return (!fresh && store ? storedPage(store) : Promise.resolve(null)).then(function (page) {
             if (page) {
                 fromTV[key] = true;
@@ -182,7 +184,7 @@ export function channelOf(reply: any, id: string): Channel {
     rows.shelves = rows.shelves.filter(function (s) {
         s.videos = s.videos.filter(function (v) {
             var sub = !!v.page && v.page.browseId === id && !!v.page.params;
-            if (sub && !/^shorts$/i.test(v.title)) {
+            if (sub && !shortsTab(v.page as Page)) {
                 pages.push({ title: v.title, page: v.page as Page });
             }
             return !sub;
@@ -200,7 +202,7 @@ export function channelOf(reply: any, id: string): Channel {
         subtitle: lineText(header.subtitle),
         avatar: picture(header.avatar, AVATAR_PX),
         banner: banner(header.backgroundImage),
-        description: text(get(description, 'compactDescription')).replace(/\s*\.\.\.more$/, ''),
+        description: shortDescription(get(description, 'compactDescription')),
         about: about.description || '',
         facts: (about.infoRows || []).map(function (r: any) { return text(r.label); }).filter(function (t: string) { return t; }),
         mix: mix ? { id: get(mix, 'navigationEndpoint', 'watchEndpoint', 'videoId'), title: text(mix.text) + ': ' + title, channel: title, length: '', info: '',
@@ -212,15 +214,26 @@ export function channelOf(reply: any, id: string): Channel {
     };
 }
 
+/** Whether a channel's sub page is its Shorts tab: by its params (protobuf field 14 in the tab's message, as YouTube
+ * marks it in every language; its name is "Shorts", ショート ...) */
+function shortsTab(p: Page): boolean {
+    return paramBytes(p.params).indexOf('\x72\x00') >= 0;
+}
+
+/** A channel's short description without YouTube's " ...more" at its end, in any language (...mehr, ...さらに表示): its
+ * last part, or the end of its text */
+function shortDescription(d: any): string {
+    var runs = d && d.runs;
+    if (runs && runs.length > 1 && /^\s*\.\.\./.test(runs[runs.length - 1].text || '')) {
+        return text({ runs: runs.slice(0, -1) }).replace(/\s+$/, '');
+    }
+    return text(d).replace(/\s+\.\.\.\S+$/, '');
+}
+
 /** The video ids listed in a watch command's params (a mix's: protobuf field 5, 11 characters each) */
 export function idsOf(params: string | undefined): string[] {
     var ids: string[] = [];
-    var bytes = '';
-    try {
-        bytes = atob(decodeURIComponent(params || '').replace(/-/g, '+').replace(/_/g, '/'));
-    } catch (e) {
-        return ids;
-    }
+    var bytes = paramBytes(params);
     for (var i = 0; i + 12 < bytes.length; i++) {
         var id = bytes.substr(i + 2, 11);
         if (bytes.charCodeAt(i) === 0x2a && bytes.charCodeAt(i + 1) === 11 && /^[\w-]{11}$/.test(id)) {

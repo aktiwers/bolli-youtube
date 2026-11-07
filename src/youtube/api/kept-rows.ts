@@ -2,9 +2,11 @@
 // screen shows them at once while it fetches fresh rows (views/videos.ts), so the first screen
 // waits neither for YouTube's reply (~1.2 s) nor for youtube.com's frame (~0.26 s; the account
 // is known from there, so the rows show first and are dropped if they were another account's).
-// Stored with a hash of their account in localStorage (bolli.v1.youtube.rows.<screen>).
+// Stored with a hash of their account and the app's language (rows in another are not shown) in
+// localStorage (bolli.v1.youtube.rows.<screen>).
 
-import { load, save } from '../../core/store.js';
+import { language } from '../core/i18n.js';
+import { forgetAll, load, save } from '../core/store.js';
 import { Rows } from './feed.js';
 
 var KEY = 'youtube.rows.';
@@ -17,12 +19,19 @@ export interface Kept {
     /** The account's hash */
     account: string;
     v?: number;
+    /** The app's language (none: English, kept before languages) */
+    lang?: string;
+}
+
+/** Whether something kept in lang (none: English, kept before languages) is in the app's language now */
+export function inLanguage(lang: string | undefined): boolean {
+    return (lang || 'en') === language();
 }
 
 /** The rows kept for screen (null: none) */
 export function keptRows(screen: string): Kept | null {
     var kept = load<Kept>(KEY + screen);
-    return kept && kept.v === VERSION && kept.rows && kept.rows.shelves ? kept : null;
+    return kept && kept.v === VERSION && inLanguage(kept.lang) && kept.rows && kept.rows.shelves ? kept : null;
 }
 
 /** kept was fetched for account */
@@ -47,7 +56,12 @@ export function keepRows(screen: string, account: string, rows: Rows): void {
             return { title: s.title, videos: s.videos.slice(0, VIDEOS_KEPT), grid: s.grid, next: s.next, style: s.style, subtitle: s.subtitle, icon: s.icon };
         })
     };
-    save(KEY + screen, { v: VERSION, account: hash(account), rows: kept });
+    save(KEY + screen, { v: VERSION, account: hash(account), lang: language(), rows: kept });
+}
+
+/** Drops every screen's kept rows (a guest chosen: the account's are not drawn at its starts) */
+export function forgetRows(): void {
+    forgetAll(KEY);
 }
 
 /** A short hash of text (djb2) */

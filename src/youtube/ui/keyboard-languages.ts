@@ -59,6 +59,15 @@ export var SYMBOLS = ['123&#()', '456@!?:', '789.-_"', '0/$%+[]'];
 /** A gap in a row */
 export var GAP = '·';
 
+/** How many keyboard languages picked lately are kept */
+var RECENT_MAX = 3;
+
+/** The keyboard languages picked lately (recent) with id first (and left next) */
+export function recentWith(recent: string[], id: string, left?: string): string[] {
+    var rest = recent.filter(function (r) { return r !== id && r !== left; });
+    return [id].concat(left && left !== id ? [left] : [], rest).slice(0, RECENT_MAX);
+}
+
 export function keyboardLanguage(id: string): KeyboardLanguage {
     return KEYBOARD_LANGUAGES.filter(function (l) { return l.id === id; })[0] || keyboardLanguage('en');
 }

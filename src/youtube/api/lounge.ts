@@ -8,7 +8,7 @@
 // cast, via LG's DIAL server) is registered as soon as the channel opens, before
 // the phone gives up. Requests go from the hidden youtube.com page; no sign-in.
 
-import { load, save } from '../../core/store.js';
+import { load, save } from '../core/store.js';
 import { answer, jsonEnd, randomText, uuid, youtubePage } from './youtube.js';
 
 var PAIRING = '/api/lounge/pairing/';

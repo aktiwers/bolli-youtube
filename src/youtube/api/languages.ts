@@ -1,11 +1,18 @@
 // Every language YouTube translates subtitles to, with its name (the list from YouTube's player reply), for
-// Settings › Subtitles › "More languages" (ui/language-picker.ts) and subtitle track names.
+// Settings › Subtitles › "More languages" (ui/language-picker.ts) and subtitle and audio track names. In the app's
+// other languages the names are that language's (lang/names/<code>.json: these languages', a few base languages'
+// (Chinese) and the scripts' and regions' names by Unicode's CLDR, as Google names them, the languages in the order
+// the language sorts them; written by tools/i18n.mjs --names), read once the first screen rests (prepareNames: ~4.5 ms
+// on the TV), else when first needed; one CLDR lacks keeps its English name.
 
+import { language, readJson } from '../core/i18n.js';
 import { prefs } from './prefs.js';
 
 export interface Language {
     code: string;
     name: string;
+    /** Its English name (the picker finds it by that too: its keyboard has a-z) */
+    english: string;
 }
 
 var ALL =
@@ -33,13 +40,46 @@ var ALL =
 export var ALWAYS = ['da', 'en'];
 
 var list: Language[] | null = null;
+/** Their names and places in list by code (made with list) */
+var byCode: { [code: string]: Language } = Object.create(null);
+var order: { [code: string]: number } = Object.create(null);
+/** The app language's names of base languages, scripts and regions by code (null: English, or none to read;
+ * undefined: not read yet) */
+var local: { languages: { [code: string]: string }; bases: { [code: string]: string }; scripts: { [code: string]: string };
+    regions: { [code: string]: string } } | null | undefined;
 
-/** All languages, sorted by name (as YouTube lists them) */
+function localNames(): typeof local {
+    if (local === undefined) {
+        var read = language() === 'en' ? null : readJson('lang/names/' + language() + '.json');
+        local = read && read.languages && read.bases && read.scripts && read.regions ? read : null;
+    }
+    return local;
+}
+
+/** Reads the app language's names (main.ts: once the first screen rests), so a video's start finds them read */
+export function prepareNames(): void {
+    languages();
+}
+
+/** All languages, sorted by name (as YouTube lists them; in another app language as its names file has them, the
+ * language's sort) */
 export function languages(): Language[] {
     if (!list) {
-        list = ALL.split('|').map(function (one) {
+        var all: Language[] = ALL.split('|').map(function (one) {
             var at = one.indexOf(':');
-            return { code: one.slice(0, at), name: one.slice(at + 1) };
+            return { code: one.slice(0, at), name: one.slice(at + 1), english: one.slice(at + 1) };
+        });
+        all.forEach(function (l) {
+            byCode[l.code] = l;
+        });
+        var names = localNames();
+        list = names ? Object.keys(names.languages).map(function (code) {
+            var l = byCode[code];
+            l.name = names!.languages[code];
+            return l;
+        }) : all;
+        list.forEach(function (l, i) {
+            order[l.code] = i;
         });
     }
     return list;
@@ -52,15 +92,54 @@ export function subtitleLanguages(): string[] {
     });
 }
 
-/** The name of a language code: exact match, else its base ("en-GB": English), else the first with that base
- * ("zh": Chinese (Simplified)); unknown: the code itself */
-export function languageName(code: string): string {
+/** The name of a language code: exact match, else its base's ("en-GB": English; in another app language a base that
+ * stands for variants: "zh-TW": Chinese), else the first with that base ("zh": Chinese (Simplified)); unknown: '' */
+function known(code: string): string {
+    languages();
     var base = code.split('-')[0];
-    var found = find(function (l) { return l.code === code; }) || find(function (l) { return l.code === base; }) ||
-        find(function (l) { return l.code.split('-')[0] === base; });
-    return found ? found.name : code;
+    var exact = byCode[code] || byCode[base];
+    if (exact) {
+        return exact.name;
+    }
+    var names = localNames();
+    if (names && names.bases[base]) {
+        return names.bases[base];
+    }
+    var first = list!.filter(function (l) { return l.code.split('-')[0] === base; })[0];
+    return first ? first.name : '';
 }
 
-function find(test: (l: Language) => boolean): Language | null {
-    return languages().filter(test)[0] || null;
+/** The name of a language code (unknown: the code itself) */
+export function languageName(code: string): string {
+    return known(code) || code;
+}
+
+/** Where a language comes in the list (its base's place for a variant; unknown: after all), for sorting tracks as the
+ * app's language sorts their languages */
+export function languageOrder(code: string): number {
+    languages();
+    var at = order[code];
+    if (at === undefined) {
+        at = order[code.split('-')[0]];
+    }
+    return at === undefined ? list!.length : at;
+}
+
+/** A subtitle or audio track's language in the app's language: its name, with the script and region its code names
+ * in brackets ("en-GB": Engelsk (Storbritannien); "sr-Latn": Serbisk (latinsk); "zh-Hant-TW": Kinesisk (traditionelt,
+ * Taiwan)), as YouTube names tracks; '' for a language not known here (the caller keeps YouTube's name) */
+export function trackName(code: string): string {
+    var name = known(code);
+    var names = localNames();
+    if (!name || !names || byCode[code]) {
+        return name;
+    }
+    var more: string[] = [];
+    code.split('-').slice(1).forEach(function (part) {
+        var said = part.length === 4 ? names!.scripts[part] : names!.regions[part.toUpperCase()];
+        if (said) {
+            more.push(said);
+        }
+    });
+    return more.length ? name + ' (' + more.join(', ') + ')' : name;
 }

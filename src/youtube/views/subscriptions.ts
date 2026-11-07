@@ -5,10 +5,12 @@
 // openSubChannel). Up from the first row focuses the pills, then the channels; further down the header slides
 // away. The rows' top comes from the theme (metrics.subscriptionsTop), the look from themes/<id>.css (by-subs).
 
-import { h, releaseImages, restoreImages, setShown, setSrc, setText, toggleClass, translate } from '../../core/dom.js';
-import { KEY } from '../../core/keys.js';
-import { View } from '../../core/view.js';
-import { Rows, SubChannel, Video } from '../api/feed.js';
+import { h, releaseImages, restoreImages, setShown, setSrc, setText, toggleClass, translate } from '../core/dom.js';
+import { tr } from '../core/i18n.js';
+import { KEY } from '../core/keys.js';
+import { takesPointer, toPart } from '../core/pointer.js';
+import { View } from '../core/view.js';
+import { Rows, SubChannel, Video, withinADay } from '../api/feed.js';
 import { Pills } from '../ui/pills.js';
 import { metrics } from '../ui/theme.js';
 import { FeedHost, FeedOptions, FeedTexts, FeedView } from './videos.js';
@@ -20,10 +22,10 @@ var REST_MS = 300;
 var ROW_MAX = 30;
 /** The pills and the filter each applies to the rows */
 var PILLS: { label: string; keep: ((v: Video) => boolean) | null }[] = [
-    { label: 'All', keep: null },
-    { label: 'Today', keep: function (v) { return !!v.live || /(second|minute|hour)s? ago/.test(v.info); } },
-    { label: 'Videos', keep: function (v) { return !v.live; } },
-    { label: 'Live', keep: function (v) { return !!v.live; } }
+    { label: tr('All'), keep: null },
+    { label: tr('Today'), keep: function (v) { return !!v.live || !v.upcoming && withinADay(v.info); } },
+    { label: tr('Videos'), keep: function (v) { return !v.live; } },
+    { label: tr('Live'), keep: function (v) { return !!v.live; } }
 ];
 
 /** Where the focus is: the channels, the pills or the rows */
@@ -114,6 +116,11 @@ export class SubscriptionsView extends FeedHost implements View {
         setShown(this.el, false);
         this.markPills();
         this.place();
+        // A click moves the focus to the part it is in (a channel, a pill, the rows; back after a tile's)
+        takesPointer(this.el, function (target, under) {
+            var part: Place = self.strip.contains(target) ? 'channels' : self.head.contains(target) ? 'pills' : 'rows';
+            return toPart(under, function (p: Place) { self.go(p); }, self.at, part);
+        });
     }
 
     show(rest?: boolean): void {
@@ -270,7 +277,7 @@ export class SubscriptionsView extends FeedHost implements View {
             self.strip.appendChild(self.channelPills.add(el, function () { self.openChannel(c); }));
         });
         var all = h('div', 'by-subs-channel by-subs-all');
-        setText(all, 'All');
+        setText(all, tr('All'));
         this.strip.appendChild(this.channelPills.add(all, function () { self.openAll(list); }));
         this.channelPills.focus(Math.min(at, this.channelPills.count - 1));
         this.channelPills.setFocused(this.focused && this.at === 'channels');

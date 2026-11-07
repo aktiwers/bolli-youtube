@@ -9,8 +9,8 @@
 // not every one passed), and the ones around the playhead are fetched ahead,
 // so the box shows at once.
 
-import { h, setText, toggleClass, translate } from '../../core/dom.js';
-import { clock } from '../../core/time.js';
+import { h, setText, toggleClass, translate } from '../core/dom.js';
+import { clock } from '../core/time.js';
 import { dots } from '../api/feed.js';
 import { sheetSeconds, Storyboard, StoryboardFrame, storyboardFrame } from '../api/streams.js';
 

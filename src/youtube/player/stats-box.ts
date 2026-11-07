@@ -1,7 +1,7 @@
 // "Stats for nerds" over the player (toggled in its settings), as on YouTube: video, formats and buffer details
 // in a box at the top left, rewritten at most once a second during playback. Styled by themes/<id>.css (by-stats).
 
-import { h } from '../../core/dom.js';
+import { h } from '../core/dom.js';
 import { Format } from '../api/streams.js';
 import { bufferedEnd } from './engine.js';
 

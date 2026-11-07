@@ -47,6 +47,8 @@ export interface Video {
     audio?: boolean;
     /** Live now */
     live?: boolean;
+    /** Not out yet (a premiere or a scheduled live stream) */
+    upcoming?: boolean;
     /** The icon before the label on its picture: live, playlist ("16 videos"), mix */
     labelIcon?: string;
     /** Badges before its views ("4K", "New", "Subtitles") */
@@ -281,14 +283,19 @@ export function subscriptionsOf(reply: any): Rows {
 function channelOf(tab: any, opens: Page): Page | null {
     var found = /^UC[\w-]{20,}$/.test(tab.tabIdentifier || '') ? tab.tabIdentifier : '';
     if (!found && opens.params) {
-        try {
-            var m = /UC[\w-]{22}/.exec(atob(decodeURIComponent(opens.params).replace(/-/g, '+').replace(/_/g, '/')));
-            found = m ? m[0] : '';
-        } catch (e) {
-            found = '';
-        }
+        var m = /UC[\w-]{22}/.exec(paramBytes(opens.params));
+        found = m ? m[0] : '';
     }
     return found ? { browseId: found } : null;
+}
+
+/** A command's params (URL-encoded base64url protobuf) as bytes, one character each ('' if they cannot be read) */
+export function paramBytes(params: string | undefined): string {
+    try {
+        return atob(decodeURIComponent(params || '').replace(/-/g, '+').replace(/_/g, '/'));
+    } catch (e) {
+        return '';
+    }
 }
 
 /** YouTube's results for query (cached, so a term typed again, e.g. after Delete, shows them at once) */
@@ -303,14 +310,14 @@ export function liveNamed(rows: Rows, ended: Ended): Video | undefined {
         return t.toLowerCase().replace(/[\s!-\/:-@\[-`{-~\u2000-\u2bff\ufe0f\ud800-\udfff]+/g, '');
     };
     var wanted = squeeze(ended.title);
-    var same = function (v: Video): boolean {
-        return !!v.live && v.id !== ended.id && v.channel === ended.channel && squeeze(v.title) === wanted;
-    };
-    var found: Video | undefined;
-    for (var i = 0; i < rows.shelves.length && !found; i++) {
-        found = rows.shelves[i].videos.filter(same)[0];
-    }
-    return found;
+    var others: Video[] = [];
+    rows.shelves.forEach(function (s) {
+        others = others.concat(s.videos.filter(function (v) { return !!v.live && v.id !== ended.id; }));
+    });
+    // By its title (the channel's page: its other live streams); else its only one, as the ended stream's title and
+    // channel come from the player, asked in English, and the page in the app's language (YouTube may translate them)
+    return others.filter(function (v) { return v.channel === ended.channel && squeeze(v.title) === wanted; })[0] ||
+        (others.length === 1 ? others[0] : undefined);
 }
 
 /** Prefetches query's results (the focus rests on a suggestion or on Search) */
@@ -606,12 +613,14 @@ function fromTile(tile: any): Video | null {
     var badge = '';
     var watched = 0;
     var live = false;
+    var upcoming = false;
     var audio = false;
     var labelIcon = '';
     var stacked = false;
     overlays.forEach(function (o: any) {
         badge = badge || text(get(o, 'thumbnailOverlayTimeStatusRenderer', 'text'));
         live = live || get(o, 'thumbnailOverlayTimeStatusRenderer', 'style') === 'LIVE';
+        upcoming = upcoming || get(o, 'thumbnailOverlayTimeStatusRenderer', 'style') === 'UPCOMING';
         var icon = get(o, 'thumbnailOverlayTimeStatusRenderer', 'icon', 'iconType');
         audio = audio || icon === 'AUDIO';
         labelIcon = labelIcon || LABEL_ICONS[icon] || '';
@@ -666,6 +675,9 @@ function fromTile(tile: any): Video | null {
     }).filter(function (b: any) { return b && b.style === 'BADGE_STYLE_TYPE_YPC'; })[0];
     if (offer) {
         video.offer = text(offer.label);
+    }
+    if (upcoming) {
+        video.upcoming = true;
     }
     if (live) {
         video.live = true;
@@ -752,6 +764,7 @@ function fromLockup(lockup: any): Video | null {
     }
     var length = '';
     var live = false;
+    var upcoming = false;
     var audio = false;
     (get(thumb, 'overlays') || []).forEach(function (o: any) {
         var badges = get(o, 'thumbnailBottomOverlayViewModel', 'badges') || get(o, 'thumbnailOverlayBadgeViewModel', 'thumbnailBadges') || [];
@@ -759,10 +772,14 @@ function fromLockup(lockup: any): Video | null {
             var badge = get(b, 'thumbnailBadgeViewModel');
             length = length || text(get(badge, 'text'));
             live = live || get(badge, 'badgeStyle') === 'THUMBNAIL_OVERLAY_BADGE_STYLE_LIVE';
+            upcoming = upcoming || /UPCOMING/.test(get(badge, 'badgeStyle') || '');
             audio = audio || get(badge, 'icon', 'sources', 0, 'clientResource', 'imageName') === 'AUDIO';
         });
     });
     var found: Video = { id: mix || lockup.contentId, title: text(get(meta, 'title')), channel: rows[0] || '', length: duration(length), info: rows[1] || '' };
+    if (upcoming) {
+        found.upcoming = true;
+    }
     if (live) {
         found.live = true;
         found.labelIcon = 'live';
@@ -784,9 +801,20 @@ function fromLockup(lockup: any): Video | null {
     return found;
 }
 
-/** A length as "1:02:03" or "10:35"; anything else (LIVE, a word) is not one */
+/** A video's age within a day, as YouTube writes it in the app's languages (it gives no date, only the words): seconds,
+ * minutes or hours ago (3 hours ago, vor 3 Stunden, for 3 timer siden, hace 3 horas, il y a 3 heures, 3 ore fa, 3 uur
+ * geleden, 3 godziny temu, há 3 horas, 3 часа назад, 3 時間前) */
+var WITHIN_A_DAY = /\d\s*(second|segund|sekund|minut|minuu|hour|hora|heure|stund|\btimer?\b|\bor[ae]\b|\buur\b|godzin|час|секунд|минут|時間前|分前|秒前)/i;
+
+/** Whether a video's info line (its views and age) says it came within a day */
+export function withinADay(info: string): boolean {
+    return WITHIN_A_DAY.test(info);
+}
+
+/** A length as "1:02:03" or "10:35" (written with dots in some languages: 1.02.03); anything else (LIVE, a word) is not
+ * one */
 function duration(s: string): string {
-    return /^\d+(:\d\d)+$/.test(s) ? s : '';
+    return /^\d+([:.]\d\d)+$/.test(s) ? s.replace(/\./g, ':') : '';
 }
 
 /** Parses a page header button (null: unsupported) */

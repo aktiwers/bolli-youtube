@@ -24,6 +24,8 @@ export interface Engine {
     switchAudio?(f: Format, ahead?: number): void;
     /** The parts the player will skip (an engine may load past them) */
     skips?: () => Skip[];
+    /** Told each video download's bytes and ms, where the engine fetches them itself (the connection's speed) */
+    loaded?: (bytes: number, ms: number) => void;
     /** Buffers at most s ahead (0: as usual again): a video loaded ahead needs only what the TV decodes before its
      * first picture */
     hold(s: number): void;

@@ -11,14 +11,16 @@
 // player (onFallback). A casting phone (cast.ts) drives it through its
 // public methods and onChange.
 
-import { h, LAYOUT_HEIGHT, LAYOUT_WIDTH, setPicture, setShown, setText, toggleClass } from '../../core/dom.js';
-import { KEY } from '../../core/keys.js';
-import { noteZap } from '../../core/perf.js';
-import { preferFrameRate } from '../../core/platform.js';
-import { load, save } from '../../core/store.js';
-import { clock } from '../../core/time.js';
-import { PlayerOsd } from '../../player/osd.js';
-import { SubtitleView } from '../../player/subtitles.js';
+import { h, LAYOUT_HEIGHT, LAYOUT_WIDTH, setPicture, setShown, setText, toggleClass } from '../core/dom.js';
+import { tr } from '../core/i18n.js';
+import { KEY } from '../core/keys.js';
+import { dragsPointer, onPointerMove, takesPointer, Taken as Clicked } from '../core/pointer.js';
+import { noteZap } from '../core/perf.js';
+import { preferFrameRate } from '../core/platform.js';
+import { load, save } from '../core/store.js';
+import { clock } from '../core/time.js';
+import { PlayerOsd } from './osd.js';
+import { SubtitleView } from './subtitles.js';
 import { PROBLEM, skipEdge, toast } from '../ui/toast.js';
 import { knownAvatar } from '../api/avatars.js';
 import { liveNow } from '../api/channel.js';
@@ -28,7 +30,7 @@ import { prefs, setPref } from '../api/prefs.js';
 import { Replays, replays } from '../api/replays.js';
 import { Segment, segmentAt, segments, skippedText } from '../api/sponsorblock.js';
 import { WatchReport } from '../api/stats.js';
-import { Asking, AudioTrack, AUTO_LINES, base, Caption, captionIn, captionList, learnMethod, forgetStreams, Format, kindOf, noneCanPlay, NoStreams, patient, pickFormat, playableStreams, sabrStreams, Storyboard, storyboardFrame, streams, Streams, stuckFor, unanswered } from '../api/streams.js';
+import { Asking, AudioTrack, AUTO_LINES, base, Caption, captionIn, captionList, learnMethod, forgetStreams, Format, kindOf, noneCanPlay, NoStreams, patient, pickFormat, playableStreams, reasonInLanguage, sabrStreams, Storyboard, storyboardFrame, streams, Streams, stuckFor, unanswered } from '../api/streams.js';
 import { channelPicture, watchInfo, WatchInfo } from '../api/watch.js';
 import { FillLoader } from '../ui/fill-loader.js';
 import { icon, setIcon } from '../ui/icons.js';
@@ -43,9 +45,10 @@ import { note, ranges } from './play-log.js';
 import { BarMarks } from './bar-marks.js';
 import { ChatView } from './chat-view.js';
 import { ChapterRow } from './chapter-row.js';
-import { HOLD_REST_MS, noPresses, pressAim } from './jump-keys.js';
+import { noPresses, pressAim, pressWait } from './jump-keys.js';
 import { nextStep, noTries } from './ladder.js';
-import { Stalls } from './stalls.js';
+import { Freezes, Stalls } from './stalls.js';
+import { AutoQuality } from './auto-quality.js';
 import { ListQueue } from './list-queue.js';
 import { ReplayGraph } from './replay-graph.js';
 import { paintFrame, SeekPreview } from './seek-preview.js';
@@ -54,11 +57,15 @@ import { CountedVideo, StatsBox } from './stats-box.js';
 import { UpNext } from './up-next.js';
 import { paidChip, setPaid, WatchPage } from './watch-page.js';
 
-/** How long a prepared start (startOf) waits for SponsorBlock's segments */
+/** How long a prepared start (startOf) waits for SponsorBlock's segments, and a start once its streams are in (they
+ * are asked at once together, so they are usually in by then) */
 var SEGMENTS_WAIT_MS = 1000;
+var START_SEGMENTS_MS = 300;
 var JUMP_S = 10;
 /** A jump's frame and marker stay until the picture moves there, at most this long (ms) */
 var LAND_MAX_MS = 5000;
+/** A start takes over a preview of its video only this near the start's resume point, if it has one (s) */
+var PEEK_NEAR_S = 3;
 /** A video loaded ahead (ready) buffers this much until it is taken (s): what the TV decodes before its first picture
  * (~3 s), not the AHEAD a playing video keeps */
 var READY_AHEAD_S = 4;
@@ -79,6 +86,9 @@ var NO_STREAMS_CHECK_MS = 5000;
 /** A quality switch takes effect this far ahead (s), beyond what the TV's decoder already holds (removing buffer
  * under the decoder fails) */
 var QUALITY_SWITCH_S = 10;
+/** Quality on Auto stepping down with less buffered than this (s) starts anew in the lower quality (an in-place switch
+ * waits for SWITCH_MIN_S of the old one: slow where the connection is) */
+var AUTO_SWITCH_S = 5;
 /** A video the viewer closed (Back, its channel page) is kept this long to resume as it was */
 var LEFT_MS = 60000;
 /** An audio track switch takes effect this far ahead (s; the audio decoder holds less than the video decoder) */
@@ -93,8 +103,11 @@ var END_STUCK_MS = 1500;
  * this many times in a row */
 var LOADED_MS = 1000;
 var LOADED_STILL = 3;
-/** How often a moving video is checked for a picture that stands while it should play (Stalls) */
+/** How often a moving video is checked for a picture that stands while it should play (Stalls); one frozen with this
+ * much buffered ahead (s) is nudged on NUDGE_S (Freezes) */
 var STALL_CHECK_MS = 1000;
+var FROZEN_AHEAD_S = 1;
+var NUDGE_S = 0.1;
 /** The next video is preloaded this long before the end (s) */
 var NEXT_AHEAD_S = 30;
 /** Previous this far into a video restarts it instead */
@@ -102,8 +115,9 @@ var RESTART_AFTER_S = 5;
 /** Recent videos handed to YouTube's player, with the reason (localStorage bolli.v1.youtube.fallbacks) */
 var FALLBACKS = 'youtube.fallbacks';
 var FALLBACKS_KEPT = 10;
-/** How many videos Previous can go back through */
+/** How many videos Previous can go back through, the last BEFORE_DETAILS with their details kept */
 var BEFORE_MAX = 20;
+var BEFORE_DETAILS = 3;
 /** Loading sign fill at each start step (hidden once the picture plays) */
 var FILLS: { [step: string]: number } = { start: 0.2, streams: 0.45, loadedmetadata: 0.7 };
 /** The TV shows the first picture only after decoding this much video (s). The loading sign fills with those frames
@@ -112,9 +126,15 @@ var WARM_S = 3;
 var FULL_S = 0.4;
 /** The loading sign fills up this fast once the picture plays, then goes (ms: its pace, themes: .by-loader--round) */
 var FILL_MS = 200;
+/** Between the keys line's parts */
+var KEYS_GAP = '  ·  ';
 function keysLine(chapters: boolean): string {
-    return 'OK pause  ·  Left / Right jump 10 s (twice: chapter)  ·  ' + (chapters ? 'Up chapters  ·  ' : '') +
-        'Down the description, related videos, subtitles and more';
+    var parts = [tr('OK pause'), tr('Left / Right jump 10 s (twice: chapter)')];
+    if (chapters) {
+        parts.push(tr('Up chapters'));
+    }
+    parts.push(tr('Down the description, related videos, subtitles and more'));
+    return parts.join(KEYS_GAP);
 }
 /** How often a preview's fading sound steps down (ms) */
 var FADE_STEP_MS = 100;
@@ -133,7 +153,7 @@ var VOLUME_SHOWN_MS = 1500;
 /** How long a start waits for DeArrow's title of a video no tile asked it for (ms) */
 var DEARROW_START_MS = 5000;
 /** The keys line while the chapter row is open */
-var KEYS_LINE_ROW = 'Left / Right chapter  ·  OK play from there  ·  Up, Down or Back close';
+var KEYS_LINE_ROW = [tr('Left / Right chapter'), tr('OK play from there'), tr('Up, Down or Back close')].join(KEYS_GAP);
 
 /** A video handed to the player while it plays (nothing reloaded): its streams, the format playing, the target format
  * (switched to in place), the audio and the engine */
@@ -202,6 +222,12 @@ export class OwnPlayer {
      * start (gen) a frame's sheet is still wanted for (-1: none), and that sheet */
     private coverOut = false;
     private coverTimer = 0;
+    /** A start past a skipped part (an intro) plays from the keyframe before its end as every start does, but hidden and
+     * muted up to that end (s; 0: none), so none of it is seen or heard; whether it was muted before, and the timer
+     * that watches for the end */
+    private hideUntil = 0;
+    private hideMuted = false;
+    private hideTimer = 0;
     private frameFor = -1;
     private sheet = new Image();
     private osd: PlayerOsd;
@@ -245,6 +271,10 @@ export class OwnPlayer {
     private loop = false;
     /** The watch page details were requested */
     private infoAsked = false;
+    /** Details and the most replayed graph that came before the picture moved: laid out once it moves or the watch
+     * page opens (a slow start is not held up by them); null: none waiting */
+    private infoLater: WatchInfo | null = null;
+    private replaysLater: Replays | null = null;
     /** Videos played before this one since the player opened (Previous) */
     private before: Want[] = [];
     /** History report for this playback (Settings: History; starts when the picture moves) */
@@ -268,6 +298,8 @@ export class OwnPlayer {
     private askedAt = 0;
     private moving = false;
     private segments: Segment[] = [];
+    /** This start's ask for its skip segments (load waits for it a moment) */
+    private segmentsAsked: Promise<Segment[]> = Promise.resolve([]);
     private skipped: { [index: number]: boolean } = {};
     /** Stopped when the app went to the background; resumed when it returns */
     private away: Want | null = null;
@@ -292,7 +324,10 @@ export class OwnPlayer {
     /** Checks every STALL_CHECK_MS, once the picture moves, whether it stands while it should play (counted anew after
      * a jump) */
     private stalls = new Stalls();
+    private freezes = new Freezes();
     private stallTimer = 0;
+    /** Quality on Auto following the connection (autoStep) */
+    private auto = new AutoQuality();
     /** Tracks the frames decoded before the first picture (loading sign fill) */
     private warmTimer = 0;
     /** Loading sign fill so far, and whether it is finished (a late update does not show it again) */
@@ -396,15 +431,62 @@ export class OwnPlayer {
         parent.appendChild(this.el);
         // Over the player, not inside it: a preview's player is clipped to its tile and the ring surrounds it
         parent.appendChild(this.ring);
+        // The pointer (core/pointer.ts), as YouTube's player takes it: a click on the picture shows the info bar, or
+        // plays or pauses while it shows (on a preview: OK on its tile, which takes it over); on a chapter card it
+        // selects it, a second click plays from it; beside the open chapters it closes them; a press on a progress
+        // bar aims a jump (bars); moving the pointer keeps the info bar and the watch page shown a while longer
+        var picture = function (target: HTMLElement, under: Clicked | null): Clicked | null {
+            if (under) {
+                return null;
+            }
+            if (self.peek) {
+                return {};
+            }
+            if (!self.want || self.upNext.counting) {
+                return null;
+            }
+            var card = self.chapterRow.cardAt(target);
+            if (card >= 0) {
+                if (!self.chapterRow.pick(card)) {
+                    return {};
+                }
+                self.showChapter();
+                return { key: 0 };
+            }
+            if (self.chapterRow.open) {
+                return { key: KEY.BACK };
+            }
+            if (self.osd.shown) {
+                return {};
+            }
+            self.showOsd(false);
+            return { key: 0 };
+        };
+        takesPointer(this.el, picture);
+        takesPointer(this.ring, picture);
+        this.bars(bar);
+        onPointerMove(function () {
+            self.osd.keep();
+            if (self.watchPage) {
+                self.watchPage.keep();
+            }
+        });
         ['loadstart', 'loadedmetadata', 'playing'].forEach(function (type) {
-            self.video.addEventListener(type, function () { self.step(type); });
+            self.video.addEventListener(type, function () {
+                // (playing hidden: once shown)
+                if (type !== 'playing' || !self.hideUntil) {
+                    self.step(type);
+                }
+            });
         });
         this.video.addEventListener('loadstart', function () { self.stats.loaded(); });
         // A preview or start is displayed only once it plays (display: none, not just hidden: on a reused pipeline the
         // TV's video plane keeps showing the previous video's last frame)
         this.video.addEventListener('playing', function () {
-            self.video.style.display = '';
-            self.uncoverOnMove();
+            if (!self.hideUntil) {
+                self.video.style.display = '';
+                self.uncoverOnMove();
+            }
         });
         this.video.addEventListener('timeupdate', function () { self.tick(); });
         this.video.addEventListener('pause', function () {
@@ -445,6 +527,14 @@ export class OwnPlayer {
             self.ended();
         });
         this.video.addEventListener('durationchange', function () { self.drawParts(); });
+        // The buffer ran dry while playing (not a start, a jump or a seek): a stall, for quality on Auto
+        this.video.addEventListener('waiting', function () {
+            var v = self.video;
+            if (self.moving && !self.held && !v.seeking && self.target < 0 && !self.landing && !self.hideUntil && bufferedEnd(v.buffered, v.currentTime) - v.currentTime < 0.5) {
+                note('stall', 'at ' + v.currentTime.toFixed(1) + ', buffered ' + ranges(v.buffered));
+                self.auto.stalled(Date.now());
+            }
+        });
         ['playing', 'pause', 'waiting', 'seeking', 'seeked', 'ended', 'durationchange'].forEach(function (type) {
             self.video.addEventListener(type, function () { self.onChange(); });
         });
@@ -477,25 +567,52 @@ export class OwnPlayer {
                 self.leave();
                 self.onPage(page);
             },
-            subtitles: function () { self.watch.panel.open('Subtitles', function () { return self.subtitleLines(); }); },
+            subtitles: function () { self.watch.panel.open(tr('Subtitles'), function () { return self.subtitleLines(); }); },
             settings: function () { self.settingsPanel(); },
             rest: function (video: Video) { self.onAhead(video, false); },
             restPage: function (page: Page) { self.onPageAhead(page); },
             live: function () { return self.liveSpan(); },
             length: function () { return self.length(); },
-            comments: function (id: string | null) { self.onComments(id); }
+            comments: function (id: string | null) { self.onComments(id); },
+            line: function (text: string) { self.osd.setMeta(text); },
+            lineShown: function () { return self.osd.asked; }
         }, this.watchAt);
         // The subtitles go under the watch page (themes: .by-player--watch)
         made.onShown = function (shown) {
             toggleClass(self.el, 'by-player--watch', shown);
             self.holdChat();
         };
+        this.bars(made.bar);
         return made;
+    }
+
+    /** A press on progress bar b aims a jump at its point there (the frame where it lands shown, as for held Left/Right),
+     * a drag moves it, the release jumps (not while starting) */
+    private bars(b: HTMLElement): void {
+        var self = this;
+        dragsPointer(b, function (x) {
+            if (!self.jumpWindow()) {
+                return null;
+            }
+            // (measured once: a drag's moves only write)
+            var r = b.getBoundingClientRect();
+            var to = function (at: number): void {
+                var w = self.window();
+                self.aim(w.from + (r.width > 0 ? Math.max(0, Math.min(1, (at - r.left) / r.width)) : 0) * (w.to - w.from), -1);
+            };
+            to(x);
+            return { move: to, end: function () { self.jumpNow(); } };
+        });
     }
 
     /** A video is active (shown, or its streams are loading) */
     get busy(): boolean {
         return !!this.want;
+    }
+
+    /** The watch page's comments or panel while open (null: none; the pointer's layer: core/pointer.ts) */
+    layer(): HTMLElement | null {
+        return this.watchPage && this.watchPage.shown ? this.watchPage.layer() : null;
     }
 
     /** The clock's time of day ("hh:mm") */
@@ -767,6 +884,10 @@ export class OwnPlayer {
     pause(): void {
         this.held = true;
         pauseVideo(this.video);
+        // (a start held: nothing to hold up)
+        if (this.layLater()) {
+            this.onChange();
+        }
     }
 
     resume(): void {
@@ -810,7 +931,11 @@ export class OwnPlayer {
         var l = Math.max(0, Math.min(100, level)) / 100;
         this.volume = l * l * l;
         this.video.volume = this.volume;
-        this.video.muted = muted;
+        if (this.hideUntil) {
+            this.hideMuted = muted;
+        } else {
+            this.video.muted = muted;
+        }
         if (shown) {
             this.showVolume(Math.round(level), muted);
         }
@@ -901,7 +1026,9 @@ export class OwnPlayer {
                 if (this.osd.asked) {
                     this.osd.hide();
                 } else {
+                    // With the watch page's line under the title (its dislikes asked for now, as when the page shows)
                     this.showOsd(true);
+                    this.watch.askDislikes();
                     this.openChapters();
                 }
                 return true;
@@ -997,22 +1124,27 @@ export class OwnPlayer {
      * at once (the TV decodes ~1.3 s after any jump: waiting for more presses only added to it), a held key's once its
      * repeats stop (the marker shows on the watch page's bar while shown, else on the info bar) */
     private jump(seconds: number): void {
-        var w = this.window();
-        // Not while starting: in a reused pipeline the time and duration are still the previous video's
-        if (!(w.to > w.from) || !this.engine || !this.moving) {
+        var w = this.jumpWindow();
+        if (!w) {
             return;
         }
         var chapters = this.watch.details ? this.watch.details.chapters : null;
         // (from a jump still on its way: where it goes)
         var t = pressAim(this.presses, seconds, Date.now(), this.position(), this.target >= 0 ? this.target : this.landing ? this.jumpedTo : -1,
             w, chapters);
-        // At once; a held key's repeats once they stop, and with chapters once a quick second press (to a chapter
-        // instead) can no longer come (not a jump there and back)
-        this.aim(t, !this.presses.held && !(chapters && chapters.length && !this.presses.chapterRun));
+        this.aim(t, pressWait(this.presses, chapters));
     }
 
-    /** The pending jump set to t (s), run now, else (a held key) once presses stop */
-    private aim(t: number, now: boolean): void {
+    /** Where a jump can go (window), null while starting: in a reused pipeline the time and duration are still the
+     * previous video's */
+    private jumpWindow(): { from: number; to: number } | null {
+        var w = this.window();
+        return w.to > w.from && this.engine && this.moving ? w : null;
+    }
+
+    /** The pending jump set to t (s), run now, else after wait ms (pressWait; -1: when jumpNow is called, a progress
+     * bar's release) */
+    private aim(t: number, wait: number): void {
         this.target = t;
         // (The info bar first: the preview over it measures the bar once it shows)
         if (!this.watch.shown) {
@@ -1021,12 +1153,15 @@ export class OwnPlayer {
         var span = this.liveSpan();
         this.setMarker(span ? liveShare(t, span) : t / this.video.duration);
         clearTimeout(this.jumpTimer);
-        if (now) {
+        if (wait < 0) {
+            return;
+        }
+        if (!wait) {
             this.jumpNow();
             return;
         }
         var self = this;
-        this.jumpTimer = setTimeout(function () { self.jumpNow(); }, HOLD_REST_MS) as unknown as number;
+        this.jumpTimer = setTimeout(function () { self.jumpNow(); }, wait) as unknown as number;
     }
 
     /** Run the pending jump now (if any) */
@@ -1038,6 +1173,8 @@ export class OwnPlayer {
         clearTimeout(this.jumpTimer);
         this.target = -1;
         this.stalls.reset();
+        this.freezes.reset();
+        this.auto.reset(Date.now());
         // Its frame and marker stay until the picture moves there (the TV takes ~1.5 s), not the old frame frozen alone
         this.landing = true;
         this.jumpedTo = to;
@@ -1097,6 +1234,9 @@ export class OwnPlayer {
         this.showPaid(false);
         this.askInfo();
         this.watch.show();
+        if (this.layLater()) {
+            this.onChange();
+        }
     }
 
     /** Previous (remote or phone): restart this video if it has played a while, else the previous one in the queue,
@@ -1200,8 +1340,13 @@ export class OwnPlayer {
     private switchTo(video: Video, remember: boolean, standIn?: boolean): void {
         var was = this.want;
         if (was && remember) {
-            this.before.push({ id: was.id, title: (this.streams && this.streams.title) || was.title, channel: was.channel, t: 0, picture: was.picture, info: this.watch.details });
+            this.before.push({ id: was.id, title: (this.streams && this.streams.title) || was.title, channel: was.channel, t: 0, picture: was.picture, info: this.watch.details || this.infoLater });
             this.before = this.before.slice(-BEFORE_MAX);
+            // Details (related videos, YouTube's commands: ~100 KB) kept for the last few only; older ones asked again
+            var older = this.before[this.before.length - 1 - BEFORE_DETAILS];
+            if (older) {
+                older.info = undefined;
+            }
         }
         this.watch.hide();
         this.start({ id: video.id, title: video.title, channel: video.channel, t: video.start || 0, picture: startPicture(video), standIn: standIn });
@@ -1209,8 +1354,9 @@ export class OwnPlayer {
 
     /** Start want from want.t: release the previous video, fetch the streams, then play */
     private start(want: Want): void {
-        // Take over a playing preview of it, or Up next's or a closed video loaded paused
-        var peek = this.peeking(want.id) ? this.peek : null;
+        // Take over a playing preview of it (where it plays: a resume point elsewhere is started at instead, its streams and
+        // pipeline at hand), or Up next's or a closed video loaded paused
+        var peek = this.peeking(want.id) && (!want.t || Math.abs(this.video.currentTime - want.t) <= PEEK_NEAR_S) ? this.peek : null;
         var primed = this.primed && this.primed.id === want.id ? this.primed : null;
         // A video loaded ahead only where this start wants it: from the same place, in its own formats (else dropped)
         var ahead = primed && primed.kind === 'ahead' ? primed : null;
@@ -1243,17 +1389,19 @@ export class OwnPlayer {
         this.upNext.hide();
         (window as any).__bolli.steps = {};
         var self = this;
-        segments(want.id, prefs().skip).then(function (list) {
+        var asked = this.segmentsAsked = segments(want.id, prefs().skip);
+        asked.then(function (list) {
             if (self.want === want) {
                 self.segments = list;
                 self.drawParts();
-                // Arrived during the start: skip a segment it starts in right away, before any of it is decoded
+                // Arrived during the start: a segment it starts in skipped right away, by starting anew there (its streams
+                // and pipeline at hand: ~1 s, where a seek during a start costs this TV ~4 s)
                 var t = self.position();
-                if (!self.moving && !taken && self.engine) {
+                if (!self.moving && !taken && self.engine && self.format) {
                     var past = self.pastSkipped(t);
                     if (past !== t) {
-                        want.t = past;
-                        self.engine.seek(past);
+                        note('skip at the start', 'started anew at ' + past.toFixed(1));
+                        self.playFormat(self.format, past);
                     }
                 }
             }
@@ -1269,11 +1417,11 @@ export class OwnPlayer {
         this.setLoaded(0);
         this.osd.setMessage('');
         this.watch.setVideo(want.id, want.title, want.channel);
-        // A returning video keeps its details; else they are asked for now, beside the streams
+        // A returning video keeps its details (laid out once it moves, as asked ones); else they are asked for now,
+        // beside the streams
         if (want.info) {
             this.infoAsked = true;
-            this.watch.setInfo(want.info);
-            this.drawParts();
+            this.infoLater = want.info;
         }
         this.askInfo();
         // DeArrow's title for a video no tile asked it for (started from a phone, or the queue's next)
@@ -1396,6 +1544,36 @@ export class OwnPlayer {
         this.sheet.src = f.url;
     }
 
+    /** Plays hidden and muted up to t (hideUntil), then shows as a start does; a jump meanwhile shows it at once */
+    private hide(t: number): void {
+        this.hideUntil = t;
+        this.hideMuted = this.video.muted;
+        this.video.muted = true;
+        var self = this;
+        // (finer than the time updates: the picture shows within 40 ms of t; once moving, not by a kept pipeline's old time)
+        this.hideTimer = setInterval(function () {
+            var v = self.video;
+            if (self.moving && v.currentTime >= t - 0.04 && !v.seeking || self.target >= 0 || self.landing) {
+                self.unhide(true);
+            }
+        }, 40) as unknown as number;
+    }
+
+    /** Hidden no longer (shown: as a start's picture is once it plays) */
+    private unhide(shown: boolean): void {
+        if (!this.hideUntil) {
+            return;
+        }
+        clearInterval(this.hideTimer);
+        this.hideUntil = 0;
+        this.video.muted = this.hideMuted;
+        if (shown && !this.video.paused) {
+            this.step('playing');
+            this.video.style.display = '';
+            this.uncoverOnMove();
+        }
+    }
+
     /** The video shows: the picture over it (a preview's shown now) fades out once its time moves COVER_MOVE_S, counted
      * from the last jump (a skip, a seek), so only playing on moves it; a fade under way goes on */
     private uncoverOnMove(): void {
@@ -1413,6 +1591,11 @@ export class OwnPlayer {
         var last = from;
         var self = this;
         this.coverTimer = setInterval(function () {
+            // Paused before it moved: watched again once it plays (the 'playing' listener)
+            if (v.paused) {
+                clearInterval(self.coverTimer);
+                return;
+            }
             var t = v.currentTime;
             if (v.seeking || t < last || t > last + 1) {
                 from = t;
@@ -1510,7 +1693,12 @@ export class OwnPlayer {
         var self = this;
         if (prefs().replays && !s.live && !this.replays) {
             replays(want.id).then(function (r) {
-                if (self.want === want) {
+                if (self.want !== want) {
+                    return;
+                }
+                if (r && !self.laidOut()) {
+                    self.replaysLater = r;
+                } else {
                     self.setReplays(r);
                 }
             }, function () { return undefined; });
@@ -1560,15 +1748,24 @@ export class OwnPlayer {
             self.streams = s;
             self.audioTrack = s.audios.filter(function (t) { return t.id === audioId; })[0] || s.audios[0];
             self.showDetails(s, want);
-            var from = self.pastSkipped(want.t);
-            if (prefs().startPicture === 'frame' && self.video.style.display === 'none') {
-                self.showFrame(s.storyboard, from);
-            }
-            self.playFormat(video, from);
-            var c = captionFor(s, want);
-            if (!self.caption && c) {
-                self.setCaption(c);
-            }
+            // SponsorBlock's segments (asked with the streams, at OK) waited for a moment if not in yet, so a start in a
+            // skip begins past it instead of seeking there once they come. The format is set meanwhile (a quality or audio
+            // picked in that moment starts it: then that start stands)
+            self.format = video;
+            within(self.segmentsAsked, START_SEGMENTS_MS, []).then(function () {
+                if (gen !== self.gen || self.engine) {
+                    return;
+                }
+                var from = self.pastSkipped(want.t);
+                if (prefs().startPicture === 'frame' && self.video.style.display === 'none') {
+                    self.showFrame(s.storyboard, from);
+                }
+                self.playFormat(video as Format, from);
+                var c = captionFor(s, want);
+                if (!self.caption && c) {
+                    self.setCaption(c);
+                }
+            });
         }, function (e: NoStreams) {
             if (gen !== self.gen) {
                 return;
@@ -1588,9 +1785,9 @@ export class OwnPlayer {
             // Removed, not live yet, or refused to the TV client: YouTube's player could not play it either (after a
             // switch it did play)
             if (!why && e.refused && e.ended && !want.standIn) {
-                self.followStream(e.ended, e.reason);
+                self.followStream(want.id, e.ended, e);
             } else if (!why && (noneCanPlay(e) || e.refused)) {
-                self.cannotPlay(e.reason);
+                self.cannotPlay(want.id, e);
             } else {
                 self.fallback((why ? why + '; then ' : '') + (e.reason || e.status));
             }
@@ -1612,16 +1809,22 @@ export class OwnPlayer {
         window.addEventListener('online', go);
     }
 
-    /** Close and say why the video cannot be played (YouTube's reason) */
-    private cannotPlay(reason: string): void {
+    /** Close and say why video id cannot be played (YouTube's reason, in the app's language; not once another plays) */
+    private cannotPlay(id: string, e: NoStreams): void {
         this.stop();
-        toast('This video cannot be played' + (reason ? ': ' + reason : '.'), undefined, PROBLEM);
+        var gen = this.gen;
+        var self = this;
+        reasonInLanguage(id, e).then(function (reason) {
+            if (gen === self.gen) {
+                toast(reason ? tr('This video cannot be played: {1}', reason) : tr('This video cannot be played.'), undefined, PROBLEM);
+            }
+        });
     }
 
     /** An ended live stream (its address kept, e.g. in History) plays on as its channel's stream of the same name live
      * now (a stream running all day, started anew), found on the channel's page (not by a search: that would go into
      * the account's search history); else the reason */
-    private followStream(ended: Ended, reason: string): void {
+    private followStream(id: string, ended: Ended, e: NoStreams): void {
         var gen = this.gen;
         var self = this;
         // A wait of its own for the channel's page (a big reply)
@@ -1631,14 +1834,14 @@ export class OwnPlayer {
                 return;
             }
             if (found) {
-                toast('This live stream has ended, so its new stream from ' + ended.channel + ' plays.', 'info');
+                toast(tr('This live stream has ended, so its new stream from {1} plays.', ended.channel), 'info');
                 self.switchTo(found, false, true);
             } else {
-                self.cannotPlay(reason);
+                self.cannotPlay(id, e);
             }
         }, function () {
             if (gen === self.gen) {
-                self.cannotPlay(reason);
+                self.cannotPlay(id, e);
             }
         });
     }
@@ -1661,7 +1864,7 @@ export class OwnPlayer {
                 if (offline || waited < NO_STREAMS_MS) {
                     if (offline && !self.toldOffline) {
                         self.toldOffline = true;
-                        toast('No internet connection: the video starts once it is back.', 'info');
+                        toast(tr('No internet connection: the video starts once it is back.'), 'info');
                     }
                     self.startTimer = setTimeout(check, NO_STREAMS_CHECK_MS) as unknown as number;
                     return;
@@ -1726,7 +1929,7 @@ export class OwnPlayer {
      * unanswered on a working network) */
     private notAnswering(): void {
         this.stop();
-        toast(navigator.onLine === false ? 'No internet connection.' : 'YouTube is not answering. Try again in a moment.', undefined, PROBLEM);
+        toast(navigator.onLine === false ? tr('No internet connection.') : tr('YouTube is not answering. Try again in a moment.'), undefined, PROBLEM);
     }
 
     /** Play the format from t (stops the previous engine; the position is want.t until the picture moves) */
@@ -1749,6 +1952,11 @@ export class OwnPlayer {
         var engine: Engine = this.engine = engineFor(this.video, this.streams, function (why) { self.engineFailed(engine, why); });
         this.skipsFor(engine);
         engine.load(video, this.audioFormat() as Format, t);
+        // Just past a skipped part (an intro, pastSkipped): its tail from the keyframe before t not shown
+        this.unhide(false);
+        if (this.segments.some(function (s, i) { return self.skipped[i] && s.end === t; })) {
+            this.hide(t);
+        }
         // A new start: fall back to YouTube's player if it does not play
         this.giveUpLater();
         // Drop data preloaded for another video
@@ -1767,6 +1975,15 @@ export class OwnPlayer {
         var want = this.want as Want;
         var s = this.streams as Streams;
         var tries = this.tries;
+        // Dolby the decoder would not take: the same format again with the track's AAC, before other codecs or methods
+        var track = this.audioTrack;
+        if (why === 'media' && !noDolby && want && this.format && track && track.stereo && this.audioFormat() === track.format) {
+            noDolby = true;
+            note('codec', why + ': ac-3 -> AAC');
+            want.t = this.position();
+            this.playFormat(this.format, want.t);
+            return;
+        }
         var other = s && this.format ? this.otherCodec(s) : null;
         var step = nextStep(why, {
             renewing: tries.renewing,
@@ -1888,7 +2105,7 @@ export class OwnPlayer {
         releasePipeline(this.video);
         if (want) {
             noteFallback(want.id, want.title, why);
-            toast('Bolli\'s player cannot play this (' + why + '): YouTube\'s player takes over.', undefined, PROBLEM);
+            toast(tr('Bolli\'s player cannot play this ({1}): YouTube\'s player takes over.', why), undefined, PROBLEM);
             this.onFallback(want.id, want.t);
         }
     }
@@ -1905,7 +2122,7 @@ export class OwnPlayer {
             this.hidePoster();
         }
         if (was) {
-            was.info = this.watch.details;
+            was.info = this.watch.details || this.infoLater;
             was.t = this.position();
             was.itag = this.format ? this.format.itag : was.itag;
             was.audioId = this.audioTrack ? this.audioTrack.id : was.audioId;
@@ -1913,6 +2130,7 @@ export class OwnPlayer {
             was.caption = this.caption ? this.caption.name : '';
             was.loop = this.loop;
         }
+        this.unhide(false);
         if (this.report) {
             // The report's last time, as YouTube stores it (the element may hold Up next's video by now)
             if (was && this.watchLength > 0) {
@@ -1929,6 +2147,7 @@ export class OwnPlayer {
         this.format = null;
         this.audioTrack = null;
         this.infoAsked = false;
+        this.infoLater = this.replaysLater = null;
         this.segments = [];
         this.setReplays(null);
         this.osdSeek.set(null);
@@ -1983,6 +2202,9 @@ export class OwnPlayer {
     /** The current position, or where a seek waiting for its media goes (so a reload or a switch lands where the viewer
      * jumped); before the picture moves, the start position (so a switch keeps it) */
     private position(): number {
+        if (this.hideUntil) {
+            return this.hideUntil;
+        }
         if (!this.moving && this.want) {
             return this.want.t;
         }
@@ -2005,6 +2227,36 @@ export class OwnPlayer {
 
     // ---- the watch page
 
+    /** Whether what comes now is laid out at once: the picture moves, the start is paused, or the watch page shows
+     * (not built for it) */
+    private laidOut(): boolean {
+        return this.moving || this.held || !!this.watchPage && this.watchPage.shown;
+    }
+
+    /** Lays out what came during the start; true if that brought details (a casting phone is to be told) */
+    private layLater(): boolean {
+        var info = this.infoLater;
+        var r = this.replaysLater;
+        this.infoLater = this.replaysLater = null;
+        if (r) {
+            this.setReplays(r);
+        }
+        return !!info && this.showInfo(info);
+    }
+
+    /** The watch page details laid out, with the chapters on the bar and the live chat; else kept for later, until
+     * laidOut. True if laid out (the caller tells a casting phone what Autoplay plays next) */
+    private showInfo(info: WatchInfo): boolean {
+        if (!this.laidOut()) {
+            this.infoLater = info;
+            return false;
+        }
+        this.watch.setInfo(info);
+        this.drawParts();
+        this.showChat();
+        return true;
+    }
+
     /** Request the watch page details once */
     private askInfo(): void {
         var want = this.want;
@@ -2014,12 +2266,8 @@ export class OwnPlayer {
         this.infoAsked = true;
         var self = this;
         watchInfo(want.id).then(function (info) {
-            if (self.want === want) {
-                self.watch.setInfo(info);
-                // Chapters on the bar
-                self.drawParts();
-                self.showChat();
-                // A casting phone is told what Autoplay plays next
+            // (a casting phone is told what Autoplay plays next)
+            if (self.want === want && self.showInfo(info)) {
                 self.onChange();
             }
         }, function () {
@@ -2049,7 +2297,7 @@ export class OwnPlayer {
     private settingsPanel(): void {
         var self = this;
         var panel = this.watch.panel;
-        panel.open('Settings', function () {
+        panel.open(tr('Settings'), function () {
             var s = self.streams;
             var track = self.audioTrack;
             var lines: PanelLine[] = [];
@@ -2057,24 +2305,24 @@ export class OwnPlayer {
                 lines.push({ label: label, under: value, stay: true, action: function () { panel.push(label, list); } });
             };
             var flips = function (label: string, on: boolean, flip: () => void): void {
-                lines.push({ label: label, under: on ? 'On' : 'Off', stay: true, action: flip });
+                lines.push({ label: label, under: on ? tr('On') : tr('Off'), stay: true, action: flip });
             };
-            opens('Quality', self.format ? qualityName(self.format) : '', function () { return self.qualityLines(); });
-            opens('Subtitles', self.caption ? self.caption.name : 'Off', function () { return self.subtitleLines(); });
+            opens(tr('Quality'), self.format ? qualityName(self.format) : '', function () { return self.qualityLines(); });
+            opens(tr('Subtitles'), self.caption ? self.caption.name : tr('Off'), function () { return self.subtitleLines(); });
             if (s && s.audios.length > 1) {
-                opens('Audio track', track ? track.name : '', function () { return self.audioLines(); });
+                opens(tr('Audio track'), track ? track.name : '', function () { return self.audioLines(); });
             }
             if (track && track.stable) {
-                flips('Stable volume', prefs().stableVolume, function () {
+                flips(tr('Stable volume'), prefs().stableVolume, function () {
                     setPref('stableVolume', !prefs().stableVolume);
                     self.pickAudio(track as AudioTrack);
                 });
             }
             if (self.speedWorks !== false && !(s && s.live)) {
-                opens('Speed', speedName(self.speed), function () { return self.speedLines(); });
+                opens(tr('Speed'), speedName(self.speed), function () { return self.speedLines(); });
             }
             if (s && s.live) {
-                flips('Live chat', prefs().liveChat, function () {
+                flips(tr('Live chat'), prefs().liveChat, function () {
                     setPref('liveChat', !prefs().liveChat);
                     if (prefs().liveChat) {
                         self.showChat();
@@ -2083,9 +2331,9 @@ export class OwnPlayer {
                     }
                 });
             }
-            flips('Repeat', self.loop, function () { self.loop = !self.loop; });
-            flips('Autoplay', prefs().autoplay, function () { setPref('autoplay', !prefs().autoplay); });
-            flips('Stats for nerds', self.stats.shown, function () { self.stats.show(!self.stats.shown); });
+            flips(tr('Repeat'), self.loop, function () { self.loop = !self.loop; });
+            flips(tr('Autoplay'), prefs().autoplay, function () { setPref('autoplay', !prefs().autoplay); });
+            flips(tr('Stats for nerds'), self.stats.shown, function () { self.stats.show(!self.stats.shown); });
             return lines;
         }, 0);
     }
@@ -2142,7 +2390,7 @@ export class OwnPlayer {
             save(SPEED_KEY, self.speedWorks);
             if (!self.speedWorks) {
                 self.setSpeed(1);
-                toast('This TV plays videos only at normal speed', 'info');
+                toast(tr('This TV plays videos only at normal speed'), 'info');
             }
             self.onChange();
         }, SPEED_CHECK_MS) as unknown as number;
@@ -2154,9 +2402,9 @@ export class OwnPlayer {
         var all = this.streams ? captionList(this.streams) : [];
         // Style first (a video can have twenty languages)
         var style = CAPTION_STYLES.filter(function (one) { return one.value === prefs().captionStyle; })[0];
-        var lines: PanelLine[] = [{ label: 'Style', under: style ? style.name : '', stay: true, action: function () {
-            self.watch.panel.push('Subtitle style', function () { return self.styleLines(); });
-        } }, { label: 'Off', chosen: !this.caption, action: function () {
+        var lines: PanelLine[] = [{ label: tr('Style'), under: style ? style.name : '', stay: true, action: function () {
+            self.watch.panel.push(tr('Subtitle style'), function () { return self.styleLines(); });
+        } }, { label: tr('Off'), chosen: !this.caption, action: function () {
             self.setCaption(null);
             setPref('captions', '');
         } }];
@@ -2167,7 +2415,7 @@ export class OwnPlayer {
             } });
         });
         if (!all.length) {
-            lines.push({ label: 'This video has none', plain: true });
+            lines.push({ label: tr('This video has none'), plain: true });
         }
         return lines;
     }
@@ -2199,7 +2447,7 @@ export class OwnPlayer {
                 lines.push({ label: name, chosen: !!self.format && qualityName(self.format) === name, action: function () { self.pickQuality(name); } });
             }
         });
-        return lines.length ? lines : [{ label: 'Not known yet', plain: true }];
+        return lines.length ? lines : [{ label: tr('Not known yet'), plain: true }];
     }
 
     /** Switch quality: in the playing codec, switch in place (no stop; visible QUALITY_SWITCH_S later), else (another
@@ -2284,6 +2532,47 @@ export class OwnPlayer {
         engine.skips = function () {
             return self.engine === engine ? self.segments.filter(function (s, i) { return !self.skipped[i]; }) : [];
         };
+        engine.loaded = function (bytes, ms) {
+            if (self.engine === engine) {
+                self.auto.loaded(bytes, ms);
+            }
+        };
+    }
+
+    /** Quality on Auto follows the connection (AutoQuality): one step down or up in the playing codec, in place; a step
+     * down with too little buffered for that (a stall) starts anew there in the lower quality */
+    private autoStep(): void {
+        var f = this.format;
+        var s = this.streams;
+        var engine = this.engine;
+        if (prefs().quality || !f || !s || !engine || !engine.switchVideo || this.held || this.target >= 0 || this.landing || this.hideUntil) {
+            return;
+        }
+        var kind = kindOf(f.mime);
+        var list = s.videos.filter(function (v) { return kindOf(v.mime) === kind && v.height <= AUTO_LINES; });
+        var at = list.indexOf(f);
+        if (at < 0) {
+            return;
+        }
+        var down = list[at + 1] || null;
+        var up = at > 0 ? list[at - 1] : null;
+        var v = this.video;
+        var ahead = bufferedEnd(v.buffered, v.currentTime) - v.currentTime;
+        var now = Date.now();
+        var step = this.auto.step(now, ahead, f.bitrate, up ? up.bitrate : 0);
+        var to = step < 0 ? down : step > 0 ? up : null;
+        if (!to) {
+            return;
+        }
+        this.auto.stepped(now);
+        note('auto quality', f.height + 'p' + f.fps + ' -> ' + to.height + 'p' + to.fps + ', ahead ' + ahead.toFixed(1) + ' s');
+        if (step < 0 && ahead < AUTO_SWITCH_S) {
+            this.playFormat(to, this.position());
+            return;
+        }
+        engine.switchVideo(to, step < 0 ? undefined : QUALITY_SWITCH_S);
+        this.format = to;
+        this.osd.setQuality(to.height, to.fps);
     }
 
     /** Draw SponsorBlock segments and chapters on both bars once the duration is known. The length is the format's:
@@ -2369,7 +2658,7 @@ export class OwnPlayer {
                 self.untranslated(c!);
                 return;
             }
-            toast('The subtitles did not load.', undefined, PROBLEM);
+            toast(tr('The subtitles did not load.'), undefined, PROBLEM);
             self.setCaption(null);
         });
     }
@@ -2378,7 +2667,7 @@ export class OwnPlayer {
      * language stays, so the translation returns later) */
     private untranslated(c: Caption): void {
         var from = c.source || null;
-        toast('YouTube is not translating subtitles right now.' + (from ? ' ' + from.name + ' shown.' : ''), undefined, PROBLEM);
+        toast(from ? tr('YouTube is not translating subtitles right now. {1} shown.', from.name) : tr('YouTube is not translating subtitles right now.'), undefined, PROBLEM);
         this.setCaption(from);
     }
 
@@ -2492,7 +2781,14 @@ export class OwnPlayer {
                 want.paidShown = true;
                 this.showPaid(!this.watch.shown);
             }
-            // Watch page details (asked at the start; again if that failed)
+            // What came during the start laid out in a task of its own (not one long block with this tick's work; the
+            // phone told then, if that brought details); the details asked again if that failed
+            var laying = this.gen;
+            setTimeout(function () {
+                if (laying === self.gen && self.layLater()) {
+                    self.onChange();
+                }
+            }, 0);
             this.askInfo();
             this.loadCaption();
             // Playing now (no longer loading)
@@ -2570,13 +2866,16 @@ export class OwnPlayer {
     /** From the picture's start: a picture that keeps standing while it should play, its buffer at the playhead not
      * growing (a server or network that hangs, answers without the media it needs, a decoder that hangs with the buffer
      * full; not a link merely too slow for the quality, whose buffer grows; not paused, not ended, not live) reloads the
-     * video at the same spot, as the fallback ladder says */
+     * video at the same spot, as the fallback ladder says. Frozen with FROZEN_AHEAD_S buffered ahead (a decoder that
+     * hangs), it is nudged on NUDGE_S first (Freezes) */
     private watchStalls(): void {
         var self = this;
         var v = this.video;
         var last = -1;
         var loaded = -1;
         this.stalls.reset();
+        this.freezes.reset();
+        this.auto.reset(Date.now());
         clearInterval(this.stallTimer);
         // Not a live stream: at its head, it waits for the broadcaster's next part
         if (this.streams && this.streams.live) {
@@ -2585,13 +2884,25 @@ export class OwnPlayer {
         this.stallTimer = setInterval(function () {
             var t = v.currentTime;
             var end = bufferedEnd(v.buffered, t);
-            var stood = !self.held && !v.paused && !v.ended && (v.seeking || v.readyState < 3 || t === last) && end <= loaded;
+            var playing = !self.held && !v.paused && !v.ended;
+            var stood = playing && (v.seeking || v.readyState < 3 || t === last) && end <= loaded;
+            var frozen = playing && !v.seeking && v.readyState >= 3 && t === last && end - t >= FROZEN_AHEAD_S && self.target < 0 && !self.landing;
             last = t;
             loaded = end;
             // (restarting: the start's give-up timer watches it)
-            if (self.moving && self.stalls.note(stood, Date.now())) {
+            if (!self.moving) {
+                return;
+            }
+            var freeze = self.freezes.note(frozen, Date.now());
+            if (freeze === 'nudge') {
+                note('nudged', 'frozen at ' + t.toFixed(2) + ', buffered ' + ranges(v.buffered));
+                v.currentTime = t + NUDGE_S;
+            } else if (freeze === 'reload' || self.stalls.note(stood, Date.now())) {
                 note('stalled', 'at ' + t.toFixed(1));
+                self.freezes.reset();
                 self.failed('stalled');
+            } else {
+                self.autoStep();
             }
         }, STALL_CHECK_MS) as unknown as number;
     }
@@ -2625,11 +2936,16 @@ function box(el: HTMLElement, x: number, y: number, w: number, h: number): void 
     el.style.height = Math.round(h) + 'px';
 }
 
+/** What asked brings, or otherwise once ms have passed */
+function within<T>(asked: Promise<T>, ms: number, otherwise: T): Promise<T> {
+    return Promise.race([asked, new Promise<T>(function (ok) { setTimeout(function () { ok(otherwise); }, ms); })]);
+}
+
 /** A start of video id at t as the player makes it, so preload, previews and Up next prepare what it takes: the streams
  * asked, its formats (null: none playable) and where it starts (past a skip segment containing t; SponsorBlock waited
  * for SEGMENTS_WAIT_MS at most: a start then goes on without its segments too) */
 export function startOf(asked: Promise<Streams>, id: string, t: number): Promise<{ streams: Streams; formats: { video: Format; audio: Format } | null; t: number }> {
-    var parts = Promise.race([segments(id, prefs().skip), new Promise<Segment[]>(function (ok) { setTimeout(function () { ok([]); }, SEGMENTS_WAIT_MS); })]);
+    var parts = within(segments(id, prefs().skip), SEGMENTS_WAIT_MS, [] as Segment[]);
     return Promise.all<any>([asked, parts]).then(function (got) {
         var parts = got[1] as Segment[];
         var at = segmentAt(parts, t, {});
@@ -2669,10 +2985,13 @@ export function startFormats(s: Streams): { video: Format; audio: Format } | nul
     return video && track ? { video: video, audio: audioOf(track) } : null;
 }
 
-/** A track's format to play: the stable-volume version if on and available */
+/** A track's format to play: the stable-volume version if on and available; its stereo AAC once Dolby failed here */
 function audioOf(track: AudioTrack): Format {
-    return prefs().stableVolume && track.stable ? track.stable : track.format;
+    return prefs().stableVolume && track.stable ? track.stable : noDolby && track.stereo ? track.stereo : track.format;
 }
+
+/** Dolby Digital failed in this run of the app (the decoder would not take it): AAC from then on */
+var noDolby = false;
 
 /** The screen rate (Hz) for a video's frame rate: one each frame shows evenly at (25 and 30 fps at 50 and 60 Hz, as a
  * TV's 25 or 30 Hz modes are rare) */
@@ -2682,7 +3001,7 @@ export function displayRate(fps: number): number {
 
 /** A speed as YouTube's player names it: Normal, else the factor */
 function speedName(rate: number): string {
-    return rate === 1 ? 'Normal' : String(rate);
+    return rate === 1 ? tr('Normal') : String(rate);
 }
 
 /** "1080p60", "2160p", as YouTube names its qualities */

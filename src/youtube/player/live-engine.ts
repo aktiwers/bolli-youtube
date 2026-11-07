@@ -7,17 +7,21 @@
 // segments' own times run from the stream's start (days: further than the TV's decoder counts), so both buffers shift
 // them to start at a base past the stream's window (timestampOffset, from the first video segment's time). A jump
 // moves by whole segments, back at most to the window's start and forward to the head; a viewer following it live (not
-// after their own jump, seek or pause) who fell behind by a stall catches up (keepUp). A 403 fails as 'expired', other
-// errors as 'network' after retries. prefetchLive fetches a start ahead (its tile rests in focus): the head's number and both tracks'
-// first segments, which the next start of those formats takes while fresh. A start tells the TV the stream ends just
+// after their own jump, seek or pause) who fell behind by a stall catches up (keepUp). A 403 fails as 'expired'; a
+// segment already made that gets no data for a while, or a request with no answer, goes at once to another of the
+// stream's networks (networks.ts, as dash.ts's); other errors fail as 'network' after retries. prefetchLive fetches a
+// start ahead (its tile rests in focus): the head's number and both tracks' first segments, which the next start of
+// those formats takes while fresh. A start tells the TV the stream ends just
 // after the whole segments within WINDOW_S of it, and feeds no more until it plays (the quick start, as dash.ts's): then
 // the day-long length comes back.
 
-import { clock, progress } from '../../core/time.js';
+import { clock, progress } from '../core/time.js';
+import { tr } from '../core/i18n.js';
 import { Format, Live } from '../api/streams.js';
 import { oneFragment, segmentStart } from './containers.js';
 import { BEHIND_S, bufferedEnd, Engine, KEYFRAME_IN, RETRIES, STILL_AHEAD, TICK_MS, WINDOW_S } from './engine.js';
 import { keepPipeline, openPipeline, Pipeline, setLength, setLengthSoon, spoilingFail } from './pipeline.js';
+import { onLost, onNetwork } from './networks.js';
 import { note } from './play-log.js';
 
 /** Segments behind the head a start begins at (YouTube's own players stay about this far behind) */
@@ -44,11 +48,12 @@ var early: { audio: string; at: number; probe: Promise<Got>; segments: { [key: s
 /** Fetches a live start ahead: the head's number, then both tracks' first segments (as a start would ask for them) */
 export function prefetchLive(video: Format, audio: Format): void {
     var segments: { [key: string]: Promise<Got> } = {};
-    var probe = fetchSegment(audio.url, -1);
+    // (the latest segment and those behind it are made: watched for no data)
+    var probe = fetchSegment(audio.url, -1, undefined, true);
     probe.then(function (r) {
         var start = Math.max(0, r.head - START_BEHIND);
         [video, audio].forEach(function (f) {
-            var got = segments[f.url + '#' + start] = fetchSegment(f.url, start);
+            var got = segments[f.url + '#' + start] = fetchSegment(f.url, start, undefined, true);
             got.then(null, function () { delete segments[f.url + '#' + start]; });
         });
     }, function () { return undefined; });
@@ -71,7 +76,7 @@ export interface LiveSpan {
 /** The time of t in a live stream: LIVE near the head, else how far behind it */
 export function liveTime(t: number, span: LiveSpan): string {
     var behind = span.edge - t;
-    return behind < LIVE_NEAR_S ? 'LIVE' : '\u2212' + clock(behind);
+    return behind < LIVE_NEAR_S ? tr('LIVE') : '\u2212' + clock(behind);
 }
 
 /** Where t lies in a live stream's window (0-1) */
@@ -140,9 +145,9 @@ export class LiveEngine implements Engine {
             if (e === 403 || self.stopped) {
                 throw e;
             }
-            return fetchSegment(audio.url, -1);
+            return fetchSegment(audio.url, -1, undefined, true);
         };
-        var probe = (this.early ? this.early.probe : fetchSegment(audio.url, -1)).then(null, again).then(function (got) {
+        var probe = (this.early ? this.early.probe : fetchSegment(audio.url, -1, undefined, true)).then(null, again).then(function (got) {
             self.head = got.head;
             self.headAt = Date.now();
             note('live', 'head ' + got.head + (self.early ? ' (fetched ahead)' : ''));
@@ -327,7 +332,7 @@ export class LiveEngine implements Engine {
         var ahead = kept[key];
         // Taken: not kept for the rest of the stream
         delete kept[key];
-        var got = ahead || fetchSegment(t.format.url, sq, function (xhr) { t.xhr = xhr; });
+        var got = ahead || fetchSegment(t.format.url, sq, function (xhr) { t.xhr = xhr; }, sq <= this.head);
         t.busy = true;
         got.then(function (r) {
             // Stopped, or a jump or switch moved the track on meanwhile
@@ -359,6 +364,9 @@ export class LiveEngine implements Engine {
             t.xhr = null;
             if (e === 403) {
                 self.onFail('expired');
+            } else if (e === 'moved') {
+                // At once from the stream's next network
+                self.pump();
             } else if (++t.failures > RETRIES && self.ahead(t) < STILL_AHEAD) {
                 self.onFail('network');
             }
@@ -529,12 +537,16 @@ export class LiveEngine implements Engine {
     }
 }
 
-/** Live segment sq (-1: the latest) of a format: its bytes and the head's number; rejects with the HTTP status, 'abort'
- * or 'network'. started: given the request, to abort it */
-function fetchSegment(url: string, sq: number, started?: (xhr: XMLHttpRequest) => void): Promise<Got> {
+/** Live segment sq (-1: the latest) of a format, from a network that has not failed lately (networks.ts): its bytes
+ * and the head's number; rejects with the HTTP status, 'abort', 'network', or 'moved' (no data or no answer from its
+ * network: another of the stream's is there to ask at once). started: given the request, to abort it; made: the
+ * segment exists already (one not made yet waits ~5 s for YouTube to make it), so getting no data for a while is a
+ * stuck network */
+function fetchSegment(url: string, sq: number, started?: (xhr: XMLHttpRequest) => void, made?: boolean): Promise<Got> {
     return new Promise<Got>(function (resolve, reject) {
         var xhr = new XMLHttpRequest();
-        xhr.open('GET', url + (sq >= 0 ? '&sq=' + sq : ''), true);
+        var used = onNetwork(url);
+        xhr.open('GET', used + (sq >= 0 ? '&sq=' + sq : ''), true);
         xhr.responseType = 'arraybuffer';
         xhr.timeout = TIMEOUT_MS;
         xhr.onload = function () {
@@ -544,7 +556,9 @@ function fetchSegment(url: string, sq: number, started?: (xhr: XMLHttpRequest) =
                 reject(xhr.status || 'network');
             }
         };
-        xhr.onerror = xhr.ontimeout = function () { reject('network'); };
+        onLost(xhr, used, function () { reject('moved'); }, function () { reject('network'); }, !!made);
+        xhr.ontimeout = function () { reject('network'); };
+        // (a stalled one rejects before its abort)
         xhr.onabort = function () { reject('abort'); };
         if (started) {
             started(xhr);

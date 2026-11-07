@@ -135,7 +135,9 @@
 .by-watch-left, .by-watch-right { position: absolute; top: 0; white-space: nowrap; }
 .by-watch-left { left: 0; }
 .by-watch-right { right: 0; }
-.by-watch-center { position: absolute; left: 0; right: 0; top: 0; text-align: center; white-space: nowrap; }
+/* (centred across the whole row, over the left buttons: only its own buttons take the Magic Remote's pointer) */
+.by-watch-center { position: absolute; left: 0; right: 0; top: 0; text-align: center; white-space: nowrap; pointer-events: none; }
+.by-watch-center > * { pointer-events: auto; }
 .by-watch-button, .by-watch-group { position: relative; display: inline-block; vertical-align: top; box-sizing: border-box; }
 .by-watch-button svg { display: block; }
 .by-watch-avatar { overflow: hidden; }

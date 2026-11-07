@@ -4,10 +4,11 @@
 // looked up), rows grown as focus nears their end (Paging), grid lines, and
 // the progress of videos watched in the app's player.
 
-import { load, save } from '../../core/store.js';
-import { clock } from '../../core/time.js';
-import { RowStack } from '../../ui/row-stack.js';
-import { rowHeight, TileItem, TileLayout, TileRow, TileShape } from '../../ui/tile-row.js';
+import { load, save } from '../core/store.js';
+import { tr } from '../core/i18n.js';
+import { clock } from '../core/time.js';
+import { RowStack } from '../ui/row-stack.js';
+import { rowHeight, TileItem, TileLayout, TileRow, TileShape } from '../ui/tile-row.js';
 import { dearrowFetch, dearrowListen, dearrowOn, dearrowPicture, dearrowSettings, dearrowTitle, dearrowWait } from '../api/dearrow.js';
 import { more, Rows, Shelf, thumbnail, thumbnailFallback, Video } from '../api/feed.js';
 import { NoStreams, streams } from '../api/streams.js';
@@ -265,9 +266,9 @@ function noteNewStyles(shelf: Shelf): void {
     }
 }
 
-/** A tile's label: LIVE, else the length (with a note for audio) */
+/** A tile's label: LIVE, Mix, else the length (with a note for audio) */
 function labelOf(v: Video): string {
-    return v.live ? 'LIVE' : v.audio && v.length ? '\u266a ' + v.length : v.length;
+    return v.live ? tr('LIVE') : v.labelIcon === 'mix' ? tr('Mix') : v.audio && v.length ? '\u266a ' + v.length : v.length;
 }
 
 /** Builds tile rows for shelves and maps tiles back to their videos */

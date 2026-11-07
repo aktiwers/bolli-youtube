@@ -6,8 +6,8 @@
 // A thumbnail is a frame from DeArrow's thumbnail server, which sends the picture on to YouTube's thumbnail when it
 // has no frame ready. Whatever DeArrow lacks or fails at keeps YouTube's own.
 
-import { errorBody, getJson, HttpError } from '../../core/http.js';
-import { load, save } from '../../core/store.js';
+import { errorBody, getJson, HttpError } from '../core/http.js';
+import { load, save } from '../core/store.js';
 import { prefs } from './prefs.js';
 import { tidyTitle, unmark } from './title-format.js';
 

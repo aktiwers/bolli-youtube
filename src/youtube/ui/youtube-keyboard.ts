@@ -3,8 +3,9 @@
 // Search's (SearchKeyboard): a language's letters (ui/keyboard-languages.ts) with Delete, &123 (YouTube's numbers and
 // symbols, ABC back) and the language key at the ends of the first three rows, Space, Clear and Search in its words.
 
-import { setText } from '../../core/dom.js';
-import { Keyboard, KeyboardLabels } from '../../ui/keyboard.js';
+import { setText } from '../core/dom.js';
+import { tr } from '../core/i18n.js';
+import { Keyboard, KeyboardLabels } from './keyboard.js';
 import { icon } from './icons.js';
 import { composed, erased, GAP, KeyboardLanguage, keyboardLanguage, SYMBOLS } from './keyboard-languages.js';
 
@@ -15,7 +16,7 @@ var LANGUAGE = 'Language';
 
 /** A keyboard with lines of keys (each a string) after a to g */
 export function youtubeKeyboard(lines: string[], onChange: (text: string) => void): Keyboard {
-    var labels = { space: 'Space', del: DELETE, clear: 'Clear', spaceUnits: 2 };
+    var labels = { space: tr('Space'), del: DELETE, clear: tr('Clear'), spaceUnits: 2 };
     var rows = ['abcdefg'.split('').concat([labels.del])].concat(lines.map(function (line) { return line.split(''); }), [[labels.space, labels.clear]]);
     var keyboard = new Keyboard(labels, onChange, rows);
     sideKey(keyboard, DELETE, 'backspace');

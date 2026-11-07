@@ -7,8 +7,9 @@
 // renewed and stored the way that app does. A brand account is named in each
 // request (X-Goog-PageId, onBehalfOfUser), else YouTube answers as its owner.
 
-import { mark } from '../../core/perf.js';
-import { load, save } from '../../core/store.js';
+import { language } from '../core/i18n.js';
+import { mark } from '../core/perf.js';
+import { load, save } from '../core/store.js';
 
 /** A small youtube.com page that may be framed (/tv may not) */
 export var PAGE = 'https://www.youtube.com/robots.txt';
@@ -85,14 +86,7 @@ var clientKept = false;
  * scheduled. */
 export function youtubePage(): Promise<Window> {
     if (page && pageWindow && !alive(pageWindow)) {
-        var gone = pageWindow;
-        [].forEach.call(document.getElementsByTagName('iframe'), function (f: HTMLIFrameElement) {
-            if (f.contentWindow === gone && f.parentNode) {
-                f.parentNode.removeChild(f);
-            }
-        });
-        page = null;
-        pageWindow = null;
+        dropPage();
     }
     if (!page) {
         var started = document.getElementById(STARTED_ID) as HTMLIFrameElement | null;
@@ -113,6 +107,29 @@ export function youtubePage(): Promise<Window> {
         });
     }
     return page;
+}
+
+/** The hidden page's frame removed (the next use makes a new one) */
+function dropPage(): void {
+    var gone = pageWindow;
+    [].forEach.call(document.getElementsByTagName('iframe'), function (f: HTMLIFrameElement) {
+        if (gone && f.contentWindow === gone && f.parentNode) {
+            f.parentNode.removeChild(f);
+        }
+    });
+    page = null;
+    pageWindow = null;
+}
+
+/** YouTube asked its TV app to restart (a reply's "The YouTube app needs to restart", whose button reloads the page):
+ * as that app reloads, the /tv page and its client details are asked again and the hidden youtube.com page made anew
+ * for the next request */
+export function restartPage(): void {
+    tv = null;
+    client = null;
+    tvAt = 0;
+    save(CLIENT_KEY, null);
+    dropPage();
 }
 
 /** A frame for youtube.com's page, loading it */
@@ -247,12 +264,22 @@ export function tvClient(): Promise<Client> {
     return client;
 }
 
-/** The language YouTube is asked in: English (the TV's own, e.g. en-GB, when it is English) whatever the TV's
- * language, as the app's words are English and it reads YouTube's texts as English ones (a length is 6:10:58 in
- * English, 6.10.58 in Danish) */
+/** The language YouTube is asked in for the requests not in SHOWN (the player, accounts, writes): English (the TV's own,
+ * e.g. en-GB, when it is English), as the player's refusal reasons are read as English ones (api/streams.ts) */
 function english(): string {
     var tvs = navigator.language || '';
     return /^en(-|$)/.test(tvs) ? tvs : 'en';
+}
+
+/** Requests whose texts the screens show (pages, search, a video's details and comments, the guide, panels, the
+ * account's settings and playlists, live chat): asked in the app's language (youtubeLanguage) */
+var SHOWN: { [endpoint: string]: boolean } = { browse: true, search: true, next: true, guide: true, get_panel: true, 'account/get_setting': true,
+    'playlist/get_add_to_playlist': true, 'live_chat/get_live_chat': true };
+
+/** The language YouTube is asked in for what the screens show: the app's (core/i18n.ts; its codes are YouTube's), the
+ * TV's English when that is English */
+export function youtubeLanguage(): string {
+    return language() === 'en' ? english() : language();
 }
 
 /** Drops cached client details YouTube refused; the next request fetches the /tv page (the OAuth clients stay for
@@ -273,6 +300,20 @@ export function innertube(endpoint: string, body: { [key: string]: unknown }): P
 /** innertube's reply as text, so parts can be read without parsing it all (objectAt) */
 export function innertubeText(endpoint: string, body: { [key: string]: unknown }): Promise<string> {
     return ask(endpoint, body, freshSignIn);
+}
+
+/** How a request goes another way than the page's POST: as another TV client (its client fields in place of this TV's,
+ * keeping its visitor id and languages), and/or sent by send (path, JSON body and headers as the page's POST has them;
+ * resolves the reply text, rejects as the page's: non-2xx an Error with the status, no answer "YouTube did not answer"),
+ * still with innertube's renewal of a refused token and its retry with fresh client details */
+export interface Via {
+    as?: { [field: string]: string };
+    send?: (w: Window, path: string, json: string, headers: { [name: string]: string }) => Promise<string>;
+}
+
+/** innertube by another way (Via) */
+export function innertubeVia(endpoint: string, body: { [key: string]: unknown }, via: Via): Promise<unknown> {
+    return ask(endpoint, body, freshSignIn, false, via).then(JSON.parse);
 }
 
 /** innertube with a given token (an account just signed in, before it is stored) */
@@ -326,7 +367,7 @@ export function innertubeAs(identity: Identity, endpoint: string, body: { [key: 
 
 /** An InnerTube request signed in as signedIn gives; renewed: asked again already after a refused token */
 function ask(endpoint: string, body: { [key: string]: unknown }, signedIn: () => Promise<{ token: string; channel: string } | null>,
-    renewed?: boolean): Promise<string> {
+    renewed?: boolean, via?: Via): Promise<string> {
     var asked = tvClient();
     var kept = clientKept;
     return asked.then(function (t) {
@@ -338,19 +379,33 @@ function ask(endpoint: string, body: { [key: string]: unknown }, signedIn: () =>
             headers['X-YouTube-Client-Name'] = TVHTML5;
             headers['X-YouTube-Client-Version'] = t.context.client.clientVersion || '';
             var context = JSON.parse(JSON.stringify(t.context));
+            if (SHOWN[endpoint]) {
+                context.client.hl = youtubeLanguage();
+            }
+            var as = via && via.as;
+            if (as) {
+                var own = context.client;
+                context.client = { clientName: own.clientName, visitorData: own.visitorData, hl: own.hl, gl: own.gl };
+                for (var field in as) {
+                    context.client[field] = as[field];
+                }
+                headers['X-YouTube-Client-Version'] = as.clientVersion || headers['X-YouTube-Client-Version'];
+            }
             if (sign && sign.channel) {
                 context.user = context.user || {};
                 context.user.onBehalfOfUser = sign.channel;
             }
             body.context = context;
-            return send(w, 'POST', '/youtubei/v1/' + endpoint + '?key=' + t.apiKey + '&prettyPrint=false', JSON.stringify(body), headers).then(null, function (e) {
+            var path = '/youtubei/v1/' + endpoint + '?key=' + t.apiKey + '&prettyPrint=false';
+            var sent = via && via.send ? via.send(w, path, JSON.stringify(body), headers) : send(w, 'POST', path, JSON.stringify(body), headers);
+            return sent.then(null, function (e) {
                 // A cached client refused (YouTube changed it): retry with fresh details from the /tv page. Every
                 // refused request retries; the first also drops the cache.
                 if (kept && answeredWith(e, 400)) {
                     if (client === asked) {
                         forgetClient();
                     }
-                    return ask(endpoint, body, signedIn, renewed);
+                    return ask(endpoint, body, signedIn, renewed, via);
                 }
                 // A token refused before its time: renewed (or the token a renewal since brought), then asked again, once
                 if (sign && refusedToken(sign, e) && !renewed) {
@@ -359,7 +414,7 @@ function ask(endpoint: string, body: { [key: string]: unknown }, signedIn: () =>
                         if (!fresh || fresh.token === token) {
                             throw e;
                         }
-                        return ask(endpoint, body, signedIn, true);
+                        return ask(endpoint, body, signedIn, true, via);
                     }, function () {
                         // (no sign-in: the refusal is the reason)
                         throw e;
@@ -832,6 +887,27 @@ export function useIdentity(identity: Identity): Promise<void> {
     });
 }
 
+/** YouTube's TV app's guest as it stores it as the last-used identity ("Watch as guest") */
+var GUEST = { identityType: 'UNAUTHENTICATED_IDENTITY_TYPE_GUEST' };
+
+/** Watches as a guest, as YouTube's TV app does: its guest stored as the last-used identity (the accounts stay signed
+ * in on the TV) */
+export function useGuest(): Promise<void> {
+    return youtubePage().then(function (w) {
+        keep(w, IDENTITY_KEY, GUEST);
+        // The app's own change: not told back as one from elsewhere
+        seenAccount = '';
+    });
+}
+
+/** Whether the guest was chosen (YouTube's guest stored as last used), not merely no account yet */
+export function guestChosen(): Promise<boolean> {
+    return youtubePage().then(function (w) {
+        var last = stored(w, IDENTITY_KEY) as { identityType?: string } | null;
+        return !!last && last.identityType === GUEST.identityType;
+    });
+}
+
 /** Signs a Google account out by removing it from YouTube's TV app storage (withoutAccount); if it was current, the
  * app is a guest until another is picked */
 export function forgetAccount(google: string): Promise<void> {
@@ -863,9 +939,10 @@ function stored(w: Window, key: string): unknown {
 }
 
 /** A request from the youtube.com page (its own XMLHttpRequest, so its origin and cookies); resolves with any
- * status */
-export function answer(w: Window, method: string, url: string, body: string | null, headers: { [name: string]: string }): Promise<{ status: number; text: string }> {
-    return new Promise<{ status: number; text: string }>(function (resolve, reject) {
+ * status (binary: the reply as bytes, with credentials) */
+export function answer(w: Window, method: string, url: string, body: string | Uint8Array | null, headers: { [name: string]: string },
+    binary?: boolean): Promise<{ status: number; text: string; data?: ArrayBuffer }> {
+    return new Promise<{ status: number; text: string; data?: ArrayBuffer }>(function (resolve, reject) {
         var unanswered = function (): void {
             clearTimeout(guard);
             reject(new Error('YouTube did not answer'));
@@ -887,9 +964,14 @@ export function answer(w: Window, method: string, url: string, body: string | nu
                 xhr.setRequestHeader(name, headers[name]);
             }
             xhr.timeout = TIMEOUT_MS;
+            if (binary) {
+                // (as YouTube's player sends its video servers' requests)
+                xhr.responseType = 'arraybuffer';
+                xhr.withCredentials = true;
+            }
             xhr.onload = function () {
                 clearTimeout(guard);
-                resolve({ status: xhr.status, text: xhr.responseText });
+                resolve(binary ? { status: xhr.status, text: '', data: xhr.response as ArrayBuffer } : { status: xhr.status, text: xhr.responseText });
             };
             xhr.onerror = xhr.ontimeout = xhr.onabort = unanswered;
             xhr.send(body);

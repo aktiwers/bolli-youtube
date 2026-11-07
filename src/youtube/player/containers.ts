@@ -197,15 +197,22 @@ export function segmentStart(data: ArrayBuffer): number {
     if (data.byteLength >= 4 && view.getUint32(0) === 0x1A45DFA3) {
         return webmStart(data);
     }
-    var mdhd = boxPath(view, ['moov', 'trak', 'mdia', 'mdhd']);
+    var scale = trackScale(new Uint8Array(data));
     var tfdt = boxPath(view, ['moof', 'traf', 'tfdt']);
-    if (mdhd < 0 || tfdt < 0) {
+    if (!scale || tfdt < 0) {
         return NaN;
     }
-    // Full boxes: version, then (mdhd) creation and modification times before the timescale
-    var scale = view.getUint8(mdhd + 8) === 1 ? view.getUint32(mdhd + 28) : view.getUint32(mdhd + 20);
+    // (a full box: version first)
     var time = view.getUint8(tfdt + 8) === 1 ? u64(view, tfdt + 12) : view.getUint32(tfdt + 12);
-    return scale ? time / scale : NaN;
+    return time / scale;
+}
+
+/** An MP4's track timescale (moov > trak > mdia > mdhd), from its init section on (0: none, as a WebM's) */
+export function trackScale(bytes: Uint8Array): number {
+    var view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    var mdhd = boxPath(view, ['moov', 'trak', 'mdia', 'mdhd']);
+    // Full box: version, then creation and modification times before the timescale
+    return mdhd < 0 ? 0 : view.getUint8(mdhd + 8) === 1 ? view.getUint32(mdhd + 28) : view.getUint32(mdhd + 20);
 }
 
 /** The offset of the box at the end of path, each one inside the one before (-1: none) */
@@ -260,39 +267,9 @@ function joined(data: ArrayBuffer): ArrayBuffer {
     for (var at = 0; at + 8 <= data.byteLength && view.getUint32(at) >= 8; at += view.getUint32(at)) {
         moofs += boxType(view, at) === 'moof' ? 1 : 0;
     }
-    if (moofs < 2) {
-        return data;
-    }
-    var fragments: Fragment[] = [];
-    var first = -1;
-    var open: Fragment | null = null;
-    at = 0;
-    while (at + 8 <= data.byteLength) {
-        var size = view.getUint32(at);
-        var type = boxType(view, at);
-        if (size < 8 || at + size > data.byteLength) {
-            return data;
-        }
-        if (type === 'moof') {
-            open = open ? null : fragmentOf(view, at, size);
-            if (!open) {
-                return data;
-            }
-            first = first < 0 ? at : first;
-        } else if (type === 'mdat' && open) {
-            // Its samples within this mdat
-            if (open.data < at + 8 || open.data + open.bytes > at + size) {
-                return data;
-            }
-            fragments.push(open);
-            open = null;
-        } else if (first >= 0) {
-            // Another box among the fragments
-            return data;
-        }
-        at += size;
-    }
-    if (fragments.length < 2 || open || fragments.some(function (f) { return f.track !== fragments[0].track; })) {
+    var found = moofs > 1 ? fragmentsIn(view) : null;
+    var fragments = found ? found.fragments : [];
+    if (fragments.length < 2 || fragments.some(function (f) { return f.track !== fragments[0].track; })) {
         return data;
     }
     // Each fragment's samples from its own decode time on: the sample before it lasts up to there (a frame left out)
@@ -305,25 +282,130 @@ function joined(data: ArrayBuffer): ArrayBuffer {
         }
         last[0] = lasts;
     }
+    // (the first fragment, a fresh parse, carries them all)
     var head = fragments[0];
-    var offsets = fragments.some(function (f) { return f.offsets; });
-    var signed = fragments.some(function (f) { return f.signed; });
-    var count = 0;
-    var bytes = 0;
+    var samples: number[][] = [];
     fragments.forEach(function (f) {
-        count += f.samples.length;
-        bytes += f.bytes;
+        for (var k = 0; k < f.samples.length; k++) {
+            samples.push(f.samples[k]);
+        }
+        head.signed = head.signed || f.signed;
+        head.offsets = head.offsets || f.offsets;
     });
+    head.samples = samples;
+    return written(new Uint8Array(data), (found as { first: number }).first, head, fragments.map(function (f) { return [f.data, f.bytes]; }));
+}
+
+/** Whether the TV's browser drops an audio format's frame across an append window's end whole rather than trimming it
+ * (Dolby Digital, measured; AAC it trims): its cut segment goes in again from that frame (framesFrom across), the
+ * append window open below it */
+export function wholeFrames(mime: string): boolean {
+    return /^audio\/mp4; codecs="ac-3"/.test(mime);
+}
+
+/** A one-fragment MP4 segment's samples (moof, mdat: YouTube's audio) from the first one starting at or after t on (s;
+ * scale: its track's timescale), as a fragment of their own, its decode time theirs: the TV is given whole frames only
+ * (none when all start before t: the last one is across t, given whole with the part before). This TV plays each audio
+ * frame it is given whole, the part an append window cuts off as well, and the frame before the window's start once
+ * more (Chrome's preroll): a segment cut across at t and appended again from t plays ~46 ms more sound, late against
+ * the picture for the rest of the video. across: from the frame across t on instead, for a codec whose frame across an
+ * append window's end the TV's browser drops whole rather than trims (Dolby Digital: else its sound ran ~28 ms early
+ * after a start, one 32 ms frame missing); the earlier frames are in already. Anything else (more fragments, a layout
+ * not known here, none before t) as it is. */
+export function framesFrom(bytes: Uint8Array, t: number, scale: number, across?: boolean): Uint8Array {
+    // (a box cut short at the end throws: as it is)
+    try {
+        return from(bytes, t, scale, !!across);
+    } catch (e) {
+        return bytes;
+    }
+}
+
+function from(bytes: Uint8Array, t: number, scale: number, across: boolean): Uint8Array {
+    var found = fragmentsIn(new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength));
+    var f = found && found.fragments.length === 1 ? found.fragments[0] : null;
+    if (!f) {
+        return bytes;
+    }
+    // The first sample at or after t (half a tick early: t as the time it came from)
+    var time = f.start;
+    var skip = 0;
+    var k = 0;
+    for (; k < f.samples.length && time < t * scale - 0.5; k++) {
+        time += f.samples[k][0];
+        skip += f.samples[k][1];
+    }
+    // (the one before, if it is across t)
+    if (across && k && time > t * scale + 0.5) {
+        k--;
+        time -= f.samples[k][0];
+        skip -= f.samples[k][1];
+    }
+    if (!k || bytes[f.tfdt + 8] !== 1 && time > 0xffffffff) {
+        return bytes;
+    }
+    if (k === f.samples.length) {
+        return new Uint8Array(0);
+    }
+    f.start = time;
+    f.samples = f.samples.slice(k);
+    return new Uint8Array(written(bytes, (found as { first: number }).first, f, [[f.data + skip, f.bytes - skip]]));
+}
+
+/** The fragments of an MP4 segment (each moof followed by its mdat, its samples within it, nothing else among them)
+ * and where the first begins (boxes before it are kept as they are); null when laid out otherwise */
+function fragmentsIn(view: DataView): { first: number; fragments: Fragment[] } | null {
+    var fragments: Fragment[] = [];
+    var first = -1;
+    var open: Fragment | null = null;
+    for (var at = 0; at + 8 <= view.byteLength; at += size) {
+        var size = view.getUint32(at);
+        var type = boxType(view, at);
+        if (size < 8 || at + size > view.byteLength) {
+            return null;
+        }
+        if (type === 'moof') {
+            open = open ? null : fragmentOf(view, at, size);
+            if (!open) {
+                return null;
+            }
+            first = first < 0 ? at : first;
+        } else if (type === 'mdat' && open) {
+            if (open.data < at + 8 || open.data + open.bytes > at + size) {
+                return null;
+            }
+            fragments.push(open);
+            open = null;
+        } else if (first >= 0) {
+            // Another box among the fragments
+            return null;
+        }
+    }
+    return open || !fragments.length ? null : { first: first, fragments: fragments };
+}
+
+/** One fragment: the boxes before it in src (prefix bytes), a moof of one traf (head's sequence number and track; the
+ * moof as the data's base; head's tfdt box with head's decode time; a trun of head's samples' durations, sizes, flags
+ * and time offsets), then an mdat of src's data runs ([at, length]) */
+function written(src: Uint8Array, prefix: number, head: Fragment, runs: number[][]): ArrayBuffer {
+    var start = head.start;
+    var samples = head.samples;
+    var signed = head.signed;
+    var offsets = head.offsets;
+    var bytes = 0;
+    runs.forEach(function (r) {
+        bytes += r[1];
+    });
+    var count = samples.length;
     var entry = offsets ? 16 : 12;
     var trun = 20 + count * entry;
     var traf = 8 + 16 + head.tfdtSize + trun;
     var moof = 8 + 16 + traf;
-    var out = new ArrayBuffer(first + moof + 8 + bytes);
+    var out = new ArrayBuffer(prefix + moof + 8 + bytes);
     var w = new DataView(out);
     var b = new Uint8Array(out);
-    var src = new Uint8Array(data);
-    b.set(src.subarray(0, first));
-    var p = first;
+    b.set(src.subarray(0, prefix));
+    var p = prefix;
     var box = function (length: number, name: string, versionFlags?: number): void {
         w.setUint32(p, length);
         for (var i = 0; i < 4; i++) {
@@ -345,26 +427,30 @@ function joined(data: ArrayBuffer): ArrayBuffer {
     w.setUint32(p, head.track);
     p += 4;
     b.set(src.subarray(head.tfdt, head.tfdt + head.tfdtSize), p);
+    if (src[head.tfdt + 8] === 1) {
+        w.setUint32(p + 12, Math.floor(start / 4294967296));
+        w.setUint32(p + 16, start % 4294967296);
+    } else {
+        w.setUint32(p + 12, start);
+    }
     p += head.tfdtSize;
     box(trun, 'trun', (signed ? 0x01000000 : 0) | 0x701 | (offsets ? 0x800 : 0));
     w.setUint32(p, count);
     w.setUint32(p + 4, moof + 8);
     p += 8;
-    fragments.forEach(function (f) {
-        f.samples.forEach(function (s) {
-            w.setUint32(p, s[0]);
-            w.setUint32(p + 4, s[1]);
-            w.setUint32(p + 8, s[2]);
-            if (offsets) {
-                w.setInt32(p + 12, s[3]);
-            }
-            p += entry;
-        });
+    samples.forEach(function (s) {
+        w.setUint32(p, s[0]);
+        w.setUint32(p + 4, s[1]);
+        w.setUint32(p + 8, s[2]);
+        if (offsets) {
+            w.setInt32(p + 12, s[3]);
+        }
+        p += entry;
     });
     box(8 + bytes, 'mdat');
-    fragments.forEach(function (f) {
-        b.set(src.subarray(f.data, f.data + f.bytes), p);
-        p += f.bytes;
+    runs.forEach(function (r) {
+        b.set(src.subarray(r[0], r[0] + r[1]), p);
+        p += r[1];
     });
     return out;
 }

@@ -8,7 +8,7 @@
 // failure; released when another player needs the TV's decoder or the app goes to the
 // background (releasePipeline). One player video, so one pipeline.
 
-import { unloadVideo } from '../../player/video.js';
+import { unloadVideo } from './video.js';
 import { kindOf } from '../api/streams.js';
 import { note, ranges } from './play-log.js';
 

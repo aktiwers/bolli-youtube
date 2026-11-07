@@ -5,7 +5,7 @@
 // tells its kind: a problem, or the SponsorBlock category skipped. The look
 // comes from the theme (by-toast).
 
-import { h, setText } from '../../core/dom.js';
+import { h, setText } from '../core/dom.js';
 import { icon, setIcon } from './icons.js';
 
 /** Time from start until the fade-out begins (fade-in included, as YouTube's) */

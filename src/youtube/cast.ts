@@ -9,8 +9,9 @@
 // while the app runs without a new cast. The lounge opens once the first
 // screen shows, or at once for a cast.
 
-import { KEY } from '../core/keys.js';
-import { android } from '../core/platform.js';
+import { KEY } from './core/keys.js';
+import { tr } from './core/i18n.js';
+import { android } from './core/platform.js';
 import { toast } from './ui/toast.js';
 import { prefs, setPref } from './api/prefs.js';
 import { offerComments, withdrawComments } from './api/handoff.js';
@@ -148,7 +149,7 @@ export class Cast {
                     this.phones[f.id] = true;
                 }
                 this.remotes = true;
-                toast((f.name || 'A phone') + ' is connected to Bolli YouTube', 'check');
+                toast(f.name ? tr('{1} is connected to Bolli YouTube', f.name) : tr('A phone is connected to Bolli YouTube'), 'check');
                 this.tellAll();
                 break;
             case 'getNowPlaying':

@@ -13,14 +13,16 @@
 // (sabrStreams: the signed-in TV client, formats via SABR only:
 // player/sabr-engine.ts); playableStreams tries that first if Settings say so.
 
-import { getText, HttpError, postJson } from '../../core/http.js';
-import { android } from '../../core/platform.js';
-import { load, save } from '../../core/store.js';
-import { Ended, text } from './feed.js';
-import { subtitleLanguages } from './languages.js';
-import { playerScript } from './player-script.js';
+import { getText, HttpError, postJson } from '../core/http.js';
+import { language, tr } from '../core/i18n.js';
+import { android } from '../core/platform.js';
+import { load, save } from '../core/store.js';
+import { Ended, paramBytes, text } from './feed.js';
+import { languageOrder, subtitleLanguages, trackName } from './languages.js';
+import { forgetScript, playerScript } from './player-script.js';
 import { SabrClient } from './sabr.js';
-import { freshSignIn, innertube, lastAccount, noAnswer, tvClient } from './youtube.js';
+import { forgetOnesie, onesie, prepareOnesie } from './onesie.js';
+import { freshSignIn, innertubeVia, lastAccount, newCpn, noAnswer, restartPage, tvClient, youtubeLanguage } from './youtube.js';
 
 var PLAYER = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
 var VISITOR = 'https://www.youtube.com/sw.js_data';
@@ -93,6 +95,8 @@ export interface AudioTrack {
     format: Format;
     /** The stable-volume version (null: none) */
     stable: Format | null;
+    /** With Dolby as format: the track's best stereo AAC (audioOf takes it once Dolby failed here; null: none) */
+    stereo?: Format | null;
 }
 
 export interface Streams {
@@ -229,10 +233,9 @@ export function streams(id: string, fresh?: boolean): Promise<Streams> {
     return keep(id, false, function () { return ask(id, false); }, fresh);
 }
 
-/** A video's streams as the account, via SABR (cached like streams; reloadToken: a reload's, Sabr.reloadToken); rejects
- * with NoStreams */
+/** A video's streams as the account (askSigned; cached like streams; reloadToken: a reload's); rejects with NoStreams */
 export function sabrStreams(id: string, reloadToken?: string, fresh?: boolean): Promise<Streams> {
-    return keep(id, true, function () { return askSabr(id, reloadToken || ''); }, fresh);
+    return keep(id, true, function () { return askSigned(id, reloadToken || ''); }, fresh);
 }
 
 /** The method that worked lately where the other failed for reasons not the video's own (SABR or as a guest): it goes
@@ -240,16 +243,37 @@ export function sabrStreams(id: string, reloadToken?: string, fresh?: boolean): 
 var learned: { sabr: boolean; at: number } | null = null;
 var LEARNED_MS = 30 * 60 * 1000;
 
-/** Whether SABR goes first now: the method that worked lately, else sabrFirst (Settings) */
-export function sabrFirstNow(sabrFirst: boolean): boolean {
+/** Videos the guest path refused for a reason of their own (an age check, members only) and SABR played, and when:
+ * SABR goes first for them for LEARNED_MS (each of their starts and preloads paid the refusal first) */
+var signedInOnly: { [id: string]: number } = {};
+
+/** Whether SABR goes first now (for video id, if given): for a video only SABR played lately, else the method that
+ * worked lately, else sabrFirst (Settings) */
+export function sabrFirstNow(sabrFirst: boolean, id?: string): boolean {
+    if (id && signedInOnlyNow(id)) {
+        return true;
+    }
     return learned && Date.now() - learned.at < LEARNED_MS ? learned.sabr : sabrFirst;
 }
 
+/** Whether only SABR played video id lately (the guest path refused it for a reason of its own) */
+function signedInOnlyNow(id: string): boolean {
+    return Date.now() - (signedInOnly[id] || 0) < LEARNED_MS;
+}
+
 /** The method (sabr or as a guest) played where the other failed (why: the other's reason, if known); unless that was
- * about the video itself, it goes first for a while */
-export function learnMethod(sabr: boolean, why?: NoStreams): void {
+ * about the video itself, it goes first for a while; if it was and SABR played, SABR goes first for that video (id) */
+export function learnMethod(sabr: boolean, why?: NoStreams, id?: string): void {
+    var now = Date.now();
     if (!why || !aboutTheVideo(why)) {
-        learned = { sabr: sabr, at: Date.now() };
+        learned = { sabr: sabr, at: now };
+    } else if (sabr && id) {
+        for (var other in signedInOnly) {
+            if (now - signedInOnly[other] >= LEARNED_MS) {
+                delete signedInOnly[other];
+            }
+        }
+        signedInOnly[id] = now;
     }
 }
 
@@ -264,32 +288,47 @@ export function noneCanPlay(e: NoStreams): boolean {
     return e.status === 'ERROR' || e.status === 'LIVE_STREAM_OFFLINE';
 }
 
+/** Why YouTube refused a video (e), as its player says it in the app's language: the requests ask in English (their
+ * reasons are read here), so in another language the guest's is asked once more in it; '' where that one was not
+ * refused alike or did not answer */
+export function reasonInLanguage(id: string, e: NoStreams): Promise<string> {
+    if (inEnglish()) {
+        return Promise.resolve(e.reason || '');
+    }
+    return visitor(false).then(function (visitorId) {
+        return askPlayer(id, visitorId, youtubeLanguage());
+    }).then(function (reply) {
+        var playable = reply && reply.playabilityStatus || {};
+        return playable.status === e.status && playable.reason || '';
+    }, function () {
+        return '';
+    });
+}
+
 /** A video's streams for the own player: as a guest, else via SABR (age check, members only); sabrFirst reverses
  * the order, as does the method that worked lately (sabrFirstNow). If both fail, rejects with the first reason (and the
  * other's), or the TV client's where both were refused alike (refused). With asking (a viewer waiting), each method's
  * request is asked again if it hangs (patient), and the other method asked only while asking says they are still
  * wanted (asking(sabr, again): the method about to be asked, and whether as a hanging request's ask again). */
 export function playableStreams(id: string, sabrFirst: boolean, asking?: Asking): Promise<Streams> {
-    var sabr = sabrFirstNow(sabrFirst);
+    var sabr = sabrFirstNow(sabrFirst, id);
+    // (a video only SABR plays is marked so as when the guest path refused it: the player does not switch to that path)
+    var signedIn = sabr && signedInOnlyNow(id);
     var by = function (viaSabr: boolean): Promise<Streams> {
         var ask = function (fresh: boolean): Promise<Streams> { return viaSabr ? sabrStreams(id, '', fresh) : streams(id, fresh); };
         return asking ? patient(ask, function () { return asking(viaSabr, true); }, stuckFor(viaSabr)) : ask(false);
     };
-    return by(sabr).then(null, function (e: NoStreams) {
+    return by(sabr).then(function (s) {
+        return signedIn ? onlyBy(s) : s;
+    }, function (e: NoStreams) {
         // Removed, an upcoming live stream, or no network: the other method cannot play it either; nor is it asked once
         // the viewer has gone
         if (noneCanPlay(e) || noAnswer(e) || asking && !asking(!sabr, false)) {
             throw e;
         }
         return by(!sabr).then(function (s) {
-            learnMethod(!sabr, e);
-            // A copy is marked: the kept one serves later plays, which try the first method again
-            var only = {} as Streams;
-            for (var name in s) {
-                (only as any)[name] = (s as any)[name];
-            }
-            only.only = true;
-            return only;
+            learnMethod(!sabr, e, id);
+            return onlyBy(s);
         }, function (other: NoStreams) {
             // Refused alike, as YouTube's player would be: the TV client's reason, as that player shows it (with the
             // guest's details of an ended live stream)
@@ -301,6 +340,17 @@ export function playableStreams(id: string, sabrFirst: boolean, asking?: Asking)
             throw { status: e.status, reason: e.reason + (other.reason ? ' (' + (sabr ? 'as a guest' : 'SABR') + ': ' + other.reason + ')' : '') } as NoStreams;
         });
     });
+}
+
+/** A copy of s marked as playable by its method only (the kept one serves later plays, which try the first method
+ * again) */
+function onlyBy(s: Streams): Streams {
+    var only = {} as Streams;
+    for (var name in s) {
+        (only as any)[name] = (s as any)[name];
+    }
+    only.only = true;
+    return only;
 }
 
 /** Whether a video's streams are kept (by this method: asking for them makes no request to YouTube) */
@@ -419,9 +469,11 @@ export function unanswered(e: NoStreams): boolean {
     return noAnswer(e) || e.status === 'HTTP' && /^(timeout|network error|HTTP 5\d\d)$/.test(e.reason || '');
 }
 
-/** A SABR /player request's playback context: the player script's signature timestamp, and a reload's token if any */
+/** A SABR /player request's playback context: the player script's signature timestamp, the device's playback (as
+ * YouTube's TV player sends it), and a reload's token if any */
 export function sabrPlayback(sts: number, reloadToken: string): { [name: string]: unknown } {
-    var playback: { [name: string]: unknown } = { contentPlaybackContext: { html5Preference: 'HTML5_PREF_WANTS', signatureTimestamp: sts } };
+    var playback: { [name: string]: unknown } = { contentPlaybackContext: { html5Preference: 'HTML5_PREF_WANTS', signatureTimestamp: sts },
+        devicePlaybackCapabilities: { supportsVp9Encoding: true, supportXhr: true } };
     if (reloadToken) {
         playback.reloadPlaybackContext = { reloadPlaybackParams: { token: reloadToken } };
     }
@@ -444,18 +496,61 @@ export function takeTracking(id: string, token: string): any {
     return t && t.id === id && t.token === token && Date.now() - t.at < TRACKING_MS ? t.tracking : null;
 }
 
-/** /player as the signed-in TV client, with the player script's signature timestamp (and a reload's token, '' none):
- * the formats, the SABR URL (n transformed by that script) and the client details SABR requests send */
-function askSabr(id: string, reloadToken: string): Promise<Streams> {
-    return playerScript().then(function (script) {
-        return Promise.all<any>([tvClient(), freshSignIn(), innertube('player', {
+/** When the page may be restarted again for YouTube asking (0: now): RESTART_AGAIN_MS after a restart, RESTART_IDLE_MS
+ * after one that did not help (asked again at once: YouTube's answer stands for this TV a while). Meanwhile the
+ * guest path plays. */
+var restartAfter = 0;
+var RESTART_AGAIN_MS = 30 * 60 * 1000;
+var RESTART_IDLE_MS = 6 * 3600 * 1000;
+
+/** Whether a refusal is YouTube asking its TV app to restart ("The YouTube app needs to restart"; its button reloads
+ * the page) */
+function asksRestart(playable: { errorScreen?: unknown }): boolean {
+    return !!playable.errorScreen && /RELOAD_PAGE/.test(JSON.stringify(playable.errorScreen));
+}
+
+/** The signed-in player request as YouTube's TV app asks it on a Samsung TV (the device as yt-dlp's tv_samsung, the TV
+ * app's version this TV's /tv page gives), inside an Onesie request (api/onesie.ts), whose inner headers carry that
+ * TV's user agent. Since 2026-11-06 YouTube gives an LG TV's client (this app's user agent, which a request from the
+ * page cannot change) another variant of its player script (tv-player-ias-tcl), whose signature timestamp it then
+ * wants and whose n transform no solver finds yet (yt-dlp/ejs issue 77); a Samsung TV's is the classic one
+ * (playerScript) */
+var SIGNED_IN_AS: { [field: string]: string } = { deviceMake: 'Samsung', deviceModel: 'UKS9800', osName: 'Tizen', osVersion: '2.4.0',
+    userAgent: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 2.4.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/2.4.0 TV Safari/538.1' };
+
+/** The player request as the signed-in TV client (SIGNED_IN_AS, by Onesie), with the player script's signature
+ * timestamp (and a reload's token, '' none): the formats, the SABR URL (n transformed by that script) and the client
+ * details SABR requests send. Asked to restart, the page, its client details and the script are made anew and it is
+ * asked once more (restartAfter; restarted: this is that ask) */
+function askSigned(id: string, reloadToken: string, restarted?: boolean): Promise<Streams> {
+    return Promise.all<any>([playerScript(), tvClient(), prepareOnesie()]).then(function (ready) {
+        var script = ready[0];
+        var own = ready[1].context.client;
+        var as: { [field: string]: string } = { clientVersion: own.clientVersion || '' };
+        for (var field in SIGNED_IN_AS) {
+            as[field] = SIGNED_IN_AS[field];
+        }
+        return Promise.all<any>([freshSignIn(), innertubeVia('player', {
             videoId: id,
+            cpn: newCpn(),
             contentCheckOk: true,
             racyCheckOk: true,
             playbackContext: sabrPlayback(script.sts, reloadToken)
-        })]).then(function (got) {
-            var reply = got[2] || {};
+        }, onesie(as))]).then(function (got) {
+            var reply = got[1] || {};
             var playable = reply.playabilityStatus || {};
+            if (playable.status !== 'OK' && asksRestart(playable)) {
+                if (Date.now() >= restartAfter) {
+                    restartAfter = Date.now() + RESTART_AGAIN_MS;
+                    restartPage();
+                    forgetScript();
+                    forgetOnesie();
+                    return askSigned(id, reloadToken, true);
+                }
+                if (restarted) {
+                    restartAfter = Date.now() + RESTART_IDLE_MS;
+                }
+            }
             if (playable.status !== 'OK') {
                 // (the line under the reason that YouTube's player shows too)
                 var message = playable.errorScreen && playable.errorScreen.playerErrorMessageRenderer;
@@ -466,7 +561,7 @@ function askSabr(id: string, reloadToken: string): Promise<Streams> {
                     throw failed;
                 }
                 // Not signed in: as YouTube's player only if there is no account (else its token may just have failed)
-                return (got[1] ? Promise.resolve('') : lastAccount()).then(function (key) {
+                return (got[0] ? Promise.resolve('') : lastAccount()).then(function (key) {
                     failed.asYouTube = !key;
                     throw failed;
                 });
@@ -478,17 +573,16 @@ function askSabr(id: string, reloadToken: string): Promise<Streams> {
                 throw { status: 'NO_SABR', reason: 'no SABR stream' } as NoStreams;
             }
             var n = (/[?&]n=([^&]*)/.exec(url) || [])[1];
-            return (n ? script.n(decodeURIComponent(n)) : Promise.resolve('')).then(function (changed) {
+            return (n ? script.n(decodeURIComponent(n)) : Promise.resolve('')).then(function (changed: string) {
                 if (n) {
                     url = url.replace(/([?&]n=)[^&]*/, '$1' + encodeURIComponent(changed));
                 }
-                var c = got[0].context.client;
-                tracking = got[1] ? { id: id, at: Date.now(), token: got[1].token, tracking: reply.playbackTracking || null } : null;
+                tracking = got[0] ? { id: id, at: Date.now(), token: got[0].token, tracking: reply.playbackTracking || null } : null;
                 var s = streamsOf(reply, true);
                 s.sabr = {
                     url: url,
                     config: config,
-                    client: { version: c.clientVersion || '', osName: c.osName || '', osVersion: c.osVersion || '', make: c.deviceMake || '', model: c.deviceModel || '', hl: c.hl || 'en' }
+                    client: { version: as.clientVersion, osName: as.osName, osVersion: as.osVersion, make: as.deviceMake, model: as.deviceModel, hl: own.hl || 'en' }
                 };
                 return s;
             }, function (e: Error) {
@@ -513,20 +607,26 @@ function noStreams(e: NoStreams | { message: string }): NoStreams {
     return (e as NoStreams).reason !== undefined ? e as NoStreams : { status: 'HTTP', reason: (e as { message: string }).message };
 }
 
+/** The guest's /player request for a video, its texts in language hl (CLIENT's: English, as its reasons are read here) */
+function askPlayer(id: string, visitorId: string, hl: string): Promise<any> {
+    var client: { [name: string]: unknown } = { visitorData: visitorId };
+    for (var name in CLIENT) {
+        client[name] = (CLIENT as { [name: string]: unknown })[name];
+    }
+    client.hl = hl;
+    return postJson<any>(PLAYER, {
+        context: { client: client },
+        videoId: id,
+        playbackContext: { contentPlaybackContext: { html5Preference: 'HTML5_PREF_WANTS' } },
+        contentCheckOk: true,
+        racyCheckOk: true
+    }, { 'X-YouTube-Client-Name': CLIENT_NAME, 'X-YouTube-Client-Version': CLIENT.clientVersion, 'X-Goog-Visitor-Id': visitorId });
+}
+
 /** Fetch a video's streams (again: retry with a new visitor id after a bot check) */
 function ask(id: string, again: boolean): Promise<Streams> {
     return visitor(again).then(function (visitorId) {
-        var client: { [name: string]: unknown } = { visitorData: visitorId };
-        for (var name in CLIENT) {
-            client[name] = (CLIENT as { [name: string]: unknown })[name];
-        }
-        return postJson<any>(PLAYER, {
-            context: { client: client },
-            videoId: id,
-            playbackContext: { contentPlaybackContext: { html5Preference: 'HTML5_PREF_WANTS' } },
-            contentCheckOk: true,
-            racyCheckOk: true
-        }, { 'X-YouTube-Client-Name': CLIENT_NAME, 'X-YouTube-Client-Version': CLIENT.clientVersion, 'X-Goog-Visitor-Id': visitorId });
+        return askPlayer(id, visitorId, CLIENT.hl);
     }).then(function (reply) {
         var playable = reply && reply.playabilityStatus || {};
         if (playable.status === 'OK') {
@@ -562,7 +662,12 @@ export function streamsOf(reply: any, sabr?: boolean): Streams {
     var videos = playable.filter(function (f) { return /^video\/(mp4; codecs="(avc1|av01)|webm)/.test(f.mimeType); }).map(formatOf);
     var rank = function (f: Format): number { return /webm/.test(f.mime) ? 2 : /av01/.test(f.mime) ? 1 : 0; };
     videos.sort(function (a, b) { return b.height - a.height || b.fps - a.fps || rank(b) - rank(a) || b.bitrate - a.bitrate; });
-    var audios = audioTracks(playable.filter(function (f) { return /^audio\/mp4/.test(f.mimeType); }));
+    // Stereo AAC, and with SABR Dolby Digital 5.1 (ac-3), which YouTube's TV app takes first where the TV plays it
+    // (html5_enable_ac3; never Dolby Digital Plus here, nor 5.1 AAC); YouTube offers Dolby for some videos, to the
+    // signed-in TV client only (its start's audio cut is handled in the SABR engine: containers.ts wholeFrames)
+    var audios = audioTracks(playable.filter(function (f) {
+        return sabr && /^audio\/mp4; codecs="ac-3"/.test(f.mimeType) || /^audio\/mp4; codecs="mp4a\./.test(f.mimeType) && !(+f.audioChannels > 2);
+    }));
     var tracklist = reply.captions && reply.captions.playerCaptionsTracklistRenderer || {};
     var paid = reply.paidContentOverlay && reply.paidContentOverlay.paidContentOverlayRenderer;
     var s: Streams = {
@@ -577,15 +682,16 @@ export function streamsOf(reply: any, sabr?: boolean): Streams {
         storyboard: storyboardOf(reply.storyboards),
         live: live ? { segment: +live.targetDurationSec, dvr: +live.maxDvrDurationSec || 0 } : null
     };
+    // (its words ours in another app language: the player is asked in English)
     var said = paid && text(paid.text);
     if (said) {
-        s.paid = { text: said, ms: +paid.durationMs || 10000 };
+        s.paid = { text: inEnglish() ? said : tr('Includes paid promotion'), ms: +paid.durationMs || 10000 };
     }
     return s;
 }
 
-/** AAC per audio track: the best bitrate (itag 140 over 139) and the best stable-volume one (isDrc); the original
- * first, then dubs by name */
+/** Per audio track the best bitrate (Dolby Digital over AAC, itag 140 over 139) and the best stable-volume one (isDrc;
+ * none with Dolby: as YouTube's "Unavailable with surround sound"); the original first, then dubs by name */
 function audioTracks(formats: any[]): AudioTrack[] {
     var tracks: { [id: string]: AudioTrack } = {};
     var ids: string[] = [];
@@ -595,7 +701,12 @@ function audioTracks(formats: any[]): AudioTrack[] {
         var track = tracks[id];
         if (!track) {
             ids.push(id);
-            track = tracks[id] = { id: id, name: about.displayName || 'Original', original: !f.audioTrack || !!about.audioIsDefault, format: null as unknown as Format, stable: null };
+            // (in another app language named by the language its id begins with: "fr.3"; its kind from its tags)
+            var said = about.displayName || '';
+            var name = said && ours(said, id.split('.')[0]);
+            var kind = name !== said ? xtag(f.xtags, 'acont') : '';
+            name = kind === 'dubbed-auto' ? tr('{1} (auto-dubbed)', name) : kind === 'descriptive' ? tr('{1} (audio description)', name) : name;
+            track = tracks[id] = { id: id, name: name || tr('Original'), original: !f.audioTrack || !!about.audioIsDefault, format: null as unknown as Format, stable: null };
         }
         var format = formatOf(f);
         var slot: 'stable' | 'format' = f.isDrc ? 'stable' : 'format';
@@ -603,13 +714,26 @@ function audioTracks(formats: any[]): AudioTrack[] {
         if (!had || format.bitrate > had.bitrate) {
             track[slot] = format;
         }
+        if (!f.isDrc && /mp4a/.test(format.mime) && (!track.stereo || format.bitrate > track.stereo.bitrate)) {
+            track.stereo = format;
+        }
     });
     var list = ids.map(function (id) { return tracks[id]; }).filter(function (t) { return t.format; });
-    list.sort(function (a, b) { return (b.original ? 1 : 0) - (a.original ? 1 : 0) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0); });
-    // With dubs, mark the original
     list.forEach(function (t) {
-        if (t.original && list.length > 1 && !/original/i.test(t.name)) {
-            t.name += ' (original)';
+        if (/ac-3/.test(t.format.mime)) {
+            t.stable = null;
+        } else {
+            t.stereo = null;
+        }
+    });
+    list.sort(function (a, b) {
+        return (b.original ? 1 : 0) - (a.original ? 1 : 0) || (inEnglish() ? 0 : languageOrder(a.id.split('.')[0]) - languageOrder(b.id.split('.')[0])) ||
+            (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+    });
+    // With dubs, mark the original (YouTube's English name may say so already; ours, when it gave none, does)
+    list.forEach(function (t) {
+        if (t.original && list.length > 1 && t.name !== tr('Original') && !/original/i.test(t.name)) {
+            t.name = tr('{1} (original)', t.name);
         }
     });
     return list;
@@ -706,10 +830,42 @@ export function storyboardFrame(sb: Storyboard, t: number): StoryboardFrame {
 /** The video's uploaded and auto-generated subtitles */
 function captionsOf(list: any): Caption[] {
     return (list.captionTracks || []).filter(function (t: any) { return t.baseUrl; }).map(function (t: any) {
-        var name = text(t.name) || t.languageCode || '';
+        var said = text(t.name) || t.languageCode || '';
         var asr = t.kind === 'asr';
-        return { url: t.baseUrl + '&fmt=vtt', language: t.languageCode || '', name: asr && !/auto/i.test(name) ? name + ' (auto-generated)' : name, kind: asr ? 'asr' : 'own' } as Caption;
+        // In another app language its language's name there, a track's own name after YouTube's " - " kept
+        var dash = said.indexOf(' - ');
+        var name = ours(said, t.languageCode || '');
+        if (name !== said && dash >= 0) {
+            name += said.slice(dash);
+        }
+        return { url: t.baseUrl + '&fmt=vtt', language: t.languageCode || '', name: asr && !/auto/i.test(name) ? tr('{1} (auto-generated)', name) : name,
+            kind: asr ? 'asr' : 'own' } as Caption;
     });
+}
+
+/** The app is in English, as the player request is asked (YouTube's names and notices from it shown as they come) */
+function inEnglish(): boolean {
+    return language() === 'en';
+}
+
+/** A track's name: YouTube's in English (the player request's language), else its language's in the app's language
+ * (YouTube's for a language not known here) */
+function ours(said: string, code: string): string {
+    return inEnglish() || !code ? said : trackName(code) || said;
+}
+
+/** A format's tag (YouTube's xtags: a base64 list of key and value pairs, e.g. acont=dubbed-auto, drc=1; '' none) */
+function xtag(xtags: string, key: string): string {
+    var b = paramBytes(xtags);
+    // Each pair: field 1 (0x0a), its length, then field 1 the key and field 2 (0x12) the value, each with its length
+    for (var at = 0; at + 1 < b.length && b.charCodeAt(at) === 0x0a; at += 2 + b.charCodeAt(at + 1)) {
+        var pair = b.substr(at + 2, b.charCodeAt(at + 1));
+        var keyLength = pair.charCodeAt(1);
+        if (pair.charCodeAt(0) === 0x0a && pair.substr(2, keyLength) === key && pair.charCodeAt(2 + keyLength) === 0x12) {
+            return pair.substr(4 + keyLength, pair.charCodeAt(3 + keyLength));
+        }
+    }
+    return '';
 }
 
 /** The translation source: uploaded English, else another uploaded track, else the auto-generated track of the
@@ -721,7 +877,9 @@ function translationsOf(list: any): Translations | null {
     var sound = (list.audioTracks || [])[list.defaultAudioTrackIndex || 0];
     var heard = (sound && sound.captionTrackIndices || []).map(function (i: number) { return all[i]; }).filter(usable)[0] || null;
     var from = own.filter(function (t) { return base(t.languageCode || '') === 'en'; })[0] || own[0] || heard || all.filter(usable)[0];
-    var to = (list.translationLanguages || []).map(function (l: any) { return { code: l.languageCode, name: text(l.languageName) }; });
+    var to = (list.translationLanguages || []).filter(function (l: any) { return !!l.languageCode; }).map(function (l: any) {
+        return { code: l.languageCode, name: text(l.languageName) };
+    });
     return from && to.length ? { from: from.baseUrl, to: to, heard: heard && heard.kind === 'asr' ? heard.languageCode || '' : '' } : null;
 }
 
@@ -738,7 +896,7 @@ export function captionList(s: Streams): Caption[] {
             // Another dub's auto-generated track is timed to that dub, so it does not count
             var has = captions.some(function (c) { return c.kind === 'own' && sameLanguage(c.language, l.code); }) || !!t!.heard && sameLanguage(t!.heard, l.code);
             if (wanted.indexOf(l.code) >= 0 && !has) {
-                captions.push({ url: t!.from + '&fmt=vtt&tlang=' + l.code, language: l.code, name: l.name + ' (auto-translated)', kind: 'translated',
+                captions.push({ url: t!.from + '&fmt=vtt&tlang=' + l.code, language: l.code, name: tr('{1} (auto-translated)', ours(l.name, l.code)), kind: 'translated',
                     source: source });
             }
         });
@@ -750,9 +908,14 @@ export function captionList(s: Streams): Caption[] {
         }
         return (at < 0 ? wanted.length : at) * 3 + KINDS.indexOf(c.kind);
     };
-    // By rank, else YouTube's order (sort is not stable here)
+    // By rank, else YouTube's order (by the English names), in another app language by the names there (sort is not
+    // stable here)
+    var named = !inEnglish();
     var order = captions.map(function (c, i) { return { c: c, rank: rank(c), i: i }; });
-    order.sort(function (a, b) { return a.rank - b.rank || a.i - b.i; });
+    order.sort(function (a, b) {
+        return a.rank - b.rank || (named ? languageOrder(a.c.language) - languageOrder(b.c.language) || (a.c.name < b.c.name ? -1 : a.c.name > b.c.name ? 1 : 0) : 0) ||
+            a.i - b.i;
+    });
     return order.map(function (o) { return o.c; });
 }
 

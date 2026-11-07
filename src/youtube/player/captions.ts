@@ -9,8 +9,9 @@
 // (~8,000 cues, 370 KB) takes ~335 ms on the TV even in one pass, so it is
 // read in slices with a pause between them, leaving room for appends and frames.
 
-import { getText } from '../../core/http.js';
-import { cleanText, Cue, parseVtt, pieceAt, SubtitleTrack } from '../../player/subtitles.js';
+import { getText } from '../core/http.js';
+import { tr } from '../core/i18n.js';
+import { cleanText, Cue, parseVtt, pieceAt, SubtitleTrack } from './subtitles.js';
 import { prefs } from '../api/prefs.js';
 import { note } from './play-log.js';
 
@@ -33,8 +34,8 @@ var PAIR_GAP_S = 1;
 
 /** Subtitle style options (Settings and player): value, name and description */
 export var CAPTION_STYLES = [
-    { value: 'words', name: 'Word by word', note: 'Each word comes as it is said, as on YouTube' },
-    { value: 'lines', name: 'Two lines at a time', note: 'Two lines show, then the next two take their place, as normal subtitles' }
+    { value: 'words', name: tr('Word by word'), note: tr('Each word comes as it is said, as on YouTube') },
+    { value: 'lines', name: tr('Two lines at a time'), note: tr('Two lines show, then the next two take their place, as normal subtitles') }
 ];
 
 /** The text shown at a time (null: none); styled: auto-generated, in a Subtitle style; stop: stop parsing */

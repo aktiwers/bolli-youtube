@@ -5,7 +5,8 @@
 // every video with that prefix. Only the categories enabled in Settings are
 // asked for (PARTS). Without segments or a reply, the video plays as is.
 
-import { getJson } from '../../core/http.js';
+import { getJson } from '../core/http.js';
+import { tr } from '../core/i18n.js';
 import { Keeper } from './kept-pages.js';
 
 var API = 'https://sponsorblock.inf.re/api/skipSegments/';
@@ -25,14 +26,14 @@ export interface PartKind {
 
 /** Skippable categories, in Settings order */
 export var PARTS: PartKind[] = [
-    { id: 'sponsor', name: 'Sponsors', note: 'paid promotions', skipped: 'the sponsor', label: 'Sponsor' },
-    { id: 'selfpromo', name: 'Self-promotion', note: 'the channel\'s own merchandise, memberships and other channels', skipped: 'self-promotion', label: 'Self-promotion' },
-    { id: 'interaction', name: 'Reminders to subscribe', note: 'asking you to like, subscribe or follow', skipped: 'a reminder to subscribe', label: 'Reminder to subscribe' },
-    { id: 'intro', name: 'Intros', note: 'intro animations and pauses', skipped: 'the intro', label: 'Intro' },
-    { id: 'outro', name: 'End cards', note: 'credits and end screens', skipped: 'the end cards', label: 'End cards' },
-    { id: 'preview', name: 'Previews and recaps', note: 'what comes later, or what came before', skipped: 'the preview', label: 'Preview' },
-    { id: 'filler', name: 'Tangents', note: 'filler and jokes off the topic', skipped: 'a tangent', label: 'Tangent' },
-    { id: 'music_offtopic', name: 'Parts without music', note: 'in music videos', skipped: 'a part without music', label: 'No music' }
+    { id: 'sponsor', name: tr('Sponsors'), note: tr('paid promotions'), skipped: tr('Skipped the sponsor'), label: tr('Sponsor') },
+    { id: 'selfpromo', name: tr('Self-promotion'), note: tr('the channel\'s own merchandise, memberships and other channels'), skipped: tr('Skipped self-promotion'), label: tr('Self-promotion') },
+    { id: 'interaction', name: tr('Reminders to subscribe'), note: tr('asking you to like, subscribe or follow'), skipped: tr('Skipped a reminder to subscribe'), label: tr('Reminder to subscribe') },
+    { id: 'intro', name: tr('Intros'), note: tr('intro animations and pauses'), skipped: tr('Skipped the intro'), label: tr('Intro') },
+    { id: 'outro', name: tr('End cards'), note: tr('credits and end screens'), skipped: tr('Skipped the end cards'), label: tr('End cards') },
+    { id: 'preview', name: tr('Previews and recaps'), note: tr('what comes later, or what came before'), skipped: tr('Skipped the preview'), label: tr('Preview') },
+    { id: 'filler', name: tr('Tangents'), note: tr('filler and jokes off the topic'), skipped: tr('Skipped a tangent'), label: tr('Tangent') },
+    { id: 'music_offtopic', name: tr('Parts without music'), note: tr('in music videos'), skipped: tr('Skipped a part without music'), label: tr('No music') }
 ];
 
 export interface Segment {
@@ -107,7 +108,7 @@ export function segmentName(s: Segment): string {
 /** "Skipped the sponsor" */
 export function skippedText(s: Segment): string {
     var kind = kindOf(s);
-    return 'Skipped ' + (kind ? kind.skipped : s.category);
+    return kind ? kind.skipped : tr('Skipped {1}', s.category);
 }
 
 /** SHA-256 of ASCII text (a video id), in hex */

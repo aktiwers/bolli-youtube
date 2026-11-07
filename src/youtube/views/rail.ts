@@ -1,10 +1,12 @@
 // The left rail, as in YouTube's TV app: the logo at the top (OK opens its menu, including Settings), section
 // icons below it, the clock at the top right. When focused it expands to show the section names. Up/Down move
 // the focus at once but switch the section only once the focus rests (REST_MS), since drawing a screen takes the
-// TV a few hundred ms and would stutter on every section passed; Right or OK enter it at once. Icons: ui/icons.ts.
+// TV a few hundred ms and would stutter on every section passed; Right or OK enter it at once. A click (the Magic
+// Remote's pointer) is OK on the item, the logo or a menu entry under it. Icons: ui/icons.ts.
 
-import { h, setClass, setShown, setSrc, setText } from '../../core/dom.js';
-import { KEY, KeyHandler } from '../../core/keys.js';
+import { h, setClass, setShown, setSrc, setText } from '../core/dom.js';
+import { KEY, KeyHandler } from '../core/keys.js';
+import { takesPointer } from '../core/pointer.js';
 import { icon } from '../ui/icons.js';
 import { metrics } from '../ui/theme.js';
 
@@ -79,7 +81,9 @@ export class Rail implements KeyHandler {
             item.appendChild(icon(items[i].icon, 'by-rail-icon'));
             item.appendChild(h('div', 'by-rail-label', items[i].label));
             this.els.push(this.el.appendChild(item) as HTMLElement);
+            this.pointTo(item, i);
         }
+        this.pointTo(this.logo, -1);
         this.drop = h('div', 'bd-menu-drop by-rail-drop');
         setShown(this.drop, false);
         this.el.appendChild(this.drop);
@@ -120,6 +124,17 @@ export class Rail implements KeyHandler {
         }
     }
 
+    /** The logo's menu, while open (null: closed): a click beside it is Back */
+    get openMenu(): HTMLElement | null {
+        return this.dropIndex >= 0 ? this.drop : null;
+    }
+
+    /** Focused by a click on it: the item it took kept (setFocused would go back to the section shown) */
+    pointed(): void {
+        this.focused = true;
+        this.mark();
+    }
+
     setClock(text: string): void {
         setText(this.clock, text);
     }
@@ -143,18 +158,43 @@ export class Rail implements KeyHandler {
                 if (this.at < 0) {
                     this.openDrop();
                 } else {
-                    this.showNow(false);
-                    this.onLeave();
+                    this.leave();
                 }
                 return true;
             case KEY.RIGHT:
                 if (this.at >= 0) {
-                    this.showNow(false);
-                    this.onLeave();
+                    this.leave();
                 }
                 return true;
         }
         return false;
+    }
+
+    /** Into the screen, the section pointed at shown at once (also a click on the screen beside the open rail) */
+    leave(): void {
+        if (this.at >= 0) {
+            this.showNow(false);
+        }
+        this.onLeave();
+    }
+
+    /** A click on el is OK on item at (-1: the logo), the logo's menu closed */
+    private pointTo(el: HTMLElement, at: number): void {
+        var self = this;
+        takesPointer(el, function () {
+            self.dropIndex = -1;
+            self.at = at;
+            return {};
+        });
+    }
+
+    /** A click on el is OK on entry index of the open menu */
+    private pointToEntry(el: HTMLElement, index: number): void {
+        var self = this;
+        takesPointer(el, function () {
+            self.dropIndex = index;
+            return {};
+        });
     }
 
     /** Focuses an item (its section shows once the focus rests there) or the logo (-1) */
@@ -227,6 +267,7 @@ export class Rail implements KeyHandler {
             }
             el.appendChild(document.createTextNode(entries[i].label));
             this.dropEls.push(el);
+            this.pointToEntry(el, i);
         }
         this.dropIndex = 0;
         this.mark();

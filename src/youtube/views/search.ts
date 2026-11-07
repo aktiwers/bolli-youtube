@@ -10,17 +10,19 @@
 // prefetched; more tiles and shelves load as the focus nears the end. With nothing typed,
 // YouTube's "From recommended searches" row shows under the keyboard.
 
-import { h, setClass, setShown, setText, toggleClass, translate } from '../../core/dom.js';
-import { KEY } from '../../core/keys.js';
-import { listen } from '../../core/platform.js';
-import { View } from '../../core/view.js';
-import { Keyboard } from '../../ui/keyboard.js';
-import { RowStack } from '../../ui/row-stack.js';
+import { h, setClass, setShown, setText, toggleClass, translate } from '../core/dom.js';
+import { tr } from '../core/i18n.js';
+import { KEY } from '../core/keys.js';
+import { takesPointer, toPart } from '../core/pointer.js';
+import { listen } from '../core/platform.js';
+import { View } from '../core/view.js';
+import { Keyboard } from '../ui/keyboard.js';
+import { RowStack } from '../ui/row-stack.js';
 import { search, Video } from '../api/feed.js';
 import { prefs, setPref } from '../api/prefs.js';
 import { keepSearch, recentSearches, Suggestion, suggestions } from '../api/suggest.js';
 import { icon, setIcon } from '../ui/icons.js';
-import { KEYBOARD_LANGUAGES, keyboardFor, KeyboardLanguage, keyboardLanguage } from '../ui/keyboard-languages.js';
+import { KEYBOARD_LANGUAGES, keyboardFor, KeyboardLanguage, keyboardLanguage, recentWith } from '../ui/keyboard-languages.js';
 import { PanelLine, SidePanel } from '../ui/side-panel.js';
 import { SearchKeyboard } from '../ui/youtube-keyboard.js';
 import { metrics } from '../ui/theme.js';
@@ -32,13 +34,6 @@ var SUGGEST_MS = 80;
 var REST_MS = 400;
 var SUGGESTIONS_MAX = 10;
 /** Keyboard languages listed as Recent in its picker */
-var RECENT_MAX = 3;
-
-/** The recent keyboard languages with id first (and left next) */
-function recentWith(id: string, left?: string): string[] {
-    var rest = prefs().keyboardRecent.filter(function (r) { return r !== id && r !== left; });
-    return [id].concat(left && left !== id ? [left] : [], rest).slice(0, RECENT_MAX);
-}
 
 /** Where the focus is: the back arrow, the suggestions, the keyboard or the results */
 type Place = 'back' | 'list' | 'keys' | 'rows';
@@ -123,6 +118,12 @@ export class SearchView implements View {
         this.panel = new SidePanel(this.el);
         this.renderQuery();
         this.mark();
+        // A click moves the focus to the part it is in (back after a tile's; the back arrow is itself what is clicked)
+        takesPointer(this.el, function (target, under) {
+            var part: Place | '' = self.back.contains(target) ? 'back' : self.list.contains(target) ? 'list' :
+                self.keyboard.el.contains(target) ? 'keys' : self.stack.el.contains(target) ? 'rows' : '';
+            return part ? toPart(under, function (p: Place) { self.go(p); }, self.at, part, part === 'back') : null;
+        });
     }
 
     /** Entering from another screen: focus starts on the keyboard (as in YouTube's app) */
@@ -192,6 +193,11 @@ export class SearchView implements View {
             }
             this.mark();
         }
+    }
+
+    /** The panel open over it (null: none; the pointer's layer: core/pointer.ts) */
+    layer(): HTMLElement | null {
+        return this.panel.layer();
     }
 
     onKey(code: number): boolean {
@@ -386,7 +392,7 @@ export class SearchView implements View {
             // All of YouTube's rows, as its app shows them
             self.paging.set(rows.shelves, rows.next);
             self.stack.setRows(self.tiles.rows(rows.shelves, true));
-            setText(self.status, rows.shelves.length ? '' : 'Nothing found for "' + term + '"');
+            setText(self.status, rows.shelves.length ? '' : tr('Nothing found for "{1}"', term));
             if (rows.shelves.length) {
                 self.stack.focusRow(0);
                 self.at = 'rows';
@@ -394,7 +400,7 @@ export class SearchView implements View {
             self.mark();
         }, function () {
             if (asked === self.searchAsked) {
-                setText(self.status, 'YouTube did not answer. Try again in a moment.');
+                setText(self.status, tr('YouTube did not answer. Try again in a moment.'));
             }
         });
     }
@@ -432,6 +438,16 @@ export class SearchView implements View {
         el.appendChild(item.line);
         setShown(el, false);
         this.list.appendChild(el);
+        // A click is OK on the suggestion
+        var self = this;
+        var index = this.items.length;
+        takesPointer(el, function () {
+            if (index >= self.suggested.length) {
+                return null;
+            }
+            self.pick = index;
+            return {};
+        });
         return item;
     }
 
@@ -494,16 +510,16 @@ export class SearchView implements View {
         var line = function (l: KeyboardLanguage): PanelLine {
             return { label: l.name, chosen: l === now, action: function () { self.setLanguage(l.id); } };
         };
-        var head: PanelLine[] = [{ label: 'Change the language of the search keyboard and suggestions', plain: true, heading: true },
-            { label: 'Recent', heading: true }];
-        this.panel.open('Select a search language', head.concat(recentWith(now.id).map(keyboardLanguage).map(line), [{ label: 'All', heading: true }],
+        var head: PanelLine[] = [{ label: tr('Change the language of the search keyboard and suggestions'), plain: true, heading: true },
+            { label: tr('Recent'), heading: true }];
+        this.panel.open(tr('Select a search language'), head.concat(recentWith(prefs().keyboardRecent, now.id).map(keyboardLanguage).map(line), [{ label: tr('All languages'), heading: true }],
             KEYBOARD_LANGUAGES.map(line)));
         this.mark();
     }
 
     /** (the one left stays among the recent ones, also the TV's own the first time) */
     private setLanguage(id: string): void {
-        setPref('keyboardRecent', recentWith(id, this.keys.language.id));
+        setPref('keyboardRecent', recentWith(prefs().keyboardRecent, id, this.keys.language.id));
         this.keys.setLanguage(id);
         this.renderQuery();
         this.suggest(this.keyboard.text.trim(), 0);

@@ -5,7 +5,7 @@
 // (with their amount), without the authors' pictures (a request each); emoji come as pictures, as YouTube's custom
 // ones have no character. A failed request is noted (api/failures.ts).
 
-import { HttpError } from '../../core/http.js';
+import { HttpError } from '../core/http.js';
 import { noteFailed } from './failures.js';
 import { get, picture, text } from './feed.js';
 import { innertube } from './youtube.js';

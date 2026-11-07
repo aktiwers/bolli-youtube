@@ -6,7 +6,7 @@
 // stored where YouTube's TV app keeps its accounts (api/youtube.ts
 // addIdentity), so YouTube AdFree has it too.
 
-import { load, save } from '../../core/store.js';
+import { load, save } from '../core/store.js';
 import { accountsOf, noteAccounts, READ_MASK } from './accounts.js';
 import { addIdentity, googleIdentity, Identity, innertubeToken, oauth, uuid } from './youtube.js';
 

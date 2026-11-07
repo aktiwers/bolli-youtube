@@ -7,7 +7,7 @@
 // with overflow hidden while the copy inside slides back, keeping it in
 // place. Look and pace: themes/<id>.css (by-loader, --round for a circle).
 
-import { h, toggleClass } from '../../core/dom.js';
+import { h, toggleClass } from '../core/dom.js';
 
 /** The app logo: shown while a screen loads or YouTube's player starts */
 export var LOGO = 'logo.webp';

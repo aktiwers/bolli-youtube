@@ -5,9 +5,10 @@
 // The theme sets where the rows start (metrics.libraryTop) and the look
 // (by-library in themes/<id>.css).
 
-import { h, setShown, setText, toggleClass, translate } from '../../core/dom.js';
-import { KEY } from '../../core/keys.js';
-import { View } from '../../core/view.js';
+import { h, setShown, setText, toggleClass, translate } from '../core/dom.js';
+import { KEY } from '../core/keys.js';
+import { takesPointer, toPart } from '../core/pointer.js';
+import { View } from '../core/view.js';
 import { Rows, Video } from '../api/feed.js';
 import { Pills } from '../ui/pills.js';
 import { metrics, word } from '../ui/theme.js';
@@ -49,6 +50,10 @@ export class LibraryView extends FeedHost implements View {
         this.rowsBox.appendChild(this.feed.el);
         setShown(this.el, false);
         this.place();
+        // A click moves the focus to the cards or the rows (back after a tile's)
+        takesPointer(this.el, function (target, under) {
+            return toPart(under, function (inHead: boolean) { self.go(inHead); }, self.inHead, self.head.contains(target));
+        });
     }
 
     show(rest?: boolean): void {

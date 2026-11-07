@@ -3,8 +3,9 @@
 // when the countdown ends, or on Play now; Cancel shows the watch page's related videos
 // instead; Back closes the player. Styled by themes/<id>.css (by-upnext).
 
-import { h, setPicture, setShown, setText } from '../../core/dom.js';
-import { KEY } from '../../core/keys.js';
+import { h, setPicture, setShown, setText } from '../core/dom.js';
+import { tr } from '../core/i18n.js';
+import { KEY } from '../core/keys.js';
 import { dearrowPicture, dearrowTitle } from '../api/dearrow.js';
 import { thumbnail, thumbnailFallback, Video } from '../api/feed.js';
 import { Pills } from '../ui/pills.js';
@@ -29,7 +30,7 @@ export class UpNext {
 
     constructor(parent: HTMLElement, private actions: UpNextActions) {
         this.el = h('div', 'by-upnext');
-        this.el.appendChild(h('div', 'by-upnext-label', 'Up next'));
+        this.el.appendChild(h('div', 'by-upnext-label', tr('Up next')));
         this.img = h('img', 'by-upnext-img') as HTMLImageElement;
         this.title = h('div', 'by-upnext-title');
         this.channel = h('div', 'by-upnext-channel');
@@ -40,8 +41,8 @@ export class UpNext {
         this.el.appendChild(this.count);
         var row = h('div', 'by-upnext-buttons');
         var self = this;
-        row.appendChild(this.buttons.add(h('div', 'by-pill', 'Play now'), function () { self.playNow(); }));
-        row.appendChild(this.buttons.add(h('div', 'by-pill', 'Cancel'), function () {
+        row.appendChild(this.buttons.add(h('div', 'by-pill', tr('Play now')), function () { self.playNow(); }));
+        row.appendChild(this.buttons.add(h('div', 'by-pill', tr('Cancel')), function () {
             self.hide();
             self.actions.cancel();
         }));
@@ -95,6 +96,9 @@ export class UpNext {
         clearTimeout(this.timer);
         this.video = null;
         setShown(this.el, false);
+        // Its picture let go (a decoded picture kept through the next video costs the TV's short memory)
+        this.img.onload = this.img.onerror = null;
+        this.img.removeAttribute('src');
         return video;
     }
 
@@ -104,7 +108,7 @@ export class UpNext {
             this.playNow();
             return;
         }
-        setText(this.count, 'Plays in ' + this.left + ' s');
+        setText(this.count, tr('Plays in {1} s', this.left));
         this.left--;
         var self = this;
         this.timer = setTimeout(function () { self.tick(); }, 1000) as unknown as number;

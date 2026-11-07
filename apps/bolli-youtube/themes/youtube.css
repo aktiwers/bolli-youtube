@@ -28,8 +28,10 @@ html, body { background: #0f0f0f; }
    focus their names, a line under Library (the entries above move up for it), the screen pushed right. Only moves,
    fades and the shade's scale animate (a changing width or colour made the TV paint the rail on every frame): the
    entries' pills and colours change at once */
-.by-rail-shade { width: 104px; -webkit-transform-origin: 0 0; -webkit-transition: -webkit-transform .2s ease; }
-.by-rail--open .by-rail-shade { -webkit-transform: scaleX(2.596); background-color: #0f0f0f; }
+/* (The pointer, core/pointer.ts: the closed rail's shade over the screen's edge takes no clicks, a page's back arrow is
+   under it; what is hidden or only drawn over the screen takes none either) */
+.by-rail-shade { width: 104px; -webkit-transform-origin: 0 0; -webkit-transition: -webkit-transform .2s ease; pointer-events: none; }
+.by-rail--open .by-rail-shade { -webkit-transform: scaleX(2.596); background-color: #0f0f0f; pointer-events: auto; }
 .by-app--rail .bd-stage { -webkit-transform: translate3d(188px, 0, 0); }
 /* A section's rows (main.ts by-section; they start at the rail's edge) are cut off 98 px from the left, 6 short of their
    margin (a focused first tile's ring), so a tile moving past it goes out of sight there instead of fading out (each
@@ -48,7 +50,7 @@ html, body { background: #0f0f0f; }
 .by-rail-icon { left: 18px; top: 14px; width: 24px; height: 24px; }
 .by-rail-label { left: 56px; top: 0; line-height: 52px; font-size: 18px; font-weight: 500; opacity: 0; -webkit-transition: opacity .15s ease; }
 .by-rail--open .by-rail-label { opacity: 1; }
-.by-rail-divider { left: 22px; width: 226px; height: 2px; background: #3f3f3f; opacity: 0; -webkit-transition: opacity .15s ease; }
+.by-rail-divider { left: 22px; width: 226px; height: 2px; background: #3f3f3f; opacity: 0; -webkit-transition: opacity .15s ease; pointer-events: none; }
 .by-rail--open .by-rail-divider { opacity: 1; }
 .by-rail-drop { left: 100px; top: 30px; }
 
@@ -57,7 +59,7 @@ html, body { background: #0f0f0f; }
 .by-clock, .by-player--clock-right .by-video-clock { right: 32px; }
 .by-player--clock-left .by-video-clock { left: 32px; }
 /* Darker over a video, to read on its brightest scenes */
-.by-clock { background: rgba(0, 0, 0, .3); }
+.by-clock { background: rgba(0, 0, 0, .3); pointer-events: none; }
 .by-video-clock { background: rgba(0, 0, 0, .6); }
 
 /* Rows: the shelf's name, then the tiles: picture with rounded corners, the length on it,
@@ -415,9 +417,9 @@ html, body { background: #0f0f0f; }
 .by-watch--related .by-watch-dim { opacity: 1; }
 .by-watch-body { -webkit-transition: -webkit-transform .25s cubic-bezier(.2, .7, .3, 1); }
 .by-watch-top, .by-watch-controls { -webkit-transition: opacity .3s ease; }
-.by-watch--related .by-watch-top, .by-watch--related .by-watch-controls { opacity: 0; }
+.by-watch--related .by-watch-top, .by-watch--related .by-watch-controls { opacity: 0; pointer-events: none; }
 .by-watch-related .bd-row { -webkit-transition: opacity .3s ease; }
-.by-watch-above { opacity: 0; }
+.by-watch-above { opacity: 0; pointer-events: none; }
 .by-watch-top { left: 64px; top: 56px; width: 780px; }
 .by-watch-title { font-size: 28px; font-weight: 700; line-height: 38px; color: #f1f1f1; overflow: hidden; max-height: 76px;
                   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; text-shadow: 0 1px 6px rgba(0, 0, 0, .5); }
@@ -517,10 +519,11 @@ html, body { background: #0f0f0f; }
 .by-channel-banner { left: 0; top: 0; width: 1280px; height: 573px; object-fit: cover; -webkit-transition: opacity .3s ease; }
 .by-channel-shade { height: 573px; background-image: -webkit-linear-gradient(left, rgba(0, 0, 0, .35), rgba(0, 0, 0, 0) 720px); }
 .by-channel--rows .by-channel-banner, .by-channel--rows .by-channel-shade { opacity: 0; }
+.by-channel-banner, .by-channel-shade, .by-channel-top { pointer-events: none; }
 .by-channel-top { left: 0; top: 0; width: 1280px; height: 112px; background: #0f0f0f; opacity: 0; -webkit-transition: opacity .3s ease; }
 .by-channel--rows .by-channel-top { opacity: 1; }
 .by-channel-head { left: 64px; top: 300px; width: 1100px; -webkit-transition: -webkit-transform .25s cubic-bezier(.2, .7, .3, 1), opacity .3s ease; }
-.by-channel--rows .by-channel-head { opacity: 0; }
+.by-channel--rows .by-channel-head { opacity: 0; pointer-events: none; }
 .by-channel-rows { -webkit-transition: -webkit-transform .25s cubic-bezier(.2, .7, .3, 1); }
 .by-channel-rows .bd-row-title { padding-left: 64px; }
 .by-channel-named { white-space: nowrap; }
@@ -571,7 +574,7 @@ html, body { background: #0f0f0f; }
 /* Subscriptions, as in YouTube's phone app: round channel pictures in a row at the top (a blue dot on those
    with new videos, All at its end in blue), the pills under them (the chosen one white, the focused one ringed) */
 .by-subs-head { left: 104px; top: 76px; width: 1176px; padding-top: 6px; }
-.by-subs--rows .by-subs-head { opacity: 0; }
+.by-subs--rows .by-subs-head { opacity: 0; pointer-events: none; }
 .by-subs-channel { width: 100px; margin-right: 12px; border-radius: 12px; text-align: center; }
 .by-subs-picture { width: 72px; height: 72px; margin: 4px auto 0; border-radius: 36px; background: #272727; }
 .by-subs-channel--focused .by-subs-picture { box-shadow: 0 0 0 4px #f1f1f1; }
@@ -587,7 +590,7 @@ html, body { background: #0f0f0f; }
 
 /* Library, as YouTube's: coloured cards at the top (the name at the bottom left), its rows under them */
 .by-library-head { left: 96px; top: 52px; width: 1184px; padding: 8px; }
-.by-library--rows .by-library-head { opacity: 0; }
+.by-library--rows .by-library-head { opacity: 0; pointer-events: none; }
 /* Its rows' names a little lower in their rows, as YouTube's Library's */
 .by-library .bd-row-title { top: 10px; }
 .by-library .bd-row-title.bd-row-title--sub { top: 0; }
@@ -609,3 +612,34 @@ html, body { background: #0f0f0f; }
 .by-seek-preview-frame { border-radius: 8px; box-shadow: 0 0 0 2px #f1f1f1; }
 .by-seek-preview-glow { border-radius: 8px; box-shadow: 0 0 28px 10px rgba(0, 0, 0, .55); }
 .by-seek-preview-time { margin-top: 8px; font-size: 18px; font-weight: 500; color: #f1f1f1; text-shadow: 0 1px 3px rgba(0, 0, 0, .9); }
+
+/* The Magic Remote's pointer (core/pointer.ts: bd-pointer on <html> while it shows), as YouTube's TV app on LG: what is
+   under it lit grey (a fill where the focus is white, a ring where it rings), the keys' focus staying white; the rail,
+   the progress bars, the panel's text and the watch page's like group none (as YouTube's guide, seek bar and cards) */
+.bd-pointer .bd-tile:not(.bd-tile--focused):hover .bd-tile-frame { box-shadow: 0 0 0 6px #909090; }
+.bd-pointer .by-page-button:not(.by-page-button--focused):hover,
+.bd-pointer .by-page-back:not(.by-page-back--focused):hover,
+.bd-pointer .by-search-back:not(.by-search-back--focused):hover,
+.bd-pointer .bd-key:not(.bd-key--focused):not(.bd-key--gap):hover,
+.bd-pointer .by-search-bar:not(.by-search-bar--focused):hover,
+.bd-pointer .by-search-mic:not(.by-search-mic--focused):hover,
+.bd-pointer .by-settings-button:not(.by-settings-button--focused):hover,
+.bd-pointer .by-comment-button:not(.by-comment-button--focused):hover,
+.bd-pointer .by-nudge-button:not(.by-nudge-button--focused):hover,
+.bd-pointer .by-watch-left .by-watch-button:not(.by-watch-button--focused):hover,
+.bd-pointer .by-watch-center .by-watch-button:not(.by-watch-button--focused):hover,
+.bd-pointer .by-watch-right > .by-watch-button:not(.by-watch-button--focused):hover,
+.bd-pointer .by-pill:not(.by-pill--focused):hover,
+.bd-pointer .by-tab:not(.by-tab--focused):hover,
+.bd-pointer .by-subs-all:not(.by-subs-channel--focused):hover { background: #606060; color: #f1f1f1; }
+.bd-pointer .by-suggestion:not(.by-suggestion--focused):hover,
+.bd-pointer .by-langs-item:not(.by-langs-item--focused):hover,
+.bd-pointer .by-settings-item:not(.by-settings-item--focused):hover,
+.bd-pointer .bd-menu-drop-item:not(.bd-menu-drop-item--focused):hover,
+.bd-pointer .by-line--choice:not(.by-line--focused):hover,
+.bd-pointer .by-comment:not(.by-comment--focused):hover { background: #373737; }
+.bd-pointer .by-who-item:not(.by-who-item--focused):hover .by-who-picture,
+.bd-pointer .by-subs-channel:not(.by-subs-channel--focused):hover .by-subs-picture { box-shadow: 0 0 0 4px #909090; }
+.bd-pointer .by-subs-pill:not(.by-subs-pill--focused):hover { box-shadow: 0 0 0 2px #0f0f0f, 0 0 0 5px #909090; }
+.bd-pointer .by-library-card:not(.by-library-card--focused):hover { box-shadow: 0 0 0 4px #0f0f0f, 0 0 0 7px #909090; }
+.bd-pointer .by-channel-description:not(.by-channel-description--focused):hover { background: rgba(255, 255, 255, .12); }

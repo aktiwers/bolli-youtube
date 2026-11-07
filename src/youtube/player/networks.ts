@@ -77,6 +77,24 @@ function networksOf(u: string): { all: { name: string; n: number }[]; own: numbe
     return { all: all, own: at };
 }
 
+/** xhr to u gets no answer (an error) or, when watched, no data (stallWatch): moved() when another of the video's
+ * networks is there to ask at once (networkFailed), else failed() */
+export function onLost(xhr: XMLHttpRequest, u: string, moved: () => void, failed: () => void, watched: boolean): void {
+    var lost = function (stalled: boolean): void {
+        if (networkFailed(u, stalled)) {
+            moved();
+        } else {
+            failed();
+        }
+    };
+    xhr.onerror = function () {
+        lost(false);
+    };
+    if (watched) {
+        stallWatch(xhr, function () { lost(true); });
+    }
+}
+
 /** Aborts xhr (once sent) when no data comes for STALL_MS, from now or from its last data; stalled is called first */
 export function stallWatch(xhr: XMLHttpRequest, stalled: () => void): void {
     var last = Date.now();

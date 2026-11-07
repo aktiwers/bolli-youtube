@@ -15,8 +15,9 @@
 // AdFree and TizenTube do); "Who's watching?" is skipped as YouTube AdFree's auto account
 // select does; SponsorBlock segments (api/sponsorblock.ts) are skipped with a toast.
 
-import { h, setShown } from '../../core/dom.js';
-import { mark, noteZap } from '../../core/perf.js';
+import { h, setShown } from '../core/dom.js';
+import { tr } from '../core/i18n.js';
+import { mark, noteZap } from '../core/perf.js';
 import { FillLoader, LOGO } from '../ui/fill-loader.js';
 import { note } from './play-log.js';
 import { PROBLEM, skipEdge, toast } from '../ui/toast.js';
@@ -175,7 +176,7 @@ export class TvApp {
             self.restart();
         }, function () {
             if (self.phase === 'loading') {
-                self.fail('YouTube did not answer. Try again in a moment.');
+                self.fail(tr('YouTube did not answer. Try again in a moment.'));
             }
         });
     }
@@ -503,7 +504,7 @@ export class TvApp {
         var now = Date.now();
         this.restarts = this.restarts.filter(function (at) { return now - at < RESTARTS_MS; });
         if (this.restarts.length >= MAX_RESTARTS) {
-            this.fail('YouTube\'s player does not start. Try again in a moment.');
+            this.fail(tr('YouTube\'s player does not start. Try again in a moment.'));
             return;
         }
         this.restarts.push(now);
@@ -558,7 +559,7 @@ export class TvApp {
                 }
                 self.deadline(OPEN_GIVE_UP_MS - OPEN_RETRY_MS, 'opening');
             } else {
-                toast('The video did not start.', undefined, PROBLEM);
+                toast(tr('The video did not start.'), undefined, PROBLEM);
                 self.stop();
             }
         }, ms) as unknown as number;

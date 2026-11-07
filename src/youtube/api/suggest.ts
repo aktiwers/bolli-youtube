@@ -5,7 +5,7 @@
 // to an earlier text is instant. Recent searches are stored locally; the
 // Search screen shows them before anything is typed.
 
-import { load, save } from '../../core/store.js';
+import { load, save } from '../core/store.js';
 import { Keeper } from './kept-pages.js';
 import { get, tvClient, youtubePage } from './youtube.js';
 

@@ -7,14 +7,16 @@
 // focuses the bar (Left/Right jump); the page hides after HIDE_MS
 // without a key while the video plays. It also holds the video's details (e.g. the video YouTube plays next). Its
 // likes and dislikes show beside the views once the dislikes are known, as Return YouTube Dislike estimates them (asked
-// when it shows a video: api/dislikes.ts; Settings: Dislike counts).
+// when it shows a video, or the player's bar shows its line: api/dislikes.ts; Settings: Dislike counts).
 // Related layout sizes come from the theme (metrics.watch), the rest from themes/<id>.css.
 
-import { h, setShown, setSrc, setText, toggleClass, translate } from '../../core/dom.js';
-import { KEY } from '../../core/keys.js';
-import { clock } from '../../core/time.js';
-import { RowStack } from '../../ui/row-stack.js';
-import { rowHeight, TileRow } from '../../ui/tile-row.js';
+import { h, setShown, setSrc, setText, toggleClass, translate } from '../core/dom.js';
+import { tr } from '../core/i18n.js';
+import { KEY } from '../core/keys.js';
+import { takesPointer, toPart } from '../core/pointer.js';
+import { clock } from '../core/time.js';
+import { RowStack } from '../ui/row-stack.js';
+import { rowHeight, TileRow } from '../ui/tile-row.js';
 import { dearrowTitle } from '../api/dearrow.js';
 import { dislikes, shortCount } from '../api/dislikes.js';
 import { dots, Page, Video, videoOf } from '../api/feed.js';
@@ -62,6 +64,10 @@ export interface WatchActions {
     length(): number;
     /** The comments of video id opened (null: closed): offered to the phone meanwhile, as YouTube's TV app does */
     comments(id: string | null): void;
+    /** The line under the title changed (channel, views, age, likes, dislikes): the player's bar shows it too */
+    line(text: string): void;
+    /** Whether the player's bar shows that line now (opened with Up): its dislikes are asked for then too */
+    lineShown(): boolean;
 }
 
 type Zone = 'bar' | 'buttons' | 'related';
@@ -83,10 +89,12 @@ export class WatchPage {
     private knob: HTMLElement;
     private marker: HTMLElement;
     /** The bar's fills and the knob as last written */
-    private bar = { played: '', loaded: '', knob: '' };
+    private drawn = { played: '', loaded: '', knob: '' };
     private marks: BarMarks;
     /** The seek preview over this page's bar */
     seek: SeekPreview;
+    /** The progress bar (a press there drags: own-player.ts) */
+    bar: HTMLElement;
     private avatar: HTMLImageElement;
     private subscribeButton: HTMLElement;
     private playButton: HTMLElement;
@@ -149,7 +157,7 @@ export class WatchPage {
         times.appendChild(this.time);
         times.appendChild(this.length);
         controls.appendChild(times);
-        var bar = h('div', 'by-watch-bar');
+        var bar = this.bar = h('div', 'by-watch-bar');
         this.loaded = h('div', 'by-watch-loaded');
         this.played = h('div', 'by-watch-played');
         this.knob = h('div', 'by-watch-knob');
@@ -189,7 +197,7 @@ export class WatchPage {
         };
         this.channelAt = this.buttons.count;
         add(left, channelButton, function () { self.actions.channel((self.info as WatchInfo).channelPage as Page); }, has('channelPage'));
-        add(left, h('div', 'by-watch-button by-watch-pill', 'Description'), function () { self.descriptionPanel(); });
+        add(left, h('div', 'by-watch-button by-watch-pill', tr('Description')), function () { self.descriptionPanel(); });
         add(left, this.subscribeButton, function () { self.subscribe(); }, has('subscribe'));
         add(center, icon('previous', 'by-watch-button by-watch-icon'), function () { self.actions.previous(); });
         this.playAt = this.buttons.count;
@@ -221,6 +229,23 @@ export class WatchPage {
         };
         setShown(this.el, false);
         parent.insertBefore(this.el, before || null);
+        // A click moves the focus to the part it is in (a button and a related video take it there: back after the
+        // video's, as it acts in place); on the picture above it plays or pauses, as a click on YouTube's player with
+        // its controls shown
+        takesPointer(this.el, function (target, under) {
+            var zone: Zone | '' = bar.contains(target) ? 'bar' : row.contains(target) ? 'buttons' : self.stack.el.contains(target) ? 'related' : '';
+            if (zone) {
+                return toPart(under, function (z: Zone) {
+                    self.zone = z;
+                    self.place();
+                }, self.zone, zone);
+            }
+            if (under) {
+                return null;
+            }
+            self.actions.toggle();
+            return { key: 0 };
+        });
         ['play', 'pause', 'timeupdate', 'progress'].forEach(function (type) {
             video.addEventListener(type, function () {
                 if (self.shown) {
@@ -237,7 +262,7 @@ export class WatchPage {
         this.id = id;
         this.channel = channel;
         this.setTitle(title);
-        this.setStatus('Loading related videos …');
+        this.setStatus(tr('Loading related videos …'));
         this.buttons.draw();
         this.place();
     }
@@ -289,7 +314,7 @@ export class WatchPage {
     setInfo(info: WatchInfo | null): void {
         this.info = info;
         if (!info) {
-            this.setStatus('Could not load the related videos.');
+            this.setStatus(tr('Could not load the related videos.'));
             return;
         }
         if (info.title) {
@@ -307,7 +332,7 @@ export class WatchPage {
         var lines = gridLines(this.tiles.items(info.related), 3, m.tile, m.rows);
         this.stack.setRows(lines);
         this.stack.setFocused(this.zone === 'related');
-        this.setStatus(lines.length ? '' : 'No related videos.');
+        this.setStatus(lines.length ? '' : tr('No related videos.'));
         this.buttons.draw();
         this.drawAccount();
     }
@@ -354,10 +379,10 @@ export class WatchPage {
         this.onShown(true);
     }
 
-    /** Return YouTube Dislike's count, once the page shows the video with its details (only then: each video asked for
-     * goes to its server) */
-    private askDislikes(): void {
-        if (this.dislikesAsked || !this.shown || !this.info || !prefs().dislikes) {
+    /** Return YouTube Dislike's count, once the page or the player's bar shows the video's line with its details (only
+     * then: each video asked for goes to its server) */
+    askDislikes(): void {
+        if (this.dislikesAsked || !this.shown && !this.actions.lineShown() || !this.info || !prefs().dislikes) {
             return;
         }
         this.dislikesAsked = true;
@@ -389,6 +414,11 @@ export class WatchPage {
         this.shown = false;
         setShown(this.el, false);
         this.onShown(false);
+    }
+
+    /** The comments or the panel while open (null: none; the pointer's layer: core/pointer.ts) */
+    layer(): HTMLElement | null {
+        return this.comments.layer() || this.panel.layer();
     }
 
     /** Handles a key while shown */
@@ -544,7 +574,7 @@ export class WatchPage {
         var like = (this.info as WatchInfo).like;
         if (like) {
             var to = like.status === status ? 'INDIFFERENT' : status;
-            apply(like, 'status', to, like.commands[to], function () { self.drawAccount(); }, 'YouTube did not take that.');
+            apply(like, 'status', to, like.commands[to], function () { self.drawAccount(); }, tr('YouTube did not take that.'));
         }
     }
 
@@ -572,7 +602,7 @@ export class WatchPage {
         if (this.channel) {
             lines.push({ label: this.channel, under: info ? info.subscribers : '' });
         }
-        this.panel.open('Description', lines.concat(paragraphs(this.description)));
+        this.panel.open(tr('Description'), lines.concat(paragraphs(this.description)));
     }
 
     /** Opens the comments over the video (the watch page's own content hidden, as YouTube's), with the first part if
@@ -600,13 +630,15 @@ export class WatchPage {
         // Channel name left as is: themed() would rewrite "NBA 2K" as a count; likes and dislikes once the dislikes
         // are known
         var votes = this.dislikeCount !== null && prefs().dislikes ? this.votes() : [];
-        setText(this.meta, dots([this.channel, info ? themed(info.views) : '', info ? themed(info.age) : ''].concat(votes.map(themed))));
+        var line = dots([this.channel, info ? themed(info.views) : '', info ? themed(info.age) : ''].concat(votes.map(themed)));
+        setText(this.meta, line);
+        this.actions.line(line);
     }
 
     /** "12K likes", "345 dislikes" (those known) */
     private votes(): string[] {
         var likes = this.info && this.info.likes;
-        return [likes ? likes + ' likes' : '', this.dislikeCount !== null && prefs().dislikes ? shortCount(this.dislikeCount) + ' dislikes' : ''];
+        return [likes ? tr('{1} likes', likes) : '', this.dislikeCount !== null && prefs().dislikes ? tr('{1} dislikes', shortCount(this.dislikeCount)) : ''];
     }
 
     /** Draws the subscribed, liked, disliked and saved states as YouTube does */
@@ -620,7 +652,7 @@ export class WatchPage {
             setIcon(el, 'bell');
         } else {
             el.removeAttribute('data-icon');
-            setText(el, 'Subscribe');
+            setText(el, tr('Subscribe'));
         }
         toggleClass(el, 'by-watch-pill', !bell);
         toggleClass(el, 'by-watch-icon', bell);
@@ -665,21 +697,26 @@ export class WatchPage {
         };
         var played = share(t);
         var loaded = share(bufferedEnd(v.buffered, t, 1));
-        if (played !== this.bar.played) {
-            this.bar.played = played;
+        if (played !== this.drawn.played) {
+            this.drawn.played = played;
             this.played.style.webkitTransform = 'scaleX(' + played + ')';
         }
-        if (loaded !== this.bar.loaded) {
-            this.bar.loaded = loaded;
+        if (loaded !== this.drawn.loaded) {
+            this.drawn.loaded = loaded;
             this.loaded.style.webkitTransform = 'scaleX(' + loaded + ')';
         }
         // The knob is drawn only while the bar has the focus
-        var knob = this.zone === 'bar' ? (+played * 100).toFixed(1) + '%' : this.bar.knob;
-        if (knob !== this.bar.knob) {
-            this.bar.knob = knob;
+        var knob = this.zone === 'bar' ? (+played * 100).toFixed(1) + '%' : this.drawn.knob;
+        if (knob !== this.drawn.knob) {
+            this.drawn.knob = knob;
             this.knob.style.left = knob;
         }
         setIcon(this.playButton, v.paused ? 'play' : 'pause');
+    }
+
+    /** The pointer moved: shown a while longer (as YouTube's controls stay while it moves) */
+    keep(): void {
+        this.arm();
     }
 
     /** Hides the page after HIDE_MS without a key while the focus is on the bar or buttons and the video plays

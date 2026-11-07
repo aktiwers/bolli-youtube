@@ -5,15 +5,15 @@
 // website's come. Videos with few views have none. A failed request is noted (api/failures.ts): YouTube refusing the
 // mobile site's client, whose version is fixed here, would otherwise only show as graphs gone missing.
 
-import { HttpError, postText } from '../../core/http.js';
+import { HttpError, postText } from '../core/http.js';
 import { noteFailed } from './failures.js';
 import { get, text } from './feed.js';
 import { Keeper } from './kept-pages.js';
-import { objectAt } from './youtube.js';
+import { objectAt, youtubeLanguage } from './youtube.js';
 
 var NEXT = 'https://www.youtube.com/youtubei/v1/next?prettyPrint=false';
-/** The mobile site, as it names itself (in English: the label is shown as it comes) */
-var CLIENT = { clientName: 'MWEB', clientVersion: '2.20251031.01.00', hl: 'en' };
+/** The mobile site, as it names itself (its label is shown as it comes: asked in the app's language) */
+var CLIENT = { clientName: 'MWEB', clientVersion: '2.20251031.01.00' };
 var CLIENT_NAME = '2';
 
 export interface Replays {
@@ -30,7 +30,8 @@ var kept = new Keeper<Replays | null>(30 * 60 * 1000, 3, false, false);
 /** A video's most replayed graph (null: it has none) */
 export function replays(id: string): Promise<Replays | null> {
     return kept.get(id, function () {
-        return postText(NEXT, { context: { client: CLIENT }, videoId: id },
+        var client = { clientName: CLIENT.clientName, clientVersion: CLIENT.clientVersion, hl: youtubeLanguage() };
+        return postText(NEXT, { context: { client: client }, videoId: id },
             { 'X-YouTube-Client-Name': CLIENT_NAME, 'X-YouTube-Client-Version': CLIENT.clientVersion }).then(replaysOf, function (e: HttpError) {
             noteFailed('replays', e);
             throw e;

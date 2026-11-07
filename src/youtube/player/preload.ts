@@ -68,7 +68,7 @@ export function startSoon(id: string): void {
 export function mayAskAhead(id: string): boolean {
     var now = Date.now();
     asks = asks.filter(function (at) { return now - at < 60000; });
-    if (streamsKept(id, sabrFirstNow(prefs().sabr))) {
+    if (streamsKept(id, sabrFirstNow(prefs().sabr, id))) {
         return true;
     }
     if (asks.length >= READY_ASKS) {
@@ -79,9 +79,9 @@ export function mayAskAhead(id: string): boolean {
 }
 
 /** The streams asked ahead of a start: as a guest (age-restricted videos are not prepared: SABR needs YouTube's player
- * script), or SABR first if set */
+ * script), or SABR first if set, or for a video only SABR played lately (sabrFirstNow) */
 export function firstStreams(id: string): Promise<Streams> {
-    return sabrFirstNow(prefs().sabr) ? playableStreams(id, true) : streams(id);
+    return sabrFirstNow(prefs().sabr, id) ? playableStreams(id, true) : streams(id);
 }
 
 /** Load a channel picture into the browser cache */

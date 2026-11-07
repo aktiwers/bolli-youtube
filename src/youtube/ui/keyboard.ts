@@ -6,10 +6,12 @@
 // are not handled, so the surrounding screen can move focus. Only the keys
 // losing and gaining focus are restyled. A layout can be swapped (setLayout),
 // an empty label is a gap no focus lands on, keys can run actions (actions)
-// and what a key types can be worked out from the text (typer).
+// and what a key types can be worked out from the text (typer). A click (the
+// Magic Remote's pointer) moves the focus to the key under it and types it.
 
 import { h, setClass } from '../core/dom.js';
 import { digit, KEY } from '../core/keys.js';
+import { takesPointer } from '../core/pointer.js';
 
 export interface KeyboardLabels {
     space: string;
@@ -82,6 +84,7 @@ export class Keyboard {
                 lineEl.appendChild(el);
                 if (label) {
                     keys.push({ label: label, el: el, start: start, units: units });
+                    this.pointTo(el, l, keys.length - 1);
                 }
                 start += units;
             }
@@ -216,6 +219,17 @@ export class Keyboard {
             }
         }
         this.line = line;
+    }
+
+    /** A click on el focuses the key at line, col (then OK types it) */
+    private pointTo(el: HTMLElement, line: number, col: number): void {
+        var self = this;
+        takesPointer(el, function () {
+            self.line = line;
+            self.col = col;
+            self.mark();
+            return {};
+        });
     }
 
     private mark(): void {

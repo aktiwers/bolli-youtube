@@ -10,7 +10,7 @@ import { chapterJump } from './bar-marks.js';
  * HOLD_GROW_MS, up to HOLD_MOST of the video. Single presses stay the same. */
 var HOLD_GAP_MS = 350;
 /** A held key's jump is made once its repeats stop this long (ms; longer than a gap within the hold) */
-export var HOLD_REST_MS = HOLD_GAP_MS + 50;
+var HOLD_REST_MS = HOLD_GAP_MS + 50;
 /** A second press this soon after a first one jumps to the next or previous chapter instead (and each further press
  * as quick, another chapter) */
 var DOUBLE_MS = 350;
@@ -62,4 +62,10 @@ export function pressAim(p: Presses, seconds: number, now: number, at: number, p
     var from = pending >= 0 ? pending : at;
     p.firstFrom = from;
     return Math.max(w.from, Math.min(w.to - 1, from + (seconds < 0 ? -step : step)));
+}
+
+/** How long the jump the last press aimed waits (ms; 0: at once): a held key's until its repeats stop; with chapters
+ * until a quick second press (to a chapter instead) can no longer come, not a jump there and back */
+export function pressWait(p: Presses, chapters: Chapter[] | null): number {
+    return p.held ? HOLD_REST_MS : chapters && chapters.length && !p.chapterRun ? DOUBLE_MS : 0;
 }

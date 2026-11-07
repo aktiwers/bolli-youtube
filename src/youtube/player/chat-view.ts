@@ -4,7 +4,7 @@
 // due; not while held (the watch page covers it, the video is paused); after failures, or an answer without a next
 // token, less and less often. The player stops it when the video closes or the app hides.
 
-import { h, toggleClass } from '../../core/dom.js';
+import { h, toggleClass } from '../core/dom.js';
 import { ChatMessage, liveChat } from '../api/live-chat.js';
 
 /** Messages kept on screen */

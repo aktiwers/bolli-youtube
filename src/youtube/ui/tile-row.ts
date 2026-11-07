@@ -7,9 +7,12 @@
 // frame, so 100 drawn tiles would slow the whole screen. The containing
 // screen sets how many screens of images to keep (setImages; a decoded
 // poster is ~0.6 MB); images more than a screen behind or two ahead are
-// released. Moving focus changes two class names and one transform.
+// released. Moving focus changes two class names and one transform. A click on a tile (the Magic Remote's pointer)
+// is OK on it in place: the focus moves there for it and back after, as YouTube's opens a tile without moving the
+// keys' focus.
 
 import { h, LAYOUT_WIDTH, setPicture, setText, toggleClass, translate } from '../core/dom.js';
+import { holding, takesPointer } from '../core/pointer.js';
 
 export interface TileItem {
     id: string;
@@ -173,6 +176,16 @@ export class TileRow {
         this.strip.style.position = 'relative';
         this.strip.style.height = Math.max(options.shape.h, options.wideShape ? options.wideShape.h : 0) + this.layout.under + 'px';
         this.el.appendChild(this.strip);
+        var self = this;
+        takesPointer(this.el, function (target) {
+            var i = holding(self.tiles, target);
+            if (i < 0) {
+                return null;
+            }
+            var was = self.focusIndex;
+            self.focusAt(i);
+            return { undo: function () { self.focusAt(was); } };
+        });
         if (options.items) {
             this.items = options.items;
             this.asked = true;

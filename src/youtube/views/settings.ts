@@ -9,10 +9,12 @@
 // (the version, the device).
 // Clearing a history asks first, with YouTube's question.
 
-import { h, setShown, setSrc, setText, toggleClass, translate } from '../../core/dom.js';
-import { KEY } from '../../core/keys.js';
-import { android } from '../../core/platform.js';
-import { View } from '../../core/view.js';
+import { h, setShown, setSrc, setText, toggleClass, translate } from '../core/dom.js';
+import { language, LANGUAGES, setLanguage, tr } from '../core/i18n.js';
+import { KEY } from '../core/keys.js';
+import { holding, takesPointer } from '../core/pointer.js';
+import { android } from '../core/platform.js';
+import { View } from '../core/view.js';
 import { AccountGroup, AccountSetting, historySettings } from '../api/account-settings.js';
 import { Ask } from '../api/feed.js';
 import { ALWAYS, languageName } from '../api/languages.js';
@@ -20,6 +22,7 @@ import { HIGHEST, prefs, Prefs, setPref } from '../api/prefs.js';
 import { PARTS } from '../api/sponsorblock.js';
 import { apply, askToClear } from '../ui/account.js';
 import { icon } from '../ui/icons.js';
+import { keyboardFor, recentWith } from '../ui/keyboard-languages.js';
 import { LanguagePicker } from '../ui/language-picker.js';
 import { CAPTION_STYLES } from '../player/captions.js';
 import { Question } from '../ui/question.js';
@@ -93,20 +96,20 @@ function pref<K extends keyof Prefs>(label: string, summary: string, picture: st
 
 /** An on/off setting's choices, with notes for on and off */
 function onOff(on: string, off: string): Choice[] {
-    return [{ value: true, name: 'On', note: on }, { value: false, name: 'Off', note: off }];
+    return [{ value: true, name: tr('On'), note: on }, { value: false, name: tr('Off'), note: off }];
 }
 
 /** Autoplay: off, or the next video after an "Up next" countdown of so many seconds (overrides the account's own
  * autoplay setting) */
 function autoplay(): Setting {
     var after = function (s: number): Choice {
-        return { value: s, name: 'After ' + s + ' seconds', note: '"Up next" counts down, then the next video plays' };
+        return { value: s, name: tr('After {1} seconds', s), note: tr('"Up next" counts down, then the next video plays') };
     };
-    return pick('Autoplay', 'When a video ends in Bolli\'s player, the next one plays. When on, this overrides your YouTube account\'s autoplay setting.',
+    return pick(tr('Autoplay'), tr('When a video ends in Bolli\'s player, the next one plays. When on, this overrides your YouTube account\'s autoplay setting.'),
         pic('autoplay'), function () {
             return [
-                { value: -1, name: 'Off', note: 'the player closes at a video\'s end' },
-                { value: 0, name: 'Right away', note: 'the next video plays at once' },
+                { value: -1, name: tr('Off'), note: tr('the player closes at a video\'s end') },
+                { value: 0, name: tr('Right away'), note: tr('the next video plays at once') },
                 after(3), after(5), after(10)
             ];
         }, function () {
@@ -126,17 +129,17 @@ var MORE = '+';
 /** Subtitles turned on automatically: a language (the default ones plus those added via "More languages"); a choice
  * in the player sets it too. more: opens the search over all languages */
 function subtitles(more: () => void): Setting {
-    return pick('Subtitles', 'Subtitles Bolli\'s player turns on by itself', pic('language'), function () {
+    return pick(tr('Subtitles'), tr('Subtitles Bolli\'s player turns on by itself'), pic('language'), function () {
         var now = prefs().captions;
-        var on = 'on in every video with subtitles, translated by YouTube if needed';
-        var list: Choice[] = [{ value: '', name: 'Off', note: 'only when you turn them on in the player' }];
+        var on = tr('on in every video with subtitles, translated by YouTube if needed');
+        var list: Choice[] = [{ value: '', name: tr('Off'), note: tr('only when you turn them on in the player') }];
         ALWAYS.concat(prefs().captionLanguages).forEach(function (code) {
             list.push({ value: code, name: languageName(code), note: on });
         });
         if (now && !list.some(function (c) { return c.value === now; })) {
-            list.push({ value: now, name: languageName(now), note: 'as chosen in the player' });
+            list.push({ value: now, name: languageName(now), note: tr('as chosen in the player') });
         }
-        return list.concat([{ value: MORE, name: 'More languages', note: 'find any language YouTube translates subtitles to; it joins this list' }]);
+        return list.concat([{ value: MORE, name: tr('More languages'), note: tr('find any language YouTube translates subtitles to; it joins this list') }]);
     }, function () {
         return prefs().captions;
     }, function (value) {
@@ -170,128 +173,148 @@ function several(label: string, summary: string, picture: string, name: 'skip' |
 
 function sponsorBlock(): Setting {
     // SponsorBlock's logo (from github.com/ajayyy/SponsorBlock), bundled with the app
-    return several('SponsorBlock', 'Skips the parts of videos that SponsorBlock\'s users marked. Choose the kinds to skip.', 'sponsorblock.png', 'skip',
+    return several('SponsorBlock', tr('Skips the parts of videos that SponsorBlock\'s users marked. Choose the kinds to skip.'), 'sponsorblock.png', 'skip',
         function () { return PARTS.map(function (k) { return { value: k.id, name: k.name, note: k.note }; }); });
 }
 
 /** DeArrow's options (used while it is on) */
 function dearrowOptions(): Setting {
     var options: Choice[] = [
-        { value: 'thumbnails', name: 'Thumbnails', note: 'the frames DeArrow\'s users chose from the video' },
-        { value: 'frames', name: 'Random frames', note: 'where no frame was chosen, one from the video (YouTube\'s thumbnail until DeArrow has it ready)' },
-        { value: 'tidy', name: 'Tidy titles', note: 'every title in Title Case, without shouting capitals, emoji or extra exclamation marks' }
+        { value: 'thumbnails', name: tr('Thumbnails'), note: tr('the frames DeArrow\'s users chose from the video') },
+        { value: 'frames', name: tr('Random frames'), note: tr('where no frame was chosen, one from the video (YouTube\'s thumbnail until DeArrow has it ready)') },
+        { value: 'tidy', name: tr('Tidy titles'), note: tr('every title in Title Case, without shouting capitals, emoji or extra exclamation marks') }
     ];
-    return several('DeArrow options', 'What DeArrow changes besides the titles its users wrote.', 'dearrow.png', 'dearrowOptions', function () { return options; });
+    return several(tr('DeArrow options'), tr('What DeArrow changes besides the titles its users wrote.'), 'dearrow.png', 'dearrowOptions', function () { return options; });
 }
 
-/** The app's own settings, under headings (pages: possible start pages; more: Subtitles' "More languages") */
-function bolli(pages: StartPage[], more: () => void): { title: string; settings: Setting[] }[] {
+/** The app's language (core/i18n.ts); a new one also becomes Search's keyboard language, then the app starts again in
+ * it (restart) */
+function appLanguage(restart: () => void): Setting {
+    return pick(tr('App language'), tr('The language of the app\'s menus, buttons and messages, and of YouTube\'s rows, counts and dates. Titles stay as their channels wrote them.'),
+        pic('language'), LANGUAGES.map(function (l) { return { value: l.code, name: l.name, note: tr('the app starts again in it') }; }),
+        language, function (value) {
+            var code = String(value);
+            if (code === language()) {
+                return;
+            }
+            setLanguage(code);
+            // (the keyboard in use stays among the recent ones, as when Search changes it)
+            var recent = prefs().keyboardRecent;
+            setPref('keyboardRecent', recentWith(recent, keyboardFor(code), recent[0] || keyboardFor(navigator.language)));
+            restart();
+        });
+}
+
+/** The app's own settings, under headings (pages: possible start pages; more: Subtitles' "More languages"; restart:
+ * starts the app again) */
+function bolli(pages: StartPage[], more: () => void, restart: () => void): { title: string; settings: Setting[] }[] {
     var browsing = [
         // Any page of the rail
-        pref('Start page', 'The screen the app starts on', pic('location'), 'startPage', function () {
+        pref(tr('Start page'), tr('The screen the app starts on'), pic('location'), 'startPage', function () {
             return pages.map(function (p) { return { value: p.id, name: p.label, note: '' }; });
         }),
-        pref('Tile pictures', 'How sharp the tiles\' pictures are', pic('linked_devices'), 'pictures', [
-            { value: 'sharpest', name: 'Sharpest', note: 'the clearest pictures; they take the most memory (about 30 MB more while a video plays)' },
-            { value: 'sharp', name: 'Sharp', note: 'clearer pictures, a little more memory' },
-            { value: 'standard', name: 'Standard', note: 'YouTube\'s small pictures: softer on this screen, the least memory' }
+        pref(tr('Tile pictures'), tr('How sharp the tiles\' pictures are'), pic('linked_devices'), 'pictures', [
+            { value: 'sharpest', name: tr('Sharpest'), note: tr('the clearest pictures; they take the most memory (about 30 MB more while a video plays)') },
+            { value: 'sharp', name: tr('Sharp'), note: tr('clearer pictures, a little more memory') },
+            { value: 'standard', name: tr('Standard'), note: tr('YouTube\'s small pictures: softer on this screen, the least memory') }
         ]),
         // Its picture drawn for the app, as Most replayed's
-        pref('Background', 'The colour behind the app\'s screens', 'black.png', 'pureBlack', [
-            { value: false, name: 'Dark grey', note: 'as YouTube\'s TV app' },
-            { value: true, name: 'Pure black', note: 'completely black: on an OLED TV those pixels stay off' }
+        pref(tr('Background'), tr('The colour behind the app\'s screens'), 'black.png', 'pureBlack', [
+            { value: false, name: tr('Dark grey'), note: tr('as YouTube\'s TV app') },
+            { value: true, name: tr('Pure black'), note: tr('completely black: on an OLED TV those pixels stay off') }
         ], function (on) { applyBlack(on === true); })
     ];
     // Only when there is more than one theme
     if (themes().length > 1) {
-        browsing.push(pref('Theme', 'How the app looks', '', 'theme', function () {
+        browsing.push(pref(tr('Theme'), tr('How the app looks'), '', 'theme', function () {
             return themes().map(function (t) { return { value: t.id, name: t.name, note: '' }; });
         }, function (id) { applyTheme(String(id)); }));
     }
     return [
-        { title: 'Playback', settings: [
+        { title: tr('Language'), settings: [appLanguage(restart)] },
+        { title: tr('Playback'), settings: [
             autoplay(),
-            pref('Video quality', 'The quality videos start at', pic('clear_search_history'), 'quality', [
-                { value: 0, name: 'Auto', note: 'as good as the video and the connection allow, up to 4K' },
-                { value: HIGHEST, name: 'Highest available', note: 'the best the video has, up to 8K where the TV plays it' },
-                { value: 2160, name: '4K (2160p)', note: 'or the closest below it' },
-                { value: 1440, name: '1440p (2K)', note: 'or the closest below it' },
-                { value: 1080, name: '1080p (HD)', note: 'or the closest below it' },
-                { value: 720, name: '720p', note: 'or the closest below it' },
-                { value: 480, name: '480p', note: 'or the closest below it' }
+            pref(tr('Video quality'), tr('The quality videos start at'), pic('clear_search_history'), 'quality', [
+                { value: 0, name: tr('Auto'), note: tr('as good as the video and the connection allow, up to 4K') },
+                { value: HIGHEST, name: tr('Highest available'), note: tr('the best the video has, up to 8K where the TV plays it') },
+                { value: 2160, name: '4K (2160p)', note: tr('or the closest below it') },
+                { value: 1440, name: '1440p (2K)', note: tr('or the closest below it') },
+                { value: 1080, name: '1080p (HD)', note: tr('or the closest below it') },
+                { value: 720, name: '720p', note: tr('or the closest below it') },
+                { value: 480, name: '480p', note: tr('or the closest below it') }
             ]),
-            pref('History', 'What you watch in Bolli\'s player, told to YouTube', pic('privacy_and_terms'), 'history',
-                onOff('it goes into your YouTube history, and YouTube remembers where you stopped', 'Bolli\'s player tells YouTube nothing of what you watch')),
+            pref(tr('History'), tr('What you watch in Bolli\'s player, told to YouTube'), pic('privacy_and_terms'), 'history',
+                onOff(tr('it goes into your YouTube history, and YouTube remembers where you stopped'), tr('Bolli\'s player tells YouTube nothing of what you watch'))),
             // Its picture drawn for the app, as Most replayed's
-            pref('Live chat', 'A live stream\'s chat beside the picture in Bolli\'s player (also in the player\'s settings)', 'chat.png',
-                'liveChat', onOff('the latest messages at the right of the picture', 'no chat')),
+            pref(tr('Live chat'), tr('A live stream\'s chat beside the picture in Bolli\'s player (also in the player\'s settings)'), 'chat.png',
+                'liveChat', onOff(tr('the latest messages at the right of the picture'), tr('no chat'))),
             // Its picture drawn for the app in the style of YouTube's
-            pref('Most replayed', 'A graph over the progress bar in Bolli\'s player of the parts people watch again the most, from YouTube',
-                'replays.png', 'replays', onOff('shown on videos YouTube has one for (popular ones)', 'no graph')),
+            pref(tr('Most replayed'), tr('A graph over the progress bar in Bolli\'s player of the parts people watch again the most, from YouTube'),
+                'replays.png', 'replays', onOff(tr('shown on videos YouTube has one for (popular ones)'), tr('no graph'))),
             // Its picture drawn for the app, as Most replayed's
-            pref('Clock in videos', 'The time of day in a corner of the picture while a video plays in Bolli\'s player', 'clock.png',
+            pref(tr('Clock in videos'), tr('The time of day in a corner of the picture while a video plays in Bolli\'s player'), 'clock.png',
                 'videoClock', [
-                    { value: 'off', name: 'Off', note: 'the clock shows only on the app\'s screens' },
-                    { value: 'left', name: 'Top left', note: 'always there, also when the controls are hidden' },
-                    { value: 'right', name: 'Top right', note: 'always there, also when the controls are hidden' }
+                    { value: 'off', name: tr('Off'), note: tr('the clock shows only on the app\'s screens') },
+                    { value: 'left', name: tr('Top left'), note: tr('always there, also when the controls are hidden') },
+                    { value: 'right', name: tr('Top right'), note: tr('always there, also when the controls are hidden') }
                 ]),
-            pref('Streams by SABR', 'How Bolli\'s player gets the videos', pic('parent_code'), 'sabr',
-                onOff('as YouTube\'s TV app does (signed in, by SABR), as a guest when that fails', 'as a guest, signed in (by SABR) only when YouTube asks, as for an age check'))
+            pref(tr('Streams by SABR'), tr('How Bolli\'s player gets the videos'), pic('parent_code'), 'sabr',
+                onOff(tr('as YouTube\'s TV app does (signed in, by SABR), as a guest when that fails'), tr('as a guest, signed in (by SABR) only when YouTube asks, as for an age check')))
         ] },
-        { title: 'Subtitles', settings: [
+        { title: tr('Subtitles'), settings: [
             subtitles(more),
-            pref('Subtitle style', 'How YouTube\'s automatic subtitles appear', pic('language'), 'captionStyle', CAPTION_STYLES)
+            pref(tr('Subtitle style'), tr('How YouTube\'s automatic subtitles appear'), pic('language'), 'captionStyle', CAPTION_STYLES)
         ] },
-        { title: 'Starting videos', settings: [
-            pref('Videos start sooner', 'The video or page whose tile you rest on gets ready', pic('send_feedback'), 'preload',
-                onOff('it opens about a second sooner', '')),
-            pref('Previews', 'The video whose tile you rest on plays in the tile (in Bolli\'s player)', pic('clear_watch_history'), 'previews', [
-                { value: 'sound', name: 'With sound', note: '' },
-                { value: 'muted', name: 'Without sound', note: '' },
-                { value: 'off', name: 'Off', note: '' }
+        { title: tr('Starting videos'), settings: [
+            pref(tr('Videos start sooner'), tr('The video or page whose tile you rest on gets ready'), pic('send_feedback'), 'preload',
+                onOff(tr('it opens about a second sooner'), '')),
+            pref(tr('Previews'), tr('The video whose tile you rest on plays in the tile (in Bolli\'s player)'), pic('clear_watch_history'), 'previews', [
+                { value: 'sound', name: tr('With sound'), note: '' },
+                { value: 'muted', name: tr('Without sound'), note: '' },
+                { value: 'off', name: tr('Off'), note: '' }
             ]),
-            pref('Loading sign', 'What shows while a video starts in Bolli\'s player', pic('reset_app'), 'startSign',
-                onOff('the channel\'s picture fills up', 'the screen stays dark until the video plays')),
-            pref('Start picture', 'What shows behind the loading sign while a video starts in Bolli\'s player, until it moves', pic('reset_app'), 'startPicture', [
-                { value: 'tile', name: 'The tile\'s picture', note: 'sharp, at once; it melts into the video once that moves' },
-                { value: 'frame', name: 'The frame it starts on', note: 'the very picture it opens with, blurry: from YouTube\'s seek previews' },
-                { value: 'none', name: 'None', note: 'dark until the video plays: its picture comes soonest' }
+            pref(tr('Loading sign'), tr('What shows while a video starts in Bolli\'s player'), pic('reset_app'), 'startSign',
+                onOff(tr('the channel\'s picture fills up'), tr('the screen stays dark until the video plays'))),
+            pref(tr('Start picture'), tr('What shows behind the loading sign while a video starts in Bolli\'s player, until it moves'), pic('reset_app'), 'startPicture', [
+                { value: 'tile', name: tr('The tile\'s picture'), note: tr('sharp, at once; it melts into the video once that moves') },
+                { value: 'frame', name: tr('The frame it starts on'), note: tr('the very picture it opens with, blurry: from YouTube\'s seek previews') },
+                { value: 'none', name: tr('None'), note: tr('dark until the video plays: its picture comes soonest') }
             ])
         ] },
-        { title: 'Browsing', settings: browsing },
-        { title: 'Add-ons', settings: [
+        { title: tr('Browsing'), settings: browsing },
+        { title: tr('Add-ons'), settings: [
             sponsorBlock(),
             // DeArrow's logo (from github.com/ajayyy/DeArrow, based on Twemoji), bundled with the app
-            pref('DeArrow', 'Titles and thumbnails DeArrow\'s users submit, in place of clickbait', 'dearrow.png', 'dearrow', [
-                { value: '', name: 'Off', note: 'YouTube\'s titles and thumbnails' },
-                { value: 'classic', name: 'Classic', note: 'DeArrow\'s titles and thumbnails wherever its users submitted them' },
-                { value: 'casual', name: 'Casual', note: 'YouTube\'s own titles where DeArrow\'s users voted them fine (funny, clever, descriptive), DeArrow\'s elsewhere' }
+            pref('DeArrow', tr('Titles and thumbnails DeArrow\'s users submit, in place of clickbait'), 'dearrow.png', 'dearrow', [
+                { value: '', name: tr('Off'), note: tr('YouTube\'s titles and thumbnails') },
+                { value: 'classic', name: tr('Classic'), note: tr('DeArrow\'s titles and thumbnails wherever its users submitted them') },
+                { value: 'casual', name: tr('Casual'), note: tr('YouTube\'s own titles where DeArrow\'s users voted them fine (funny, clever, descriptive), DeArrow\'s elsewhere') }
             ]),
             dearrowOptions(),
             // Its picture drawn for the app, as Most replayed's
-            pref('Dislike counts', 'How many dislike a video, on its watch page beside the likes, as Return YouTube Dislike estimates them',
-                'dislikes.png', 'dislikes', onOff('asked of returnyoutubedislike.com for each video whose watch page you open', 'no count'))
+            pref(tr('Dislike counts'), tr('How many dislike a video, on its watch page beside the likes, as Return YouTube Dislike estimates them'),
+                'dislikes.png', 'dislikes', onOff(tr('asked of returnyoutubedislike.com for each video whose watch page you open'), tr('no count')))
         ] }
     ];
 }
 
 /** Linking a phone: by casting on the same network, or with a TV code from another (YouTube's steps) */
 var LINK: Setting[] = [
-    { label: 'Link with Wi-Fi', summary: '', picture: '', steps: ['On your phone, connect to the same Wi-Fi network as this device.',
-        'Open the YouTube app on your phone.', 'Tap the cast icon and select this device.'] },
-    { label: 'Link with TV code', summary: '', picture: '', code: true, steps: ['On your phone, open the YouTube app.',
-        'Tap the cast icon.', 'Tap \'Link with TV code\' and enter the code below.'] }
+    { label: tr('Link with Wi-Fi'), summary: '', picture: '', steps: [tr('On your phone, connect to the same Wi-Fi network as this device.'),
+        tr('Open the YouTube app on your phone.'), tr('Tap the cast icon and select this device.')] },
+    { label: tr('Link with TV code'), summary: '', picture: '', code: true, steps: [tr('On your phone, open the YouTube app.'),
+        tr('Tap the cast icon.'), tr('Tap \'Link with TV code\' and enter the code below.')] }
 ];
 
 /** About: the app's version, the device it runs on, where its code is, what it uses */
 function about(): Setting {
     var where = device();
-    return { label: 'About', summary: 'Bolli YouTube, a light YouTube app for TVs', picture: 'logo.webp', info: [
-        'Version ' + (document.documentElement.getAttribute('data-version') || ''),
-        where ? 'On ' + where : '',
-        'Source code: github.com/aktiwers/bolli-youtube',
-        'With SponsorBlock, DeArrow, Return YouTube Dislike and the Roboto font (Apache License 2.0)',
-        'Not made by YouTube or Google'
+    return { label: tr('About'), summary: tr('Bolli YouTube, a light YouTube app for TVs'), picture: 'logo.webp', info: [
+        tr('Version {1}', document.documentElement.getAttribute('data-version') || ''),
+        where ? tr('On {1}', where) : '',
+        tr('Source code: {1}', 'github.com/aktiwers/bolli-youtube'),
+        tr('With SponsorBlock, DeArrow, Return YouTube Dislike and the Roboto font (Apache License 2.0)'),
+        tr('Not made by YouTube or Google')
     ].filter(function (line) { return line; }) };
 }
 
@@ -369,11 +392,11 @@ export class SettingsView implements View {
     private codeEnd = 0;
 
     /** link: requests a TV code from YouTube; pages: possible start pages; question: the app's confirmation dialog
-     * (gets keys first while shown) */
-    constructor(private link: () => Promise<string>, pages: StartPage[], private question: Question) {
+     * (gets keys first while shown); restart: starts the app again (a new language) */
+    constructor(private link: () => Promise<string>, pages: StartPage[], private question: Question, restart: () => void) {
         this.el = h('div', 'by-settings');
         setShown(this.el, false);
-        this.el.appendChild(h('div', 'by-settings-title', 'Settings'));
+        this.el.appendChild(h('div', 'by-settings-title', tr('Settings')));
         this.menu = h('div', 'by-settings-menu');
         this.list = h('div', 'by-settings-list');
         this.menu.appendChild(this.list);
@@ -394,14 +417,30 @@ export class SettingsView implements View {
         panel.appendChild(this.body);
         this.el.appendChild(panel);
         var self = this;
-        bolli(pages, function () { self.moreLanguages(); }).forEach(function (group) {
+        bolli(pages, function () { self.moreLanguages(); }, restart).forEach(function (group) {
             self.addGroup(group.title, group.settings);
         });
-        this.addGroup('Link TV & phone', LINK);
+        this.addGroup(tr('Link TV & phone'), LINK);
         this.ownCount = this.items.length;
         this.aboutHead = this.addGroup('Bolli YouTube', [about()])[0];
         this.aboutItems = this.items.slice(this.ownCount);
         this.drawFocus();
+        // A click on a setting focuses it (its choices show, as in YouTube's Settings); on a choice it sets it
+        takesPointer(this.el, function (target) {
+            var i = holding(self.items, target);
+            var j = holding(self.buttons, target);
+            if (i >= 0) {
+                self.at = i;
+                self.place = 'list';
+            } else if (j >= 0) {
+                self.place = 'choices';
+                self.button = j;
+            } else {
+                return null;
+            }
+            self.drawFocus();
+            return i >= 0 ? { key: 0 } : {};
+        });
     }
 
     show(): void {
@@ -433,6 +472,11 @@ export class SettingsView implements View {
             this.closeOwn();
         }
         this.drawFocus();
+    }
+
+    /** The language picker while open (null: none; the pointer's layer: core/pointer.ts) */
+    layer(): HTMLElement | null {
+        return this.languages ? this.languages.layer() : null;
     }
 
     onKey(code: number): boolean {
@@ -547,7 +591,7 @@ export class SettingsView implements View {
                 if (self.drawn === setting) {
                     self.drawButtons();
                 }
-            }, 'YouTube did not take the change. Try again.');
+            }, tr('YouTube did not take the change. Try again.'));
         });
         return setting;
     }
@@ -648,7 +692,7 @@ export class SettingsView implements View {
             self.codeEnd = setTimeout(function () { self.tvCode = ''; self.redrawCode(); }, CODE_MS) as unknown as number;
             self.redrawCode();
         }, function () {
-            self.codeSaid = 'YouTube gave no code. Press OK to try again.';
+            self.codeSaid = tr('YouTube gave no code. Press OK to try again.');
             self.redrawCode();
         });
     }

@@ -3,8 +3,8 @@
 // Cancel, which is focused). Up/Down move between them, OK presses, Left or Back close. Styled by the theme
 // (by-question, reusing Settings' texts and buttons).
 
-import { h, setShown, setSrc } from '../../core/dom.js';
-import { KEY } from '../../core/keys.js';
+import { h, setShown, setSrc } from '../core/dom.js';
+import { KEY } from '../core/keys.js';
 import { Pills } from './pills.js';
 
 export interface Asking {

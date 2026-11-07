@@ -1,14 +1,17 @@
 // "More languages" in Settings › Subtitles: a searchable list of every
 // language YouTube translates subtitles to (api/languages.ts), shown over
 // Settings. Typed text at the top, matches left of the on-screen keyboard
-// (src/ui/keyboard.ts): names (or a word of them) starting with the text
-// first, then names containing it; with no text, all by name. Left at the
+// (src/ui/keyboard.ts): names (or a word of them; the English name too in
+// another app language) starting with the text first, then names containing
+// it; with no text, all by name. Left at the
 // keyboard's left edge moves to the list, Right back; OK picks a language;
 // Back closes. Styled by themes/<id>.css (by-langs).
 
-import { h, setShown, setText, toggleClass } from '../../core/dom.js';
-import { KEY } from '../../core/keys.js';
-import { Keyboard } from '../../ui/keyboard.js';
+import { h, setShown, setText, toggleClass } from '../core/dom.js';
+import { tr } from '../core/i18n.js';
+import { KEY } from '../core/keys.js';
+import { holding, takesPointer } from '../core/pointer.js';
+import { Keyboard } from './keyboard.js';
 import { Language, languages } from '../api/languages.js';
 import { icon } from './icons.js';
 import { youtubeKeyboard } from './youtube-keyboard.js';
@@ -35,7 +38,7 @@ export class LanguagePicker {
     constructor(parent: HTMLElement) {
         var self = this;
         this.el = h('div', 'by-langs');
-        this.el.appendChild(h('div', 'by-langs-title', 'Subtitles: more languages'));
+        this.el.appendChild(h('div', 'by-langs-title', tr('Subtitles: more languages')));
         this.field = this.el.appendChild(h('div', 'by-langs-field')) as HTMLElement;
         var list = this.el.appendChild(h('div', 'by-langs-list')) as HTMLElement;
         for (var i = 0; i < ROWS; i++) {
@@ -43,12 +46,25 @@ export class LanguagePicker {
             this.rows.push({ el: el, name: el.appendChild(h('span', 'by-langs-name')) as HTMLElement,
                 check: el.appendChild(icon('check', 'by-check')) as HTMLElement });
         }
-        this.none = list.appendChild(h('div', 'by-langs-none', 'No language has that name')) as HTMLElement;
+        this.none = list.appendChild(h('div', 'by-langs-none', tr('No language has that name'))) as HTMLElement;
         this.keyboard = youtubeKeyboard(['hijklmn', 'opqrstu', 'vwxyz-'], function (text) { self.find(text); });
         var keys = this.el.appendChild(h('div', 'by-langs-keys')) as HTMLElement;
         keys.appendChild(this.keyboard.el);
         setShown(this.el, false);
         parent.appendChild(this.el);
+        // A click is OK on a language or a key (the keyboard's keys take it there)
+        takesPointer(this.el, function (target, under) {
+            var r = holding(self.rows, target);
+            if (r >= 0 && self.found[self.top + r]) {
+                self.at = 'list';
+                self.pick = self.top + r;
+                return {};
+            }
+            if (under && self.keyboard.el.contains(target)) {
+                self.at = 'keys';
+            }
+            return null;
+        });
     }
 
     /** Show over Settings with empty text (set: the current language); chosen: called with the picked code */
@@ -67,6 +83,11 @@ export class LanguagePicker {
             this.shown = false;
             setShown(this.el, false);
         }
+    }
+
+    /** The picker while open (null: closed): the pointer's layer, a click beside it is Back (core/pointer.ts) */
+    layer(): HTMLElement | null {
+        return this.shown ? this.el : null;
     }
 
     onKey(code: number): boolean {
@@ -107,8 +128,8 @@ export class LanguagePicker {
         var first: Language[] = [];
         var then: Language[] = [];
         var all = languages();
-        // (the names as matched, made once)
-        names = names || all.map(function (l) { return words(l.name); });
+        // (the names as matched, made once; the English one too: the keyboard has a-z, the name may be Русский)
+        names = names || all.map(function (l) { return words(l.name === l.english ? l.name : l.name + ' ' + l.english); });
         all.forEach(function (l, i) {
             var name = names![i];
             if (!typed || name.indexOf(typed) === 0 || name.indexOf(' ' + typed) >= 0 || l.code.toLowerCase() === typed) {
@@ -127,7 +148,7 @@ export class LanguagePicker {
 
     private draw(): void {
         var text = this.keyboard.text;
-        setText(this.field, text || 'Type a language');
+        setText(this.field, text || tr('Type a language'));
         toggleClass(this.field, 'by-langs-field--empty', !text);
         this.keyboard.setFocused(this.at === 'keys');
         for (var i = 0; i < ROWS; i++) {

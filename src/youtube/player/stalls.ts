@@ -1,9 +1,14 @@
 // A playback that keeps stalling, as SmartTube's buffering detector tells it: the picture standing while it should
 // play for STALL_TOTAL_MS in all within the last STALL_WINDOW_MS calls for a reload at the same spot. Short stalls a
-// network shrugs off do not.
+// network shrugs off do not. A picture frozen with media buffered ahead of it (a decoder that hangs) is nudged on
+// sooner, as Shaka's and hls.js's stall detectors do (Freezes).
 
 var STALL_WINDOW_MS = 60000;
 var STALL_TOTAL_MS = 20000;
+/** Frozen this long (ms) calls for a nudge; NUDGES within STALL_WINDOW_MS, and the next one a reload (a nudge costs
+ * this TV ~2 s of standing picture: a seek decodes from the keyframe before it) */
+var FROZEN_MS = 3000;
+var NUDGES = 3;
 
 export class Stalls {
     /** Stalls that ended within the window ([start, end]), and when the current one began (0: playing) */
@@ -35,5 +40,40 @@ export class Stalls {
     reset(): void {
         this.past = [];
         this.since = 0;
+    }
+}
+
+/** A picture frozen while it should play with media buffered ahead of it: FROZEN_MS of it calls for a nudge (the playhead
+ * moved on a little), NUDGES of them within STALL_WINDOW_MS, then a reload */
+export class Freezes {
+    private since = 0;
+    private nudged: number[] = [];
+
+    /** The playback at now, frozen or not: 'nudge', 'reload' (then counted anew) or '' */
+    note(frozen: boolean, now: number): string {
+        if (!frozen) {
+            this.since = 0;
+            return '';
+        }
+        if (!this.since) {
+            this.since = now;
+        }
+        if (now - this.since < FROZEN_MS) {
+            return '';
+        }
+        this.since = 0;
+        var from = now - STALL_WINDOW_MS;
+        this.nudged = this.nudged.filter(function (t) { return t > from; });
+        if (this.nudged.length >= NUDGES) {
+            this.reset();
+            return 'reload';
+        }
+        this.nudged.push(now);
+        return 'nudge';
+    }
+
+    reset(): void {
+        this.since = 0;
+        this.nudged = [];
     }
 }

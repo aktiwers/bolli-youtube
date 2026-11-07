@@ -3,11 +3,14 @@
 // Up/Down (the list scrolls to keep the focused line in view; a list opens on its chosen line).
 // A line is a choice (OK picks it; the chosen one has a checkmark; the panel closes unless the
 // line stays, then the list is redrawn to show the change), text to read, or a heading the focus passes over. A list pushed over
-// another returns to it on Back (or Left); otherwise Back closes the panel. Styled by
+// another returns to it on Back (or Left); otherwise Back closes the panel. A click (the Magic Remote's pointer) is OK
+// on the line under it; a click beside the panel is Back (core/pointer.ts: the panel is the open layer). Styled by
 // themes/<id>.css (by-panel, by-line).
 
-import { h, setShown, setText, toggleClass, translate } from '../../core/dom.js';
-import { KEY } from '../../core/keys.js';
+import { h, setShown, setText, toggleClass, translate } from '../core/dom.js';
+import { tr } from '../core/i18n.js';
+import { KEY } from '../core/keys.js';
+import { takesPointer } from '../core/pointer.js';
 import { icon } from './icons.js';
 
 /** The focused line is kept this far below the list's top (so the line above it shows) */
@@ -70,6 +73,11 @@ export class SidePanel {
         parent.appendChild(this.el);
     }
 
+    /** The panel while open (null: closed): the pointer's layer, a click beside it is Back (core/pointer.ts) */
+    layer(): HTMLElement | null {
+        return this.shown ? this.el : null;
+    }
+
     /** Opens a list on its own (closing any open ones); focus: the focused line (none: its chosen one) */
     open(title: string, lines: PanelLine[] | (() => PanelLine[]), focus?: number): void {
         this.stack = [];
@@ -83,7 +91,7 @@ export class SidePanel {
         var failed = false;
         var self = this;
         var made = function (): PanelLine[] {
-            return got !== null ? lines(got) : [{ label: failed ? 'Could not load ' + what + '.' : 'Loading ' + what + ' …', plain: true }];
+            return got !== null ? lines(got) : [{ label: failed ? tr('Could not load {1}.', what) : tr('Loading {1} …', what), plain: true }];
         };
         if (push) {
             this.push(title, made, 0);
@@ -132,7 +140,14 @@ export class SidePanel {
                 el.appendChild(icon('check', 'by-check'));
             }
             self.list.appendChild(el);
-            self.lines.push({ line: line, el: el });
+            var index = self.lines.push({ line: line, el: el }) - 1;
+            takesPointer(el, function () {
+                if (line.heading) {
+                    return null;
+                }
+                self.focus(index);
+                return {};
+            });
         });
     }
 

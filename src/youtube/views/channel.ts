@@ -8,9 +8,11 @@
 // metrics.channel, the look from themes/<id>.css. Resting focus on a sub
 // page button prefetches that page; images are released while hidden.
 
-import { h, releaseImages, restoreImages, setShown, setSrc, setText, toggleClass, translate } from '../../core/dom.js';
-import { KEY } from '../../core/keys.js';
-import { View } from '../../core/view.js';
+import { h, releaseImages, restoreImages, setShown, setSrc, setText, toggleClass, translate } from '../core/dom.js';
+import { tr } from '../core/i18n.js';
+import { KEY } from '../core/keys.js';
+import { takesPointer, toPart } from '../core/pointer.js';
+import { View } from '../core/view.js';
 import { Channel, keptChannel } from '../api/channel.js';
 import { Page, Rows, Video } from '../api/feed.js';
 import { drawSubscribe, pressSubscribe } from '../ui/account.js';
@@ -91,7 +93,7 @@ export class ChannelView extends FeedHost implements View {
         this.description = h('div', 'by-channel-description');
         this.descriptionText = h('span', '');
         this.description.appendChild(this.descriptionText);
-        this.more = this.description.appendChild(h('span', 'by-channel-more', ' ...more')) as HTMLElement;
+        this.more = this.description.appendChild(h('span', 'by-channel-more', ' ' + tr('...more'))) as HTMLElement;
         // Shown with the description, not alone while loading
         setShown(this.more, false);
         this.buttonRow = h('div', 'by-channel-buttons');
@@ -128,6 +130,12 @@ export class ChannelView extends FeedHost implements View {
         this.panel = new SidePanel(this.el);
         setShown(this.el, false);
         this.place();
+        // A click moves the focus to the part it is in (back after a tile's; the description is itself what is clicked)
+        takesPointer(this.el, function (target, under) {
+            var part: Place = self.bar.holds(target) ? 'bar' : self.description.contains(target) && self.hasMore() ? 'more' :
+                self.buttonRow.contains(target) ? 'buttons' : 'rows';
+            return toPart(under, function (p: Place) { self.go(p); }, self.at, part, part === 'more');
+        });
     }
 
     show(): void {
@@ -175,6 +183,11 @@ export class ChannelView extends FeedHost implements View {
     /** The focused tile's video (null while focus is in the header) */
     focusedVideo(): Video | null {
         return this.at === 'rows' ? this.feed.focusedVideo() : null;
+    }
+
+    /** The panel open over it (null: none; the pointer's layer: core/pointer.ts) */
+    layer(): HTMLElement | null {
+        return this.panel.layer();
     }
 
     onKey(code: number): boolean {
@@ -259,7 +272,7 @@ export class ChannelView extends FeedHost implements View {
             return self.buttonRow.appendChild(self.buttons.add(h('div', 'by-pill', label), press)) as HTMLElement;
         };
         if (c.mix) {
-            add('Play mix', function () { self.open(c.mix as Video); });
+            add(tr('Play mix'), function () { self.open(c.mix as Video); });
         }
         var sub = c.subscribe;
         if (sub) {
@@ -320,7 +333,7 @@ export class ChannelView extends FeedHost implements View {
         c.facts.forEach(function (fact) {
             lines.push({ label: fact, plain: true });
         });
-        this.panel.open('About', lines);
+        this.panel.open(tr('About'), lines);
     }
 
     private go(at: Place): void {

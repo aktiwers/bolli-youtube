@@ -1,9 +1,11 @@
 // A row of buttons navigated with Left/Right (watch page, channel page, "Up next", page tabs;
 // the caller places their elements): OK presses the focused one; one that cannot act now is
-// hidden and skipped. The focused one gets the given class while the row has the focus.
+// hidden and skipped. The focused one gets the given class while the row has the focus. A click (the Magic Remote's
+// pointer) focuses the button under it, then presses it as OK.
 
-import { LAYOUT_WIDTH, toggleClass, translate } from '../../core/dom.js';
-import { KEY } from '../../core/keys.js';
+import { LAYOUT_WIDTH, toggleClass, translate } from '../core/dom.js';
+import { KEY } from '../core/keys.js';
+import { takesPointer } from '../core/pointer.js';
 import { metrics } from './theme.js';
 
 interface Pill {
@@ -25,7 +27,15 @@ export class Pills {
     }
 
     add(el: HTMLElement, press: () => void, usable?: () => boolean): HTMLElement {
-        this.pills.push({ el: el, press: press, usable: usable });
+        var self = this;
+        var index = this.pills.push({ el: el, press: press, usable: usable }) - 1;
+        takesPointer(el, function () {
+            if (!self.usable(index)) {
+                return null;
+            }
+            self.focus(index);
+            return {};
+        });
         return el;
     }
 

@@ -10,12 +10,13 @@
 // video's networks while there is one (networks.ts); other errors fail as 'network' after retries. prefetchHeads
 // fetches heads ahead. A start tells the TV the video ends at most WINDOW_S after it and loads no further until it
 // plays: this TV's browser waits for ~3 s of fed video before playing (~1.5 s more of decoding), but not within 10 s
-// of the end; then the real length comes back and the audio segment the window cut is appended again past the cut.
+// of the end; then the real length comes back and the audio segment the window cut is appended again past the cut,
+// its frames from the cut on only (containers.ts framesFrom: else the TV plays ~46 ms of sound twice, late after it).
 
 import { Format } from '../api/streams.js';
-import { parseCues, parseSidx, Segment } from './containers.js';
+import { framesFrom, parseCues, parseSidx, Segment, trackScale } from './containers.js';
 import { BEHIND_MB, BEHIND_S, bufferedEnd, Engine, hopHole, jumpTarget, KEYFRAME_IN, MB, RETRIES, roomAhead, seekNudged, Skip, STILL_AHEAD, TICK_MS, TIMEOUT_MS, windowFrom } from './engine.js';
-import { networkFailed, onNetwork, stallWatch } from './networks.js';
+import { onLost, onNetwork } from './networks.js';
 import { keepPipeline, openPipeline, Pipeline, setLength, setLengthSoon, spoilingFail } from './pipeline.js';
 
 /** Buffer up to this far ahead of the playhead (s; and up to AHEAD_MB per track); BEHIND_S, BEHIND_MB are kept behind
@@ -127,12 +128,7 @@ function fetchBytes(url: string, from: number, to: number): { xhr: XMLHttpReques
                 reject(xhr.status);
             }
         };
-        var lost = function (stalled: boolean): void {
-            reject(networkFailed(used, stalled) ? 'moved' : 0);
-        };
-        xhr.onerror = function () {
-            lost(false);
-        };
+        onLost(xhr, used, function () { reject('moved'); }, function () { reject(0); }, true);
         // (a stalled one rejects before its abort)
         xhr.onabort = function () {
             reject(0);
@@ -140,7 +136,6 @@ function fetchBytes(url: string, from: number, to: number): { xhr: XMLHttpReques
         xhr.ontimeout = function () {
             reject('timeout');
         };
-        stallWatch(xhr, function () { lost(true); });
         xhr.send();
     });
     return { xhr: xhr, done: done };
@@ -174,8 +169,10 @@ class Track {
     /** A format switch waiting for its buffer (switchTrack): from segment index, cut at from (s); removed: the old
      * format's data from there has been removed */
     switching: { format: Format; segments: Segment[]; init: ArrayBuffer; index: number; from: number; removed?: boolean } | null = null;
-    /** Append window start for a switched audio track's first segment (s; -1: none) */
+    /** Append window start for a switched audio track's first segment (s; -1: none): that segment loaded whole goes in
+     * from the cut on only (framesFrom, by the timescale of the init section appended last: an MP4's; 0 a WebM) */
     cut = -1;
+    scale = 0;
     /** The segment across the start's window (-1: none) */
     windowCut = -1;
 
@@ -245,6 +242,10 @@ export function prefetchHeads(video: Format, audio: Format, startAt: number): vo
     var next: typeof ahead = {};
     [video, audio].forEach(function (f) {
         var end = headEnd(f, startAt);
+        // (a head kept is read from there)
+        if (keptHead(f, end)) {
+            return;
+        }
         var key = headKey(f, end);
         var got = next[key] = ahead[key] || fetchBytes(f.url, 0, end);
         delete ahead[key];
@@ -269,8 +270,54 @@ export function dropAhead(takeOver?: boolean): void {
     ahead = {};
 }
 
-/** A prefetched head (taken once; read: left for the next caller), else fetched now */
+/** Heads read lately (init and index, without media), by video, format and its version: a start mid-video, a reopen
+ * or a switch to a format read lately reads it here instead of waiting for its request (its media asked at once) */
+var kept: { key: string; data: ArrayBuffer }[] = [];
+var KEPT_HEADS = 6;
+
+function keptKey(f: Format): string {
+    var id = /[?&]id=([^&]+)/.exec(f.url);
+    return (id ? id[1] : f.url) + ' ' + f.itag + ' ' + f.lmt;
+}
+
+/** Keeps f's head from data (read through its index, maybe media after it: that part not kept), as the latest */
+function keepHead(f: Format, data: ArrayBuffer): void {
+    var key = keptKey(f);
+    var head = data.byteLength === f.index.end + 1 ? data : data.slice(0, f.index.end + 1);
+    kept = kept.filter(function (k) { return k.key !== key; });
+    kept.push({ key: key, data: head });
+    if (kept.length > KEPT_HEADS) {
+        kept.shift();
+    }
+}
+
+/** f's head no longer kept */
+function forgetHead(f: Format): void {
+    var key = keptKey(f);
+    kept = kept.filter(function (k) { return k.key !== key; });
+}
+
+/** f's head kept, for a request through end (only through its index: no media wanted with it); null: none */
+function keptHead(f: Format, end: number): ArrayBuffer | null {
+    if (end !== f.index.end) {
+        return null;
+    }
+    var key = keptKey(f);
+    for (var i = 0; i < kept.length; i++) {
+        if (kept[i].key === key) {
+            return kept[i].data;
+        }
+    }
+    return null;
+}
+
+/** A head kept (only through its index: no media wanted with it), else a prefetched one (taken once; read: left for
+ * the next caller), else fetched now */
 function head(f: Format, end: number, read: boolean): Promise<ArrayBuffer> {
+    var stored = keptHead(f, end);
+    if (stored) {
+        return Promise.resolve(stored);
+    }
     var key = headKey(f, end);
     var had = ahead[key];
     if (read && had) {
@@ -281,9 +328,14 @@ function head(f: Format, end: number, read: boolean): Promise<ArrayBuffer> {
     return had ? had.done : fetchBytes(f.url, 0, end).done;
 }
 
-/** A format's segments and init section, from its head (its first bytes, through the index) */
-function headParts(f: Format, data: ArrayBuffer): { segments: Segment[]; init: ArrayBuffer } {
-    return { segments: /webm/.test(f.mime) ? parseCues(data, f.length, f.duration) : parseSidx(data), init: data.slice(0, f.init.end + 1) };
+/** A format's segments and init section, from its head (its first bytes, through the index); a head that parsed is
+ * kept, if keep (not a preview's: a later start seldom takes its format) */
+function headParts(f: Format, data: ArrayBuffer, keep: boolean): { segments: Segment[]; init: ArrayBuffer } {
+    var parts = { segments: /webm/.test(f.mime) ? parseCues(data, f.length, f.duration) : parseSidx(data), init: data.slice(0, f.init.end + 1) };
+    if (keep && parts.segments.length) {
+        keepHead(f, data);
+    }
+    return parts;
 }
 
 export class DashEngine implements Engine {
@@ -307,10 +359,20 @@ export class DashEngine implements Engine {
     private onFail: (why: string) => void;
     /** The parts the player will skip (SponsorBlock's, not skipped yet): their media is not loaded, what follows is */
     skips: () => Skip[] = function () { return []; };
+    /** A video download done: its bytes and ms (Engine.loaded) */
+    loaded: (bytes: number, ms: number) => void = function () { return undefined; };
 
     constructor(private video: HTMLVideoElement, onFail: (why: string) => void) {
-        // A pipeline whose decoder failed is not kept for the next video
-        this.onFail = spoilingFail(onFail);
+        var self = this;
+        // A pipeline whose decoder failed is not kept for the next video, nor the heads kept for its formats (one may
+        // be what broke it: read anew next time)
+        var fail = spoilingFail(onFail);
+        this.onFail = function (why) {
+            if (why === 'media' || why === 'stream') {
+                self.tracks.forEach(function (track) { forgetHead(track.format); });
+            }
+            fail(why);
+        };
     }
 
     renew(video: Format, audio: Format): boolean {
@@ -367,7 +429,7 @@ export class DashEngine implements Engine {
                 return fetchBytes(f.url, 0, end).done.then(null, again);
             };
             return head(f, end, !!preview).then(null, again).then(function (data) {
-                var parts = headParts(f, data);
+                var parts = headParts(f, data, !preview);
                 track.segments = parts.segments;
                 if (!track.segments.length) {
                     throw 'stream';
@@ -429,7 +491,7 @@ export class DashEngine implements Engine {
         }
         var asked = ++track.switchAsked;
         head(f, f.index.end, false).then(function (data) {
-            self.placeSwitch(track, index, f, headParts(f, data), ahead || SWITCH_S, asked);
+            self.placeSwitch(track, index, f, headParts(f, data, true), ahead || SWITCH_S, asked);
         }, function () { return undefined; });
     }
 
@@ -699,6 +761,7 @@ export class DashEngine implements Engine {
         if (track.init) {
             var init = track.init;
             track.init = null;
+            track.scale = trackScale(new Uint8Array(init));
             this.append(track, init);
             return;
         }
@@ -718,11 +781,19 @@ export class DashEngine implements Engine {
         var now = this.pending >= 0 ? this.pending : this.video.currentTime;
         var segments = track.segments;
         var skips = joinedSkips(this.skips());
-        // Media the player will skip is not loaded: on from where its jump lands (it lands in loaded media)
-        if (track.next < segments.length && track.pos === segments[track.next].from) {
+        // Between segments, on past media the player will skip (its jump lands in loaded media) and past segments the
+        // buffer holds whole already (a jump back came up to the range it left ahead; not in a switch or a start's cut,
+        // which append over what is there)
+        var b = sb.buffered;
+        var held = !track.switching && track.cut < 0 && track.windowCut < 0;
+        while (track.next < segments.length && track.pos === segments[track.next].from) {
             var past = pastSkip(segments, track.next, skips, now);
             if (past !== track.next) {
                 track.at(past);
+            } else if (held && bufferedEnd(b, segments[track.next].start + 0.01, 0.001) >= segments[track.next].end - 0.05) {
+                track.at(track.next + 1);
+            } else {
+                break;
             }
         }
         if (track.next >= segments.length) {
@@ -730,7 +801,7 @@ export class DashEngine implements Engine {
             return;
         }
         // (how far ahead its loading is: a hole at the playhead does not lift the byte limit)
-        if (!roomAhead(aheadOf(sb.buffered, now, skips), this.bytesAhead(track, now, skips), this.most || AHEAD, track.timeNear(track.pos) - now)) {
+        if (!roomAhead(aheadOf(b, now, skips), this.bytesAhead(track, now, skips), this.most || AHEAD, track.timeNear(track.pos) - now)) {
             return;
         }
         var segment = segments[track.next];
@@ -738,8 +809,10 @@ export class DashEngine implements Engine {
             return;
         }
         var to = Math.min(segment.to, track.pos + (track.fresh ? pieceOf(track.chunk) : track.chunk) - 1);
+        var whole = track.pos === segment.from && to === segment.to;
         var self = this;
         var gen = track.gen;
+        var asked = Date.now();
         var req = fetchBytes(track.format.url, track.pos, to);
         track.xhr = req.xhr;
         req.done.then(function (data) {
@@ -749,13 +822,22 @@ export class DashEngine implements Engine {
             track.xhr = null;
             track.failures = 0;
             track.fresh = false;
+            if (track === self.tracks[0]) {
+                self.loaded(data.byteLength, Date.now() - asked);
+            }
             if (to < segment.to) {
                 track.pos = to + 1;
             } else {
                 track.next++;
                 track.pos = track.next < segments.length ? segments[track.next].from : 0;
             }
-            self.append(track, data);
+            var put = whole && track.cut > 0 ? framesFrom(new Uint8Array(data), track.cut, track.scale).buffer : data;
+            // (nothing of it from the cut on: on to the next)
+            if (put.byteLength) {
+                self.append(track, put);
+            } else {
+                self.pump(track);
+            }
         }, function (e) {
             if (track.gen !== gen) {
                 // Dropped for a seek or stop
@@ -885,10 +967,6 @@ export class DashEngine implements Engine {
                 track.next = -1;
             }
             var sb = track.sb;
-            // A switched audio track's cut no longer applies: the append window resets once nothing is appending
-            if (track.cut > 0) {
-                track.cut = 0;
-            }
             if (!sb) {
                 continue;
             }
@@ -904,6 +982,11 @@ export class DashEngine implements Engine {
             // During the start's window, loaded up to it is all there is to load
             var loaded = this.window > 0 && end >= this.window - 0.05;
             if (next !== track.next && !appending && !loaded) {
+                // A switched audio track's cut (or the window's) no longer applies: the append window resets once
+                // nothing is appending (a request kept for the cut segment keeps it: its answer is cut as before)
+                if (track.cut > 0) {
+                    track.cut = 0;
+                }
                 this.drop(track);
                 // The parser may be mid-segment: reset it, as the new segment starts afresh (the window's cut again)
                 resetParser(sb);

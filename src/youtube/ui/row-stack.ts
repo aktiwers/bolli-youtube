@@ -5,9 +5,11 @@
 // repaints every drawn tile in each frame of a slide), which load their
 // tiles, and how many images each keeps (far rows release theirs; they
 // reload from cache). Adding, replacing or removing a row keeps focus on
-// the same row. The screen scrolls the container itself (see top).
+// the same row. The screen scrolls the container itself (see top). A click on a
+// row's tile takes the focus to that row (and back after: tile-row.ts).
 
 import { h, LAYOUT_HEIGHT, releaseImages, restoreImages } from '../core/dom.js';
+import { holding, takesPointer } from '../core/pointer.js';
 import { TileRow } from './tile-row.js';
 
 /** Rows drawn above and below the focused one (one below is on screen, the next slides in) */
@@ -41,6 +43,30 @@ export class RowStack {
      * screen's bottom wait for the slide); omitted: no row waits */
     constructor(className: string, private rowH: number, private focusTop?: number) {
         this.el = h('div', className);
+        var self = this;
+        // A click on a row's tile acts in place (tile-row.ts): the row is only pointed at, not moved to (a move lays
+        // out, loads and drops images: twice for nothing); after it the rows are marked for the keys' row again (a
+        // no-op unless the press marked them meanwhile), not in rows the press replaced; anything else in a row moves
+        // the focus there
+        takesPointer(this.el, function (target, under) {
+            var i = holding(self.rows, target);
+            if (!under || i < 0) {
+                return null;
+            }
+            var was = self.index;
+            if (!under.undo) {
+                self.focusRow(i);
+                return {};
+            }
+            var row = self.rows[i];
+            self.index = i;
+            return { undo: function () {
+                if (self.rows[i] === row) {
+                    self.index = Math.min(was, self.rows.length - 1);
+                    self.mark();
+                }
+            } };
+        });
     }
 
     /** Draws `more` additional rows on each side of the focused one (for short rows, several on screen) */

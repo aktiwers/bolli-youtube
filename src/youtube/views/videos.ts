@@ -7,13 +7,15 @@
 // is hidden, keeping focus on the same video. Rows older than REFRESH_MS are
 // refreshed the same way.
 
-import { h, LAYOUT_HEIGHT, LAYOUT_WIDTH, setShown, setText, toggleClass, translate } from '../../core/dom.js';
-import { KEY } from '../../core/keys.js';
-import { canListen } from '../../core/platform.js';
-import { mark } from '../../core/perf.js';
-import { View } from '../../core/view.js';
-import { RowStack } from '../../ui/row-stack.js';
-import { TileItem, TileRow } from '../../ui/tile-row.js';
+import { h, LAYOUT_HEIGHT, LAYOUT_WIDTH, setShown, setText, toggleClass, translate } from '../core/dom.js';
+import { tr } from '../core/i18n.js';
+import { KEY } from '../core/keys.js';
+import { canListen } from '../core/platform.js';
+import { mark } from '../core/perf.js';
+import { afterClick, takesPointer, toPart } from '../core/pointer.js';
+import { View } from '../core/view.js';
+import { RowStack } from '../ui/row-stack.js';
+import { TileItem, TileRow } from '../ui/tile-row.js';
 import { more, Nudge, PageButton, Rows, Shelf, Tab, Video } from '../api/feed.js';
 import { Pills } from '../ui/pills.js';
 import { FillLoader, LOGO } from '../ui/fill-loader.js';
@@ -94,8 +96,26 @@ export class SearchBar {
         this.mic = icon('mic', 'by-search-mic' + (more ? ' ' + more + '-mic' : ''));
         parent.appendChild(this.mic);
         this.bar = h('div', 'by-search-bar' + (more ? ' ' + more + '-bar' : ''));
-        this.bar.appendChild(h('span', '', 'Search'));
+        this.bar.appendChild(h('span', '', tr('Search')));
         parent.appendChild(this.bar);
+        // A click is OK on the bar or the microphone
+        var self = this;
+        takesPointer(this.bar, function () {
+            self.onMic = false;
+            return {};
+        });
+        takesPointer(this.mic, function () {
+            if (!listens()) {
+                return null;
+            }
+            self.onMic = true;
+            return {};
+        });
+    }
+
+    /** el is part of the bar (or its microphone) */
+    holds(el: HTMLElement): boolean {
+        return this.bar.contains(el) || this.mic.contains(el);
     }
 
     setFocused(focused: boolean): void {
@@ -192,6 +212,9 @@ export class FeedHost {
 }
 
 /** A screen's cached rows, and a check (run once they show) whether they belong to the current account */
+/** Where the focus is on a feed screen (FeedView's at) */
+type Part = 'rows' | 'tabs' | 'buttons' | 'bar' | 'back';
+
 export interface KeptFeed {
     rows: Rows;
     same: () => Promise<boolean>;
@@ -254,7 +277,7 @@ export class FeedView implements View {
     private back: HTMLElement | null = null;
     /** Focus target: the rows (or grid lines), the tabs or buttons above a grid, Home's search bar, or a page's back
      * arrow */
-    private at: 'rows' | 'tabs' | 'buttons' | 'bar' | 'back' = 'rows';
+    private at: Part = 'rows';
     /** Home's search bar, fixed above the rows (null: none) */
     private bar: SearchBar | null = null;
     /** The video played from here: its tile stays when fresh rows replace the ones under it */
@@ -289,6 +312,8 @@ export class FeedView implements View {
     private unchecked: KeptFeed | null = null;
     /** A video covers the screen */
     private covered = false;
+    /** Closed for good (destroy): a swap of fresh rows still due is dropped */
+    private dead = false;
     /** A fetch is in flight; when the rows arrived (0: never, or cached ones) */
     private loading = false;
     private fetchedAt = 0;
@@ -348,6 +373,14 @@ export class FeedView implements View {
             this.el.appendChild(h('div', 'by-feed-top'));
             this.bar = new SearchBar(this.el, '', opts.onSearch);
         }
+        // A click moves the focus to the part it is in (what it is on takes the focus there: a tile, a tab, a button),
+        // and back after one on a tile (it acts in place); the back arrow is itself what is clicked
+        takesPointer(this.el, function (target, under) {
+            var part: Part | '' = self.bar && self.bar.holds(target) ? 'bar' :
+                self.back && self.back.contains(target) ? 'back' : self.tabsEl.contains(target) ? 'tabs' :
+                self.buttonsEl.contains(target) ? 'buttons' : self.nudgeEl.contains(target) || self.stack.el.contains(target) ? 'rows' : '';
+            return part ? toPart(under, function (p: Part) { self.goTo(p); }, self.at, part, part === 'back') : null;
+        });
     }
 
     /** rest: shown in passing (moving through the rail): fetch only after it has shown for REST_MS */
@@ -376,7 +409,7 @@ export class FeedView implements View {
     cover(covered: boolean): void {
         this.covered = covered;
         if (covered) {
-            this.freshen();
+            this.freshenAfterClick();
         } else {
             this.aheadInSight();
         }
@@ -386,12 +419,13 @@ export class FeedView implements View {
         this.shown = false;
         setShown(this.el, false);
         this.stack.setShown(false);
-        this.freshen();
+        this.freshenAfterClick();
     }
 
     /** Closed for good (a page left with Back): late replies are dropped, nothing more is fetched or branded for it */
     destroy(): void {
         this.gen++;
+        this.dead = true;
         this.paging.stop();
         this.tiles.stop();
     }
@@ -723,7 +757,7 @@ export class FeedView implements View {
         return false;
     }
 
-    private goTo(at: 'rows' | 'tabs' | 'buttons' | 'bar' | 'back'): void {
+    private goTo(at: Part): void {
         this.at = at;
         this.setFocused(this.focused);
     }
@@ -1039,9 +1073,20 @@ export class FeedView implements View {
         return found;
     }
 
+    /** freshen, after a click that opened a tile in place has put the keys' focus back (core/pointer.ts afterClick) */
+    private freshenAfterClick(): void {
+        var self = this;
+        afterClick(function () {
+            if (!self.dead) {
+                self.freshen();
+            }
+        });
+    }
+
     /** Swaps in the fresh rows once out of view (covered by a video, or hidden), keeping focus on the same video. The
-     * tile last opened from here (a video, or a page hiding the screen) keeps its place even if the fresh rows lack
-     * it, so Back returns to it */
+     * tile last opened from here (a video, or a page hiding the screen), or under the focus while a video covers the
+     * screen (one opened by the pointer in place, or cast), keeps its place even if the fresh rows lack it, so Back
+     * returns to it */
     private freshen(): void {
         var fresh = this.fresh;
         if (!fresh || this.shown && !this.covered && !document.hidden) {
@@ -1051,7 +1096,7 @@ export class FeedView implements View {
         var video = this.tiles.video(row ? row.focused : null);
         var id = video ? video.id : '';
         var put = fresh.rows;
-        if (put && video && id === this.played && !this.freshVideo(row!.focused)) {
+        if (put && video && (id === this.played || this.covered) && !this.freshVideo(row!.focused)) {
             var place = row!.index;
             for (var k = 0; this.grid && k < this.stack.index; k++) {
                 place += this.stack.rows[k].count;

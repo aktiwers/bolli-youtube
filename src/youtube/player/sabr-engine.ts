@@ -19,12 +19,14 @@
 // attestation wanted), 'sabr' (server error or empty answers), 'network', 'media'.
 // A start tells the TV the video ends WINDOW_S after it (a resume start: after its keyframe) and appends no video
 // segment ending past that, the audio cut there, until it plays (the quick start, as dash.ts's): then the real length,
-// and the audio segment across the window appended again from the cut on (kept: not asked of the server again).
+// and the audio segment across the window appended again from the cut on (kept: not asked of the server again; its
+// frames from the cut on only, containers.ts framesFrom: else the TV plays ~46 ms of sound twice, late after it).
 
 import { base64Bytes, BufferedRange, FormatId, SabrAnswer, SabrReader, sabrRequest, SabrSegment } from '../api/sabr.js';
 import { Format, Sabr } from '../api/streams.js';
 import { youtubePage } from '../api/youtube.js';
 import { BEHIND_MB, BEHIND_S, bufferedEnd, Engine, hopHole, jumpTarget, KEYFRAME_IN, MB, RETRIES, roomAhead, seekNudged, STILL_AHEAD, TICK_MS, TIMEOUT_MS, windowFrom } from './engine.js';
+import { framesFrom, trackScale, wholeFrames } from './containers.js';
 import { networkFailed, onNetwork, stallWatch } from './networks.js';
 import { keepPipeline, openPipeline, Pipeline, setLength, setLengthSoon, spoilingFail } from './pipeline.js';
 
@@ -51,8 +53,9 @@ interface Piece {
 
 class Track {
     sb: SourceBuffer | null = null;
-    /** Its init segment is in (or on its way into) the buffer */
+    /** Its init segment is in (or on its way into) the buffer, and its timescale (an MP4's) */
     inited = false;
+    scale = 0;
     /** Segments to append, in order */
     queue: SabrSegment[] = [];
     /** The segments it has, by number */
@@ -170,10 +173,13 @@ export class SabrEngine implements Engine {
     private contexts: { [type: number]: Uint8Array } = {};
     private active: { [type: number]: boolean } = {};
     private rn = 0;
-    /** A seek waiting for the metadata, idle buffers and both tracks covering it (-1: none); snap: a resume start,
-     * moved to the video keyframe there once its first segment header arrives */
+    /** A seek waiting for the metadata, idle buffers and both tracks covering it (-1: none); snap: a resume start or a
+     * jump to where no segment is known, moved to the video keyframe there once its first segment header arrives (the
+     * TV decodes from the keyframe anyway, at ~2.3x: landing on it saves that); snapFrom: the jump's origin (-1: a
+     * resume start), a forward jump snapping only to a keyframe still ahead of it */
     private pending = -1;
     private snap = false;
+    private snapFrom = -1;
     private stuckTimer = 0;
     /** The start's window (s; 0: none), the real length, the audio segment across it, where it ended (-1: the audio's
      * append window reset) */
@@ -201,6 +207,7 @@ export class SabrEngine implements Engine {
         if (startAt > 0) {
             this.pending = startAt;
             this.snap = true;
+            this.snapFrom = -1;
         } else {
             this.openWindow(0);
         }
@@ -253,21 +260,29 @@ export class SabrEngine implements Engine {
 
     /** Seeks to t (s) once the metadata is in, no buffer is updating and both tracks cover it (requested from there) */
     seek(t: number): void {
+        this.go(t, -1);
+    }
+
+    /** Seeks to t; from: a jump's origin when it is to snap to the keyframe its first answer brings (else -1) */
+    private go(t: number, from: number): void {
         if (!this.tracks.length) {
             return;
         }
         this.lift();
         this.pending = t;
-        this.snap = false;
+        this.snap = from >= 0;
+        this.snapFrom = from;
         this.restart(t);
         this.settle();
         this.pump();
     }
 
-    /** Jumps to about `to` (s) from `from`: to a nearby known segment start, else to `to` itself */
+    /** Jumps to about `to` (s) from `from`: to a nearby known segment start, else to the keyframe of the segment its
+     * first answer brings (snap) */
     jump(to: number, from: number): void {
         if (this.tracks.length) {
-            this.seek(jumpTarget(this.tracks[0].pieces.map(function (p) { return p.startMs / 1000; }), to, from, SNAP_S));
+            var target = jumpTarget(this.tracks[0].pieces.map(function (p) { return p.startMs / 1000; }), to, from, SNAP_S);
+            this.go(target, target === to && !this.tracks[0].covers(to) ? from : -1);
         }
     }
 
@@ -321,7 +336,7 @@ export class SabrEngine implements Engine {
     }
 
     /** Sends each track's next request when due: it needs more, has none in flight and the server's backoff is over (a
-     * resume start's audio waits for the video keyframe); also retries a segment waiting on a full buffer */
+     * resume start's or a snapping jump's audio waits for the video keyframe); also retries a segment waiting on a full buffer */
     private pump(): void {
         if (this.stopped || !this.tracks.length) {
             return;
@@ -541,23 +556,34 @@ export class SabrEngine implements Engine {
             return;
         }
         track.waitUntil = Date.now() + Math.max(a.backoffMs, track.empty ? 1000 * track.empty : 0);
-        // A resume start whose video answer had no segment: play from the requested time
+        // A resume start or jump whose video answer had no segment: play from the requested time
         if (this.snap && track.kind === PICTURE) {
-            this.snap = false;
-            this.openWindow(this.pending);
+            this.snapped();
         }
         this.pump();
     }
 
-    /** A segment header arrived: a resume start lands on the first video segment there (its keyframe) */
+    /** The snap is over: a resume start's window opens where it lands */
+    private snapped(): void {
+        this.snap = false;
+        if (this.snapFrom < 0) {
+            this.openWindow(this.pending);
+        }
+    }
+
+    /** A segment header arrived: a resume start or a jump lands on the first video segment there (its keyframe); a
+     * forward jump only on one still ahead of where it came from. A resume start opens its window there. */
     private header(h: SabrSegment): void {
         var track = this.tracks[0];
         if (this.snap && !h.init && h.itag === track.format.itag) {
-            if (this.pending >= 0 && h.startMs / 1000 <= this.pending && this.pending - h.startMs / 1000 < 10) {
-                this.pending = h.startMs / 1000 + KEYFRAME_IN;
+            var start = h.startMs / 1000;
+            // A jump's within SNAP_S (as a known start: jumpTarget), on its side of where it came from
+            var jumped = this.snapFrom >= 0;
+            var side = !jumped || (this.pending > this.snapFrom ? start > this.snapFrom + 1 : start < this.snapFrom - 1);
+            if (this.pending >= 0 && start <= this.pending && this.pending - start < (jumped ? SNAP_S : 10) && side) {
+                this.pending = start + KEYFRAME_IN;
             }
-            this.snap = false;
-            this.openWindow(this.pending);
+            this.snapped();
             this.pump();
         }
     }
@@ -572,6 +598,7 @@ export class SabrEngine implements Engine {
         if (seg.init) {
             if (!track.inited) {
                 track.inited = true;
+                track.scale = trackScale(seg.data);
                 track.queue.push(seg);
             }
         } else {
@@ -592,10 +619,14 @@ export class SabrEngine implements Engine {
             var again = this.cut;
             this.cut = null;
             sb.appendWindowEnd = Infinity;
-            if (again) {
-                sb.appendWindowStart = this.cutAt;
+            // (nothing of it from the cut on: on to the next)
+            // (Dolby: from the frame across the cut, which the browser dropped whole at the window's end)
+            var dropped = wholeFrames(track.format.mime);
+            var part = again ? framesFrom(again.data, this.cutAt, track.scale, dropped) : null;
+            if (again && part && part.byteLength) {
+                sb.appendWindowStart = dropped ? 0 : this.cutAt;
                 try {
-                    sb.appendBuffer(again.data);
+                    sb.appendBuffer(part);
                 } catch (e) {
                     // Full: again once more is trimmed
                     this.cut = again;

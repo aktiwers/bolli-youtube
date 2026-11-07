@@ -1,7 +1,8 @@
 // The players' info bar along the bottom (the theme draws it on a dark
 // gradient): a logo with a small label (channel or series), the title, the time
 // beside a progress bar (on demand also a marker for a pending seek), the
-// description when the user opened the bar (not when it appears by itself on a
+// description and a line under the title (in place of the label: the channel,
+// views, age...) when the user opened the bar (not when it appears by itself on a
 // channel change or seek), a line for what comes next or the keys (led by the
 // playing quality, e.g. "1080p · 50 fps"), and a message line for problems. It
 // hides after a few seconds unless the player wants it to stay.
@@ -12,9 +13,11 @@ var SHOW_MS = 5000;
 
 export class PlayerOsd {
     private el: HTMLElement;
+    private head: HTMLElement;
     private logo: HTMLImageElement;
     private label: HTMLElement;
     private title: HTMLElement;
+    private meta: HTMLElement;
     private time: HTMLElement;
     private fill: HTMLElement;
     private marker: HTMLElement;
@@ -29,16 +32,19 @@ export class PlayerOsd {
     private withText = false;
     /** Whether the description element is shown (as last set) */
     private textShown = true;
+    /** Whether the line under the title is shown (as last set) */
+    private metaShown = true;
 
     /** stay: asked when the time is up (true keeps the bar); onHide: called when it hides */
     constructor(root: HTMLElement, private stay: () => boolean, private onHide?: () => void) {
         this.el = h('div', 'osd');
-        var head = h('div', 'osd-head');
+        var head = this.head = h('div', 'osd-head');
         this.logo = h('img', 'osd-logo') as HTMLImageElement;
         this.label = h('div', 'osd-channel');
         head.appendChild(this.logo);
         head.appendChild(this.label);
         this.title = h('div', 'osd-now');
+        this.meta = h('div', 'osd-meta');
         var timeLine = h('div', 'osd-time-line');
         this.time = h('span', 'osd-time');
         var bar = h('span', 'osd-bar');
@@ -57,6 +63,7 @@ export class PlayerOsd {
         this.message = h('div', 'osd-message');
         this.el.appendChild(head);
         this.el.appendChild(this.title);
+        this.el.appendChild(this.meta);
         this.el.appendChild(timeLine);
         this.el.appendChild(this.text);
         this.el.appendChild(line);
@@ -91,6 +98,13 @@ export class PlayerOsd {
             }
         };
         this.timer = setTimeout(later, SHOW_MS) as unknown as number;
+    }
+
+    /** Shown: stays SHOW_MS more (the pointer moved, as YouTube's controls stay while it does) */
+    keep(): void {
+        if (this.shown) {
+            this.show();
+        }
     }
 
     hide(): void {
@@ -137,12 +151,24 @@ export class PlayerOsd {
         this.showText();
     }
 
+    /** Sets the line under the title (it begins with the label's channel); shown in the label's place if requested */
+    setMeta(text: string): void {
+        setText(this.meta, text);
+        this.showText();
+    }
+
     private showText(): void {
         var text = this.withText && !!this.text.textContent;
         if (text !== this.textShown) {
             this.textShown = text;
             // '' keeps the theme's own display (a box clipped after four lines)
             this.text.style.display = text ? '' : 'none';
+        }
+        var meta = this.withText && !!this.meta.textContent;
+        if (meta !== this.metaShown) {
+            this.metaShown = meta;
+            this.meta.style.display = meta ? '' : 'none';
+            this.head.style.display = meta ? 'none' : '';
         }
     }
 

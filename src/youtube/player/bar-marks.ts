@@ -3,7 +3,7 @@
 // after the first begins: .by-chapter-gap), and the name of the part at a time (nameAt). Chapters come with the
 // watch page details (api/watch.ts).
 
-import { h } from '../../core/dom.js';
+import { h } from '../core/dom.js';
 import { Segment, segmentAt, segmentName } from '../api/sponsorblock.js';
 import { Chapter } from '../api/watch.js';
 

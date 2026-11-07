@@ -6,12 +6,14 @@
 // Google gives none, OK asks again. YouTube's other ways (with the remote, a
 // child account) are not offered. The look is the theme's (by-signin).
 
-import { h, setShown, setSrc, setText } from '../../core/dom.js';
-import { KEY } from '../../core/keys.js';
-import { View } from '../../core/view.js';
+import { h, setShown, setSrc, setText } from '../core/dom.js';
+import { tr } from '../core/i18n.js';
+import { KEY } from '../core/keys.js';
+import { takesPointer } from '../core/pointer.js';
+import { View } from '../core/view.js';
 import { ACTIVATE, DeviceCode, deviceCode, keepAccount, signedIn } from '../api/signin.js';
 import { Identity } from '../api/youtube.js';
-import { drawQr } from '../../ui/qr.js';
+import { drawQr } from '../ui/qr.js';
 
 var PICTURES = 'https://www.gstatic.com/';
 /** The QR code's maximum side (layout px; ui/qr.ts) */
@@ -32,21 +34,23 @@ export class SignInView implements View {
     constructor(private done: (identity: Identity) => void) {
         this.el = h('div', 'by-signin');
         setShown(this.el, false);
+        // A click is OK (a new code after a failure)
+        takesPointer(this.el, function () { return {}; });
         var bg = this.el.appendChild(h('img', 'by-signin-bg')) as HTMLImageElement;
         setSrc(bg, PICTURES + 'ytlr/img/uni_tube_gradient_1280x720.jpg');
         var left = this.el.appendChild(h('div', 'by-signin-left')) as HTMLElement;
         var mark = left.appendChild(h('img', 'by-signin-wordmark')) as HTMLImageElement;
         setSrc(mark, PICTURES + 'youtube/img/branding/livingroom/youtube/wordmark/fullcolor_white_42_v3_2x.png');
-        left.appendChild(h('div', 'by-signin-title', 'Add your Google Account'));
-        left.appendChild(h('div', 'by-signin-text', 'With your own account, you can find all the videos and channels that you love, and no one else\'s'));
-        left.appendChild(h('div', 'by-signin-way', 'Sign in with your phone'));
+        left.appendChild(h('div', 'by-signin-title', tr('Add your Google Account')));
+        left.appendChild(h('div', 'by-signin-text', tr('With your own account, you can find all the videos and channels that you love, and no one else\'s')));
+        left.appendChild(h('div', 'by-signin-way', tr('Sign in with your phone')));
         var right = this.el.appendChild(h('div', 'by-signin-right')) as HTMLElement;
         this.qr = right.appendChild(h('canvas', 'by-signin-qr')) as HTMLCanvasElement;
         // If the QR library fails to load, the address and code still show
         drawQr(this.qr, 'https://' + ACTIVATE, QR_SIZE).then(null, function () { return undefined; });
-        right.appendChild(h('div', 'by-signin-small', 'Scan QR code or go to'));
+        right.appendChild(h('div', 'by-signin-small', tr('Scan QR code or go to')));
         right.appendChild(h('div', 'by-signin-big', ACTIVATE));
-        right.appendChild(h('div', 'by-signin-small', 'Enter the code'));
+        right.appendChild(h('div', 'by-signin-small', tr('Enter the code')));
         this.code = right.appendChild(h('div', 'by-signin-code')) as HTMLElement;
         this.said = right.appendChild(h('div', 'by-signin-small')) as HTMLElement;
     }
@@ -100,7 +104,7 @@ export class SignInView implements View {
             }
         }, function () {
             self.asking = false;
-            setText(self.said, 'Google gave no code. Press OK to try again.');
+            setText(self.said, tr('Google gave no code. Press OK to try again.'));
         });
     }
 
@@ -135,9 +139,9 @@ export class SignInView implements View {
                 } else if (got) {
                     // Stored even if Back was pressed meanwhile (Google returns a code's sign-in only once)
                     self.current = null;
-                    setText(self.said, 'Signing in …');
+                    setText(self.said, tr('Signing in …'));
                     keepAccount(got).then(self.done, function () {
-                        setText(self.said, 'YouTube did not take the sign-in. Press OK to try again.');
+                        setText(self.said, tr('YouTube did not take the sign-in. Press OK to try again.'));
                     });
                 } else if (self.shown) {
                     self.newCode();

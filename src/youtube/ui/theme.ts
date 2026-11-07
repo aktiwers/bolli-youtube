@@ -6,8 +6,9 @@
 // switched by replacing <link id="theme-css">. Sizes are in 1280x720
 // layout units (index.html zooms to the screen).
 
-import { toggleClass } from '../../core/dom.js';
-import { TileLayout, TileShape } from '../../ui/tile-row.js';
+import { toggleClass } from '../core/dom.js';
+import { tr } from '../core/i18n.js';
+import { TileLayout, TileShape } from './tile-row.js';
 
 export interface Metrics {
     /** Left rail: width (where screens start), first entry's top, entry spacing, bottom entry's top */
@@ -97,10 +98,10 @@ export function themed(s: string): string {
     }) : s;
 }
 
-/** A label in the theme's wording ("CC": "Subtitles"; else unchanged) */
+/** A label in the theme's wording ("CC": "Subtitles", in the app's language; else unchanged) */
 export function word(s: string): string {
     var mine = metrics().ways.words[s];
-    return mine !== undefined ? mine : s;
+    return mine !== undefined ? tr(mine) : s;
 }
 
 export interface Theme {

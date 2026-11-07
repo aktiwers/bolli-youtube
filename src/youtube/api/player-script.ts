@@ -1,7 +1,9 @@
-// YouTube's TV player script (named by its /tv page, 2.5 MB), for what SABR
+// YouTube's TV player script (its classic variant of the build its /tv page
+// names, 2.5 MB: the one its TV app runs on a Samsung TV, which the signed-in
+// player request is made as: api/streams.ts SIGNED_IN_AS), for what SABR
 // streams need: the n transform (the stream URL's n parameter must be
-// transformed, else the video servers answer 403) and the signature
-// timestamp. The script is obfuscated (names, numbers and string order
+// transformed, else the video servers answer 403) and the signature timestamp.
+// The script is obfuscated (names, numbers and string order
 // change per version; functions branch on XORed numbers), so the transform
 // is found by stable patterns: the string table containing "n", the place n
 // is read from a URL and passed to a function with two XORed numbers, and in
@@ -19,8 +21,8 @@
 // script is read, so /player is asked while the script still starts in its
 // worker.
 
-import { getText } from '../../core/http.js';
-import { load, save } from '../../core/store.js';
+import { getText } from '../core/http.js';
+import { load, save } from '../core/store.js';
 import { answer, forgetTvPage, tvPage, youtubePage } from './youtube.js';
 
 export interface PlayerScript {
@@ -55,8 +57,13 @@ var SOLVED_MS = 20000;
  * starts so those skip the search and the download */
 var KEPT_KEY = 'youtube.solved';
 var KEPT_COUNT = 3;
+/** The script path the last /tv page named: a cold start fetches it beside the page (the path seldom changes), and
+ * takes it if the page names it too */
+var PATH_KEY = 'youtube.playerPath';
 /** The TV player script its /tv page names: /s/player/<id>/tv-player….vflset/<name>.js */
 var PLAYER_PATH = /\/s\/player\/([\w-]+)\/tv-player[\w-]*\.vflset\/([\w-]+)\.js/;
+/** The variant of the script used (the /tv page names the build; an LG TV's YouTube app runs another variant, tcl) */
+var CLASSIC = 'tv-player-ias';
 /** Stream URL builders tried at most, and how far back a block's start is looked for */
 var BUILDERS_MAX = 8;
 var BLOCK_SCAN = 20000;
@@ -72,6 +79,8 @@ var TAIL = '\n;self.onmessage=function(e){var r;try{r={id:e.data.id,v:self.__bol
     'postMessage(r)};postMessage({ready:typeof self.__bolliN});';
 
 var script: Promise<PlayerScript> | null = null;
+/** The script fetched early from the path last named (taken once; a module variable, so no closure keeps its text) */
+var early: { path: string; got: Promise<{ status: number; text: string }> } | null = null;
 var worker: Worker | null = null;
 var idleTimer = 0;
 var kept: { file: string; code: string }[] = load<{ file: string; code: string }[]>(KEPT_KEY) || [];
@@ -82,6 +91,7 @@ var kept: { file: string; code: string }[] = load<{ file: string; code: string }
 export function playerScript(): Promise<PlayerScript> {
     clearTimeout(idleTimer);
     if (!script) {
+        fetchEarly();
         var made: Promise<PlayerScript> = script = Promise.all<any>([tvPage(), youtubePage()]).then(function (got) {
             var found = PLAYER_PATH.exec(got[0].html);
             if (!found) {
@@ -89,15 +99,15 @@ export function playerScript(): Promise<PlayerScript> {
                 forgetTvPage();
                 throw lasting('No TV player script');
             }
-            var file = found[1] + '/' + found[2] + '.js';
-            var w = got[1] as Window;
-            return answer(w, 'GET', found[0], null, {}).then(function (r) {
+            // The build's classic variant, whatever variant the page names (that a Samsung TV runs: SIGNED_IN_AS)
+            var file = found[1] + '/' + CLASSIC + '.js';
+            return scriptAt(got[1] as Window, '/s/player/' + found[1] + '/' + CLASSIC + '.vflset/' + CLASSIC + '.js').then(function (r) {
                 if (r.status !== 200) {
                     throw new Error('The TV player script: ' + r.status);
                 }
                 var js = r.text;
                 // (as yt-dlp finds it: a space or the short name would not lose it; a whole name, not the end of another)
-                var sts = +(/\b(?:signatureTimestamp|sts)\s*:\s*(\d{5})/.exec(js) || [])[1];
+                var sts = +(/\b(?:signatureTimestamp|sts)\s*:\s*(\d{5,})/.exec(js) || [])[1];
                 if (!sts || js.lastIndexOf(END) < 0) {
                     throw lasting('The TV player script has an unexpected shape');
                 }
@@ -113,6 +123,7 @@ export function playerScript(): Promise<PlayerScript> {
         made.then(null, function (e: Error) {
             // A script of another shape waits as one that failed to run; one not fetched (the network) is asked again
             if (script === made) {
+                early = null;
                 if ((e as Error & { lasting?: boolean }).lasting) {
                     keepFailed(e);
                 } else {
@@ -134,6 +145,33 @@ export function playerScript(): Promise<PlayerScript> {
         }
     }, function () { return undefined; });
     return script;
+}
+
+/** Starts fetching the script at the path the last /tv page named, if any (the page is often not loaded yet: a cold
+ * start then waits for the page only to confirm the path) */
+function fetchEarly(): void {
+    var path = load<string>(PATH_KEY);
+    early = null;
+    if (!path) {
+        return;
+    }
+    var got = youtubePage().then(function (w) { return answer(w, 'GET', path as string, null, {}); });
+    got.then(null, function () { return undefined; });
+    early = { path: path, got: got };
+}
+
+/** The script at path (the one its /tv page names): the early fetch if that was for it (else asked now); the path kept
+ * for the next cold start once its script came */
+function scriptAt(w: Window, path: string): Promise<{ status: number; text: string }> {
+    var e = early;
+    early = null;
+    var got = e && e.path === path ? e.got.then(null, function () { return answer(w, 'GET', path, null, {}); }) : answer(w, 'GET', path, null, {});
+    got.then(function (r) {
+        if (r.status === 200 && load<string>(PATH_KEY) !== path) {
+            save(PATH_KEY, path);
+        }
+    }, function () { return undefined; });
+    return got;
 }
 
 /** A failure that stays as long as YouTube's script does (not the network's) */
@@ -303,6 +341,12 @@ export function startTransform(parts: string[]): Promise<(v: string) => Promise<
         }
     });
     return ran;
+}
+
+/** The script dropped (YouTube asked its TV app to restart): the next use reads the one the /tv page names then */
+export function forgetScript(): void {
+    early = null;
+    drop();
 }
 
 /** Drop the script and free its worker's memory; the next use runs it again */

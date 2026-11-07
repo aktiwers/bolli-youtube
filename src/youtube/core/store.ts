@@ -19,3 +19,18 @@ export function save(key: string, value: unknown): void {
         // storage full or disabled
     }
 }
+
+/** Removes every key beginning with prefix */
+export function forgetAll(prefix: string): void {
+    try {
+        var s = window.localStorage;
+        for (var i = s.length - 1; i >= 0; i--) {
+            var key = s.key(i);
+            if (key && key.indexOf(PREFIX + prefix) === 0) {
+                s.removeItem(key);
+            }
+        }
+    } catch (e) {
+        // storage unavailable
+    }
+}

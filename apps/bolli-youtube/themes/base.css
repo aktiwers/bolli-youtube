@@ -49,6 +49,7 @@ html, body { margin: 0; width: 1280px; height: 720px; overflow: hidden; backgrou
 .osd-logo { float: left; width: 44px; height: 44px; margin-right: 14px; border-radius: 10px; }
 .osd-channel { font-size: 17px; font-weight: 600; color: rgba(255, 255, 255, .6); line-height: 44px; }
 .osd-now { font-size: 34px; font-weight: 700; margin-top: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.osd-meta { margin-top: 8px; font-size: 18px; line-height: 24px; color: #f1f1f1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .osd-time-line { display: block; margin-top: 16px; height: 20px; }
 .osd-time { display: inline-block; width: 140px; font-size: 16px; font-weight: 600; color: rgba(255, 255, 255, .7); vertical-align: middle; }
 .osd-bar { position: relative; display: inline-block; width: 1000px; height: 5px; border-radius: 3px; background: rgba(255, 255, 255, .25); vertical-align: middle; }

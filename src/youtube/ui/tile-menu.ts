@@ -7,6 +7,7 @@
 // tile disappears at once.
 
 import { PROBLEM, toast } from './toast.js';
+import { tr } from '../core/i18n.js';
 import { dearrowTitle } from '../api/dearrow.js';
 import { commandsOf, MenuItem, Page, pageOf, toastOf, Video } from '../api/feed.js';
 import { tileMenu } from '../api/menu.js';
@@ -25,11 +26,11 @@ export interface TileMenuActions {
 
 /** Opens the video's menu in the panel ("Loading" until YouTube replies) */
 export function openTileMenu(panel: SidePanel, video: Video, actions: TileMenuActions): void {
-    panel.openAsked(dearrowTitle(video.id, video.title) || 'Video', tileMenu(video), function (items) {
+    panel.openAsked(dearrowTitle(video.id, video.title) || tr('Video'), tileMenu(video), function (items) {
         return items.map(function (item) {
             return { label: item.title, stay: saves(item), action: function () { act(panel, video, item, actions); } };
         });
-    }, 'the menu');
+    }, tr('the menu'));
 }
 
 /** The video id a command opens Save to for, or '': a tile menu's addToPlaylistEndpoint, or the context
@@ -64,9 +65,9 @@ function act(panel: SidePanel, video: Video, item: MenuItem, actions: TileMenuAc
                 actions.removed(video);
             }
             run(c).then(function () {
-                toast(said || (c.feedbackEndpoint ? 'Done: YouTube will show fewer like this' : 'Saved'), 'check');
+                toast(said || (c.feedbackEndpoint ? tr('Done: YouTube will show fewer like this') : tr('Saved')), 'check');
             }, function () {
-                toast('YouTube did not take that.', undefined, PROBLEM);
+                toast(tr('YouTube did not take that.'), undefined, PROBLEM);
                 if (out) {
                     actions.kept(video);
                 }

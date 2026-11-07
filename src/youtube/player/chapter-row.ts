@@ -3,10 +3,11 @@
 // video's frame where the chapter begins, from its storyboard (YouTube's TV replies give every chapter the video's
 // own thumbnail), or YouTube's picture of the chapter where those differ. The row scrolls to keep the selected card
 // in the middle; pictures load only for the cards in view and one on either side (while the row is closed, through
-// pictures of their own: a hidden card's background is not fetched).
+// pictures of their own: a hidden card's background is not fetched). A click (the Magic Remote's pointer) on a card
+// selects it, a second plays from it (own-player.ts), as YouTube's.
 
-import { h, toggleClass, translate } from '../../core/dom.js';
-import { clock } from '../../core/time.js';
+import { h, toggleClass, translate } from '../core/dom.js';
+import { clock } from '../core/time.js';
 import { Storyboard, StoryboardFrame, storyboardFrame } from '../api/streams.js';
 import { Chapter } from '../api/watch.js';
 import { chapterIndex } from './bar-marks.js';
@@ -87,6 +88,25 @@ export class ChapterRow {
         this.make();
         toggleClass(this.el, 'by-chapters--open', true);
         this.select(Math.max(0, chapterIndex(this.chapters, t)));
+    }
+
+    /** The card target is in (-1: none; the row closed) */
+    cardAt(target: HTMLElement): number {
+        for (var i = 0; this.open && i < this.cards.length; i++) {
+            if (this.cards[i].contains(target)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /** Selects chapter index (a click on its card); false: it was selected already */
+    pick(index: number): boolean {
+        if (index === this.at) {
+            return false;
+        }
+        this.select(index);
+        return true;
     }
 
     /** Selects the chapter before (way -1) or after (1), if any */

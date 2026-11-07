@@ -74,9 +74,11 @@ export function exitApp(): void {
     }
 }
 
-/** The Magic Remote's pointer is never used: swallow its events in the app */
+/** The pointer's events never reach the app's elements (no native focus, text selection, scrolling or dragging): on
+ * Android it is unused; on webOS core/pointer.ts takes them (its own listeners on document still get them) */
 export function ignorePointer(): void {
-    var events = ['mousemove', 'mousedown', 'mouseup', 'click', 'dblclick', 'mousewheel', 'wheel', 'contextmenu'];
+    var events = ['mousemove', 'mousedown', 'mouseup', 'click', 'dblclick', 'mousewheel', 'wheel', 'contextmenu', 'mouseover',
+        'mouseout', 'selectstart', 'dragstart'];
     var swallow = function (e: Event) {
         e.stopPropagation();
         e.preventDefault();

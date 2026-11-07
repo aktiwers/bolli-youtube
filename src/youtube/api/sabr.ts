@@ -176,12 +176,14 @@ function varint(p: Uint8Array, at: { i: number }): number {
     return n;
 }
 
-function num(f: { [field: number]: (number | Uint8Array)[] }, field: number): number {
+/** A message's first number in field (0: none) */
+export function num(f: { [field: number]: (number | Uint8Array)[] }, field: number): number {
     var v = f[field];
     return v && typeof v[0] === 'number' ? v[0] as number : 0;
 }
 
-function bytes(f: { [field: number]: (number | Uint8Array)[] }, field: number): Uint8Array | null {
+/** A message's first bytes in field (null: none) */
+export function bytes(f: { [field: number]: (number | Uint8Array)[] }, field: number): Uint8Array | null {
     var v = f[field];
     return v && typeof v[0] !== 'number' ? v[0] as Uint8Array : null;
 }
@@ -294,6 +296,19 @@ function umpNumber(b: Uint8Array, at: { i: number }): number {
     return n === 1 ? first : n === 2 ? (first & 0x3f) + b[o + 1] * 64 : n === 3 ? (first & 0x1f) + b[o + 1] * 32 + b[o + 2] * 8192 :
         n === 4 ? (first & 0x0f) + b[o + 1] * 16 + b[o + 2] * 4096 + b[o + 3] * 1048576 :
         b[o + 1] + b[o + 2] * 256 + b[o + 3] * 65536 + b[o + 4] * 16777216;
+}
+
+/** A whole UMP reply's parts, in order (api/onesie.ts) */
+export function umpParts(b: Uint8Array): { type: number; data: Uint8Array }[] {
+    var out: { type: number; data: Uint8Array }[] = [];
+    var at = { i: 0 };
+    while (at.i < b.length) {
+        var type = umpNumber(b, at);
+        var length = umpNumber(b, at);
+        out.push({ type: type, data: b.subarray(at.i, at.i + length) });
+        at.i += length;
+    }
+    return out;
 }
 
 /** Part types (googlevideo's UMPPartId) */

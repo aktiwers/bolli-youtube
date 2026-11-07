@@ -10,13 +10,15 @@
 // open pages. Back from a video returns to where it was picked; Back in the
 // rail goes to the start page, then exits. Debug hooks live in window.__bolli (debug.ts).
 
-import { fadeInImages, h, LAYOUT_HEIGHT, LAYOUT_WIDTH, toggleClass } from '../core/dom.js';
-import { initKeys, KEY, setActive, setHoldOk } from '../core/keys.js';
-import { initPerf, mark, noteKey } from '../core/perf.js';
-import { exitApp, ignorePointer } from '../core/platform.js';
-import { initScreenSaver } from '../core/screensaver.js';
-import { localClock } from '../core/time.js';
-import { View } from '../core/view.js';
+import { fadeInImages, h, LAYOUT_HEIGHT, LAYOUT_WIDTH, toggleClass } from './core/dom.js';
+import { tr } from './core/i18n.js';
+import { initKeys, KEY, setActive, setHoldOk } from './core/keys.js';
+import { initPerf, mark, noteKey } from './core/perf.js';
+import { android, exitApp, ignorePointer } from './core/platform.js';
+import { initPointer, Layer, takesPointer } from './core/pointer.js';
+import { initScreenSaver } from './core/screensaver.js';
+import { localClock } from './core/time.js';
+import { View } from './core/view.js';
 import { PROBLEM, toast } from './ui/toast.js';
 import { googleOf, keptProfiles, ownChannel, Profile, profiles, signOut } from './api/accounts.js';
 import { saveAvatars } from './api/avatars.js';
@@ -25,10 +27,11 @@ import { dearrowFetch, dearrowOn, saveDearrow, Wanted } from './api/dearrow.js';
 import { first, get, home, keptPage, page, Page, pageAhead as fetchPageAhead, PageButton, Rows, searchAhead as fetchSearchAhead, sized, SubChannel, subscriptions, tapAhead, text, toastOf, Video } from './api/feed.js';
 import { freshGuideNames, guideNames } from './api/guide.js';
 import { forgetKept, pruneKept } from './api/kept-pages.js';
+import { prepareNames } from './api/languages.js';
 import { prefs } from './api/prefs.js';
 import { forgetSaves, run } from './api/watch.js';
-import { keepRows, keptFor, keptRows } from './api/kept-rows.js';
-import { account, Identity, isBrand, lastAccount, NO_TOKEN, onAccountChange, useIdentity } from './api/youtube.js';
+import { forgetRows, keepRows, keptFor, keptRows } from './api/kept-rows.js';
+import { account, guestChosen, Identity, isBrand, lastAccount, NO_TOKEN, onAccountChange, useGuest, useIdentity } from './api/youtube.js';
 import { forgetHistorySettings } from './api/account-settings.js';
 import { ListQueue } from './player/list-queue.js';
 import { OwnPlayer } from './player/own-player.js';
@@ -68,12 +71,12 @@ applyBlack(prefs().pureBlack);
 /** Screens that are one YouTube browse page: Library and the topic pages from the TV app's rail (/guide). Films are
  * left out: mostly paid films, which the app's player cannot play */
 var BROWSE: { [id: string]: { label: string; browseId: string } } = {
-    library: { label: 'Library', browseId: 'FElibrary' },
-    gaming: { label: 'Gaming', browseId: 'FEtopics_gaming' },
-    podcasts: { label: 'Podcasts', browseId: 'FEtopics_podcasts' },
-    music: { label: 'Music', browseId: 'FEtopics_music' },
-    movies: { label: 'Movies', browseId: 'FEtopics_movies' },
-    sports: { label: 'Sports', browseId: 'FEtopics_sports' }
+    library: { label: tr('Library'), browseId: 'FElibrary' },
+    gaming: { label: tr('Gaming'), browseId: 'FEtopics_gaming' },
+    podcasts: { label: tr('Podcasts'), browseId: 'FEtopics_podcasts' },
+    music: { label: tr('Music'), browseId: 'FEtopics_music' },
+    movies: { label: tr('Movies'), browseId: 'FEtopics_movies' },
+    sports: { label: tr('Sports'), browseId: 'FEtopics_sports' }
 };
 // YouTube's own names for them, as its guide gave them last (Films, Sport where it says so)
 var named = guideNames();
@@ -82,21 +85,30 @@ for (var browsed in BROWSE) {
 }
 // As the TV app's rail: sections, a divider, topics, Settings at the bottom
 var RAIL: RailItem[] = [
-    { id: 'search', label: 'Search', icon: 'search' },
-    { id: 'home', label: 'Home', icon: 'home' },
-    { id: 'subscriptions', label: 'Subscriptions', icon: 'subscriptions' },
+    { id: 'search', label: tr('Search'), icon: 'search' },
+    { id: 'home', label: tr('Home'), icon: 'home' },
+    { id: 'subscriptions', label: tr('Subscriptions'), icon: 'subscriptions' },
     { id: 'library', label: BROWSE.library.label, icon: 'library' },
     { id: 'gaming', label: BROWSE.gaming.label, icon: 'gaming', divider: true },
     { id: 'podcasts', label: BROWSE.podcasts.label, icon: 'podcasts' },
     { id: 'music', label: BROWSE.music.label, icon: 'music' },
     { id: 'movies', label: BROWSE.movies.label, icon: 'movies' },
     { id: 'sports', label: BROWSE.sports.label, icon: 'sports' },
-    { id: 'settings', label: 'Settings', icon: 'settings', bottom: true }
+    { id: 'settings', label: tr('Settings'), icon: 'settings', bottom: true }
 ];
 // A section shown by resting on its entry waits a moment before asking YouTube (the focus may move on); Right or OK: at once
 var menu = new Rail(RAIL, switchSection, leaveMenu, logoEntries);
 root.appendChild(stage);
 root.appendChild(menu.el);
+// A click on the rail's items moves the keys there (what it is on takes the focus inside: core/pointer.ts); the open
+// rail takes the clicks beside it (pointerLayer)
+takesPointer(menu.el, function (target, under) {
+    if (under) {
+        menuFocused = true;
+        menu.pointed();
+    }
+    return null;
+});
 var tv = new TvApp(document.body);
 mark('tv app');
 var own = new OwnPlayer(document.body);
@@ -148,7 +160,7 @@ var hiddenTimer = 0;
 var SUBSCRIPTIONS_REFRESH_MS = 20 * 60 * 1000;
 /** The account each feed was fetched for (refetched when it changes) */
 var feedAccounts: { [id: string]: string } = {};
-var NO_ACCOUNT = 'No one is signed in. Choose who\'s watching, or add an account: the logo\'s Switch account.';
+var NO_ACCOUNT = tr('No one is signed in. Choose who\'s watching, or add an account: the logo\'s Switch account.');
 /** The section Search was opened from (Back returns there) */
 var beforeSearch = '';
 
@@ -166,15 +178,17 @@ interface Screen extends View {
     focusedVideo?: () => Video | null;
     settled?: boolean;
     retry?(quiet?: boolean): boolean;
+    /** The panel or picker open over it (null: none; core/pointer.ts) */
+    layer?: () => HTMLElement | null;
 }
 
 /** A screen of the account's rows (load), stored across starts; name: used in the load-failure message */
 function feedSection(id: string, load: () => Promise<Rows>, name: string, empty: string, opts?: FeedOptions): FeedView {
-    return new FeedView(yourFeed(id, load), feedTexts(name, empty), openTile, feedOptions(id, opts));
+    return new FeedView(yourFeed(id, load, true), feedTexts(name, empty), openTile, feedOptions(id, opts));
 }
 
 function feedTexts(name: string, empty: string): FeedTexts {
-    return { empty: empty, noAccount: NO_ACCOUNT, failed: 'Could not load ' + name + '. Press OK to try again.' };
+    return { empty: empty, noAccount: NO_ACCOUNT, failed: tr('Could not load {1}. Press OK to try again.', name) };
 }
 
 /** Page options: full screen with a back arrow when the theme wants it, page buttons, fade-in as rows arrive */
@@ -209,7 +223,7 @@ function openSubChannel(c: SubChannel): void {
             var next = rows.shelves.length ? rows.shelves[rows.shelves.length - 1].next : '';
             return { title: c.title, next: '', shelves: [{ title: '', videos: videos, grid: true, next: next }] };
         });
-    }, feedTexts(c.title, 'No videos from ' + c.title + ' yet.'), openTile, pageOptions()));
+    }, feedTexts(c.title, tr('No videos from {1} yet.', c.title)), openTile, pageOptions()));
 }
 
 /** All subscribed channels, A-Z, as round tiles (Subscriptions' All); OK opens one */
@@ -220,8 +234,8 @@ function openChannels(list: SubChannel[]): void {
         byId[id] = c;
         return { id: id, title: c.title, channel: '', length: '', info: '', page: c.page, image: c.picture, round: true };
     });
-    var rows: Rows = { title: 'All subscriptions', next: '', shelves: [{ title: '', videos: videos, grid: true }] };
-    pushPage(new FeedView(function () { return Promise.resolve(rows); }, feedTexts('your subscriptions', 'No subscriptions yet.'),
+    var rows: Rows = { title: tr('All subscriptions'), next: '', shelves: [{ title: '', videos: videos, grid: true }] };
+    pushPage(new FeedView(function () { return Promise.resolve(rows); }, feedTexts(tr('your subscriptions'), tr('No subscriptions yet.')),
         function (v) { openSubChannel(byId[v.id]); }, pageOptions()));
 }
 
@@ -230,15 +244,15 @@ function section(id: string): Screen {
     if (!sections[id]) {
         var browse = BROWSE[id];
         sections[id] = id === 'search' ? new SearchView(openTile, leaveSearch, searchAhead) :
-            id === 'settings' ? new SettingsView(function () { return cast.linkCode(); }, RAIL.filter(function (r) { return !r.bottom; }), question) :
-            id === 'home' ? feedSection(id, home, 'Home', 'Nothing on Home yet.', {
+            id === 'settings' ? new SettingsView(function () { return cast.linkCode(); }, RAIL.filter(function (r) { return !r.bottom; }), question, restartApp) :
+            id === 'home' ? feedSection(id, home, tr('Home'), tr('Nothing on Home yet.'), {
                 // As YouTube: a search bar (OK goes to Search) and big tiles in the focused row
                 onSearch: openSearch,
                 onNudge: pressNudge,
                 big: metrics().ways.homeBig
             }) :
             id === 'subscriptions' ? new SubscriptionsView(yourFeed(id, subscriptions),
-                feedTexts('your subscriptions', 'No videos from your subscriptions.'), openTile,
+                feedTexts(tr('your subscriptions'), tr('No videos from your subscriptions.')), openTile,
                 feedOptions(id, { refreshMs: SUBSCRIPTIONS_REFRESH_MS }), openSubChannel, openChannels, function (c) {
                     // Focus rested on a channel: prefetch its page so OK opens it at once
                     if (c.channel && prefs().preload) {
@@ -246,9 +260,9 @@ function section(id: string): Screen {
                     }
                 }) :
             id === 'library' ? new LibraryView(yourFeed(id, function () { return page({ browseId: browse.browseId }); }),
-                feedTexts('your library', 'Nothing in your library yet.'), openTile, feedOptions(id)) :
+                feedTexts(tr('your library'), tr('Nothing in your library yet.')), openTile, feedOptions(id)) :
             feedSection(id, function () { return page({ browseId: browse.browseId }); }, browse.label,
-                'Nothing in ' + browse.label + ' yet.', {
+                tr('Nothing in {1} yet.', browse.label), {
                     // Topic pages have Home's search bar, as in YouTube (Library has none)
                     onSearch: openSearch
                 });
@@ -314,7 +328,7 @@ function voiceSearch(): void {
     switchSection('search');
     leaveMenu();
     if (!(sections.search as SearchView).voice()) {
-        toast('Voice search does not work on this device.', undefined, PROBLEM);
+        toast(tr('Voice search does not work on this device.'), undefined, PROBLEM);
     }
 }
 
@@ -368,9 +382,9 @@ function takeOut(view: Screen): void {
  * to show at once) or any other */
 function openPage(p: Page, known?: KnownChannel): void {
     var texts = {
-        empty: 'Nothing here yet.',
+        empty: tr('Nothing here yet.'),
         noAccount: NO_ACCOUNT,
-        failed: 'Could not load this page. Press OK to try again.'
+        failed: tr('Could not load this page. Press OK to try again.')
     };
     pushPage(isChannel(p) ? new ChannelView(p, texts, openTile, openPage, openSearch, known) :
         new FeedView(function () { return keptPage(p); }, texts, openTile, pageOptions()));
@@ -391,7 +405,7 @@ function pressPageButton(b: PageButton, view: FeedView): void {
             } };
         }), -1);
     } else if (toggle) {
-        apply(toggle, 'on', !toggle.on, toggle.commands[toggle.on ? 1 : 0], function () { view.drawButtons(); }, 'YouTube did not take the change. Try again.');
+        apply(toggle, 'on', !toggle.on, toggle.commands[toggle.on ? 1 : 0], function () { view.drawButtons(); }, tr('YouTube did not take the change. Try again.'));
     } else if (ask) {
         askToClear(question, ask, function () { view.reload(); });
     } else if (b.play) {
@@ -448,14 +462,16 @@ function openTile(video: Video): void {
     }
 }
 
-/** An account feed loader (null for a guest); records the account and stores the rows for the next start */
-function yourFeed(name: string, load: () => Promise<Rows>): () => Promise<Rows | null> {
+/** An account feed loader (for a guest YouTube's signed-out rows where guestRows, else null); records the account and
+ * stores the rows for the next start */
+function yourFeed(name: string, load: () => Promise<Rows>, guestRows?: boolean): () => Promise<Rows | null> {
     return function () {
         return account().then(function (id) {
             feedAccounts[name] = id;
-            // A guest ("Who's watching?" asks: knowAccount)
+            // A guest: YouTube's signed-out rows where it has some (guestRows: Home, the topic pages), not stored; none
+            // of an account's own lists (Subscriptions, Library)
             if (!id) {
-                return null;
+                return guestRows ? load() : null;
             }
             return load().then(function (rows) {
                 // Stored after they are drawn, so storing does not delay drawing
@@ -589,18 +605,29 @@ var namesAsked: { [key: string]: boolean } = {};
 /** Requested size of the account picture in the logo's list (shown at 28 px on a 1.5x screen) */
 var RAIL_PICTURE_PX = 64;
 
-/** Looks up the current account (stored name and picture; if unknown, requested once per run); for a guest, opens
- * "Who's watching?" */
+/** Looks up the current account (stored name and picture; if unknown, requested once per run); with none, opens "Who's
+ * watching?" (not where Guest was chosen there) */
 function knowAccount(): void {
     keptProfiles().then(function (list) {
         me = list[0] && list[0].current ? list[0] : null;
         if (!me) {
-            askAccount();
+            guestChosen().then(function (guest) {
+                if (!guest) {
+                    askAccount();
+                }
+            }, function () { return undefined; });
         } else if (!me.name && !namesAsked[me.key]) {
             namesAsked[me.key] = true;
             profiles().then(function (fresh) { me = fresh[0] && fresh[0].current ? fresh[0] : null; }, function () { return undefined; });
         }
     }, function () { return undefined; });
+}
+
+/** Starts the app again (what it keeps across starts saved first) */
+function restartApp(): void {
+    saveAvatars();
+    saveDearrow();
+    window.location.reload();
 }
 
 /** The logo's list: the account ("Your channel", Sign out), Switch account, Restart app (Settings is at the rail's
@@ -609,13 +636,13 @@ function logoEntries(): RailEntry[] {
     var p = me;
     var list: RailEntry[] = [];
     if (p) {
-        list.push({ label: p.name || 'Your account', picture: sized(p.picture, RAIL_PICTURE_PX), entries: [
-            { label: 'Your channel', action: function () { openOwnChannel(p!); } },
-            { label: 'Sign out', action: function () { askSignOut(p!); } }
+        list.push({ label: p.name || tr('Your account'), picture: sized(p.picture, RAIL_PICTURE_PX), entries: [
+            { label: tr('Your channel'), action: function () { openOwnChannel(p!); } },
+            { label: tr('Sign out'), action: function () { askSignOut(p!); } }
         ] });
     }
-    list.push({ label: 'Switch account', action: openAccounts });
-    list.push({ label: 'Restart app', action: function () { saveAvatars(); saveDearrow(); window.location.reload(); } });
+    list.push({ label: tr('Switch account'), action: openAccounts });
+    list.push({ label: tr('Restart app'), action: restartApp });
     return list;
 }
 
@@ -642,6 +669,17 @@ function openAccounts(): void {
         signInView = signInView || new SignInView(signedIn);
         takeOut(signInView);
         pushPage(signInView);
+    }, function (current) {
+        if (current) {
+            closePage();
+            return;
+        }
+        useGuest().then(function () {
+            forgetRows();
+            switched();
+        }, function () {
+            toast(tr('Could not switch the account. Try again.'), undefined, PROBLEM);
+        });
     });
     // If open in another section, move it here; focus starts on the current account, as in YouTube
     takeOut(accountsView);
@@ -652,7 +690,7 @@ function openAccounts(): void {
 /** After a sign-in: with brand accounts, reopen "Who's watching?" with a brand account focused to pick one (as
  * YouTube's app does; a plain Google account may have an empty Home); otherwise use the account at once */
 function signedIn(identity: Identity): void {
-    toast('Signed in', 'check');
+    toast(tr('Signed in'), 'check');
     keptProfiles().then(function (list) {
         var its = list.filter(function (p) { return p.identity.ownerObfuscatedGaiaId === identity.ownerObfuscatedGaiaId; });
         if (its.length < 2) {
@@ -682,7 +720,7 @@ function signedIn(identity: Identity): void {
 /** Uses identity's account (the app starts over on it); if youtube.com's page fails, says so (orElse: then runs it) */
 function useAccount(identity: Identity, orElse?: () => void): void {
     useIdentity(identity).then(switched, function () {
-        toast('Could not switch the account. Try again.', undefined, PROBLEM);
+        toast(tr('Could not switch the account. Try again.'), undefined, PROBLEM);
         if (orElse) {
             orElse();
         }
@@ -726,10 +764,10 @@ function openOwnChannel(p: Profile): void {
             leaveMenu();
             updateMenu();
         } else {
-            toast('This account has no channel.');
+            toast(tr('This account has no channel.'));
         }
     }, function () {
-        toast('YouTube did not answer. Try again.', undefined, PROBLEM);
+        toast(tr('YouTube did not answer. Try again.'), undefined, PROBLEM);
     });
 }
 
@@ -739,12 +777,13 @@ function askSignOut(p: Profile): void {
     keptProfiles().then(function (list) {
         var google = googleOf(p, list);
         question.open({
-            title: 'Sign out?',
-            subtitle: (google.name || 'This account') + ' and its channels will be signed out on this TV, in YouTube\'s own app too.',
-            picture: google.picture, round: true, yes: 'Sign out', no: 'Cancel'
+            title: tr('Sign out?'),
+            subtitle: google.name ? tr('{1} and its channels will be signed out on this TV, in YouTube\'s own app too.', google.name) :
+                tr('This account and its channels will be signed out on this TV, in YouTube\'s own app too.'),
+            picture: google.picture, round: true, yes: tr('Sign out'), no: tr('Cancel')
         }, function () {
             signOut(google).then(function () {
-                toast('Signed out' + (google.name ? ' of ' + google.name : ''), 'check');
+                toast(google.name ? tr('Signed out of {1}', google.name) : tr('Signed out'), 'check');
                 // Signed out either way: the app starts over (as a guest if no other account can be used)
                 keptProfiles().then(function (left) {
                     if (left.length) {
@@ -759,12 +798,18 @@ function askSignOut(p: Profile): void {
 }
 
 function cannotSignOut(): void {
-    toast('Could not sign out. Try again.', undefined, PROBLEM);
+    toast(tr('Could not sign out. Try again.'), undefined, PROBLEM);
 }
 
-/** A button of YouTube's nudge shown instead of Home's rows (watch history off: "Turn on history"): sends its command,
- * after YouTube's question if any, and toasts YouTube's reply; reloads Home on a change, or hides the nudge when told */
+/** A button of YouTube's nudge shown instead of Home's rows (watch history off: "Turn on history"; a guest: "Sign in"):
+ * sends its command, after YouTube's question if any, and toasts YouTube's reply; reloads Home on a change, or hides
+ * the nudge when told */
 function pressNudge(command: any, view: FeedView): void {
+    // A guest's Home ("Make YouTube your own"): Sign in is "Who's watching?", where an account is picked or added
+    if (first(command, 'signInEndpoint')) {
+        openAccounts();
+        return;
+    }
     var ask = first(command, 'confirmDialogRenderer');
     var send = function (c: any, done: () => void): void {
         run(c).then(function () {
@@ -774,7 +819,7 @@ function pressNudge(command: any, view: FeedView): void {
             }
             done();
         }, function () {
-            toast('YouTube did not take that. Try again.', undefined, PROBLEM);
+            toast(tr('YouTube did not take that. Try again.'), undefined, PROBLEM);
         });
     };
     if (!ask) {
@@ -787,7 +832,7 @@ function pressNudge(command: any, view: FeedView): void {
     }
     question.open({
         title: text(ask.title), subtitle: (ask.dialogMessages || []).map(text).join('\n\n'), picture: '',
-        yes: text(get(ask, 'confirmButton', 'buttonRenderer', 'text')), no: text(get(ask, 'cancelButton', 'buttonRenderer', 'text')) || 'Cancel'
+        yes: text(get(ask, 'confirmButton', 'buttonRenderer', 'text')), no: text(get(ask, 'cancelButton', 'buttonRenderer', 'text')) || tr('Cancel')
     }, function () {
         send(get(ask, 'confirmButton', 'buttonRenderer', 'serviceEndpoint'), function () { view.reload(); });
     });
@@ -822,7 +867,7 @@ function play(video: Video): void {
     if (!tv.play(video.id, updateMenu, t, video.movie)) {
         return;
     }
-    toast('Movies can only play in YouTube\'s player, so it opens there' + (ready ? '' : ' (starting it)'), 'info');
+    toast(ready ? tr('Movies can only play in YouTube\'s player, so it opens there') : tr('Movies can only play in YouTube\'s player, so it opens there (starting it)'), 'info');
 }
 
 /** Where OK on the video's tile starts it: where it stopped here, else YouTube's resume point (or the preview's
@@ -975,7 +1020,8 @@ function allScreens(): Screen[] {
 }
 
 function route(code: number): boolean {
-    if (question.onKey(code)) {
+    // (OK held on a question's button presses it: the pointer's long press too)
+    if (question.onKey(code === KEY.HOLD ? KEY.OK : code)) {
         return true;
     }
     // OK held on a video tile opens its menu; elsewhere it acts as OK
@@ -1139,7 +1185,11 @@ document.addEventListener('visibilitychange', function () {
     // Back in front after a while (e.g. TV off overnight)
     renewScreen();
 });
+// The Magic Remote's pointer as YouTube's app takes it (core/pointer.ts); Android's mouse input is only swallowed
 ignorePointer();
+if (!android()) {
+    initPointer(pressKey, pointerLayer, updateMenu);
+}
 fadeInImages();
 // A failed image leaves its dark frame instead of the broken-image icon
 document.addEventListener('error', function (e) {
@@ -1177,6 +1227,21 @@ function unpressTile(): void {
 /** The focused tile's picture box (null: none) */
 function focusedFrame(): HTMLElement | null {
     return screen().el.querySelector('.bd-tile--focused .bd-tile-frame') as HTMLElement | null;
+}
+
+/** What is open on top, as the keys go (route): a question, a tile menu, the player's panel, the screen's, the logo's
+ * menu, the open rail (a click on the screen beside it closes it, into the screen, as YouTube's guide); the pointer's
+ * clicks go to it alone (null: nothing open) */
+function pointerLayer(): Layer | null {
+    if (question.shown) {
+        return { el: question.el };
+    }
+    var view = screen();
+    var el = tileMenu.layer() || (own.busy ? own.layer() : view.layer && view.layer() || menu.openMenu);
+    if (el) {
+        return { el: el };
+    }
+    return menuFocused && !own.busy ? { el: menu.el, beside: function () { menu.leave(); } } : null;
 }
 
 /** Handles a key (remote, or a casting phone's arrows). Stops the preview; for OK only after it acted, so OK on the
@@ -1448,7 +1513,8 @@ whenScreenRests(function () {
     own.prepare();
     openPages();
     prepareSections(['subscriptions', 'library']);
-    // The rail's names as YouTube's guide gives them now (asked once a week)
+    prepareNames();
+    // The rail's names as YouTube's guide gives them now (asked once a week, and after a language change)
     freshGuideNames().then(function (names) {
         for (var id in BROWSE) {
             var name = names[BROWSE[id].browseId];

@@ -4,7 +4,8 @@
 // options and Unsubscribe open in the side panel. Save to lists the
 // playlists (Watch later first) in the side panel.
 
-import { setText, toggleClass } from '../../core/dom.js';
+import { setText, toggleClass } from '../core/dom.js';
+import { tr } from '../core/i18n.js';
 import { PROBLEM, toast } from './toast.js';
 import { clear } from '../api/account-settings.js';
 import { Ask } from '../api/feed.js';
@@ -51,17 +52,17 @@ export function pressSubscribe(sub: Subscribe, channel: string, panel: SidePanel
         draw();
     };
     if (!sub.subscribed) {
-        apply(sub, 'subscribed', true, sub.on, drawn, 'Could not subscribe.', 'Subscribed to ' + channel);
+        apply(sub, 'subscribed', true, sub.on, drawn, tr('Could not subscribe.'), tr('Subscribed to {1}', channel));
         return;
     }
     panel.open(channel, function () {
         var lines = sub.bell.map(function (b, i) {
-            return { label: 'Notifications: ' + b.name, chosen: i === sub.bellAt, action: function () {
-                apply(sub, 'bellAt', i, b.command, draw, 'Could not change the notifications.');
+            return { label: tr('Notifications: {1}', b.name), chosen: i === sub.bellAt, action: function () {
+                apply(sub, 'bellAt', i, b.command, draw, tr('Could not change the notifications.'));
             } };
         });
-        return lines.concat([{ label: 'Unsubscribe', chosen: false, action: function () {
-            apply(sub, 'subscribed', false, sub.off, drawn, 'Could not unsubscribe.', 'Unsubscribed from ' + channel);
+        return lines.concat([{ label: tr('Unsubscribe'), chosen: false, action: function () {
+            apply(sub, 'subscribed', false, sub.off, drawn, tr('Could not unsubscribe.'), tr('Unsubscribed from {1}', channel));
         } }]);
     });
 }
@@ -79,16 +80,16 @@ export function openSaveTo(panel: SidePanel, videoId: string, push: boolean, sav
         tell(options);
         return options;
     });
-    panel.openAsked('Save to', asked, function (options) {
-        return !options.length ? [{ label: 'No playlists.', plain: true }] : options.map(function (o) {
+    panel.openAsked(tr('Save to'), asked, function (options) {
+        return !options.length ? [{ label: tr('No playlists.'), plain: true }] : options.map(function (o) {
             return { label: o.title, chosen: o.saved, stay: true, action: function () {
                 apply(o, 'saved', !o.saved, o.saved ? o.remove : o.add, function () {
                     tell(options);
                     panel.refresh();
-                }, 'Could not save.');
+                }, tr('Could not save.'));
             } };
         });
-    }, 'your playlists', push);
+    }, tr('your playlists'), push);
 }
 
 /** Whether sub's channel is subscribed, as changed here lately (YouTube's replies lag): sub is updated to that */
@@ -103,7 +104,7 @@ export function subscribed(sub: Subscribe | null): boolean {
 /** Draws a Subscribe button as YouTube does: Subscribe, or Subscribed (with class on) */
 export function drawSubscribe(el: HTMLElement, sub: Subscribe | null, on: string): void {
     var yes = subscribed(sub);
-    setText(el, yes ? 'Subscribed' : 'Subscribe');
+    setText(el, yes ? tr('Subscribed') : tr('Subscribe'));
     toggleClass(el, on, yes);
 }
 
@@ -119,7 +120,7 @@ export function askToClear(question: Question, ask: Ask, done?: () => void, clos
                 done();
             }
         }, function () {
-            toast('YouTube could not do it. Try again.', undefined, PROBLEM);
+            toast(tr('YouTube could not do it. Try again.'), undefined, PROBLEM);
         });
     }, closed);
 }

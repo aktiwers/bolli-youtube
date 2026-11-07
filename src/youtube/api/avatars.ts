@@ -4,7 +4,7 @@
 // Subscriptions list, channel pages and /next. Persisted in localStorage
 // (bolli.v1.youtube.avatars), newest last.
 
-import { load, save } from '../../core/store.js';
+import { load, save } from '../core/store.js';
 
 var KEY = 'youtube.avatars';
 /** Most avatars kept; the oldest are dropped first */

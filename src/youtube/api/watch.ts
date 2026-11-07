@@ -279,15 +279,11 @@ export function watchInfoOf(reply: any): WatchInfo {
     var owner = get(meta, 'owner', 'videoOwnerRenderer') || {};
     var panels: any[] = (reply && reply.engagementPanels || []).map(function (p: any) { return p.engagementPanelSectionListRenderer || {}; });
     var panel = function (id: string): any { return panels.filter(function (p) { return p.panelIdentifier === id; })[0]; };
-    var likes = '';
-    all(panel('video-description-ep-identifier'), 'factoidRenderer').forEach(function (f) {
-        if (/like/i.test(text(f.label))) {
-            likes = text(f.value);
-        }
-    });
     var sets = get(results, 'autoplay', 'autoplay', 'sets') || [];
     var buttons = get(reply, 'transportControls', 'transportControlsRenderer', 'buttons');
     var likeButton = first(buttons, 'likeButtonRenderer');
+    // The likes as YouTube writes them in the language asked (its like button's count)
+    var likes = text(get(likeButton, 'likeCountText'));
     var subscribeButton = first(buttons, 'subscribeButtonRenderer') || first(owner, 'subscribeButtonRenderer');
     var related: Video[] = [];
     rowsOf(get(results, 'pivot')).shelves.forEach(function (s) {
