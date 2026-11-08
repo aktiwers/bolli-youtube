@@ -803,8 +803,8 @@ function fromLockup(lockup: any): Video | null {
 
 /** A video's age within a day, as YouTube writes it in the app's languages (it gives no date, only the words): seconds,
  * minutes or hours ago (3 hours ago, vor 3 Stunden, for 3 timer siden, hace 3 horas, il y a 3 heures, 3 ore fa, 3 uur
- * geleden, 3 godziny temu, há 3 horas, 3 часа назад, 3 時間前) */
-var WITHIN_A_DAY = /\d\s*(second|segund|sekund|minut|minuu|hour|hora|heure|stund|\btimer?\b|\bor[ae]\b|\buur\b|godzin|час|секунд|минут|時間前|分前|秒前)/i;
+ * geleden, 3 órával ezelőtt, 3 godziny temu, há 3 horas, 3 часа назад, 3 時間前) */
+var WITHIN_A_DAY = /\d\s*(second|segund|sekund|minut|minuu|hour|hora|heure|stund|\btimer?\b|\bor[ae]\b|\buur\b|órá|perc|másodperc|godzin|час|секунд|минут|時間前|分前|秒前)/i;
 
 /** Whether a video's info line (its views and age) says it came within a day */
 export function withinADay(info: string): boolean {

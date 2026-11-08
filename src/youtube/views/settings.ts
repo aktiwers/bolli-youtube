@@ -17,7 +17,7 @@ import { android } from '../core/platform.js';
 import { View } from '../core/view.js';
 import { AccountGroup, AccountSetting, historySettings } from '../api/account-settings.js';
 import { Ask } from '../api/feed.js';
-import { ALWAYS, languageName } from '../api/languages.js';
+import { ALWAYS, languageName, offeredLanguages } from '../api/languages.js';
 import { HIGHEST, prefs, Prefs, setPref } from '../api/prefs.js';
 import { PARTS } from '../api/sponsorblock.js';
 import { apply, askToClear } from '../ui/account.js';
@@ -126,14 +126,14 @@ function autoplay(): Setting {
 /** Value of the "More languages" choice in Subtitles */
 var MORE = '+';
 
-/** Subtitles turned on automatically: a language (the default ones plus those added via "More languages"); a choice
- * in the player sets it too. more: opens the search over all languages */
+/** Subtitles turned on automatically: a language (the app's, the default ones, those added via "More languages"); a
+ * choice in the player sets it too. more: opens the search over all languages */
 function subtitles(more: () => void): Setting {
     return pick(tr('Subtitles'), tr('Subtitles Bolli\'s player turns on by itself'), pic('language'), function () {
         var now = prefs().captions;
         var on = tr('on in every video with subtitles, translated by YouTube if needed');
         var list: Choice[] = [{ value: '', name: tr('Off'), note: tr('only when you turn them on in the player') }];
-        ALWAYS.concat(prefs().captionLanguages).forEach(function (code) {
+        offeredLanguages().forEach(function (code) {
             list.push({ value: code, name: languageName(code), note: on });
         });
         if (now && !list.some(function (c) { return c.value === now; })) {

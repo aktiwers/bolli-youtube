@@ -35,6 +35,7 @@ var COUNTS: { [code: string]: { steps: [number, string][]; mark: string; group?:
     es: { steps: [[1e6, '\u00a0M'], [1e3, '\u00a0K']], mark: ',' },
     fr: { steps: [[1e9, '\u00a0Md'], [1e6, '\u00a0M'], [1e3, '\u00a0k']], mark: ',' },
     it: { steps: [[1e9, '\u00a0Mld'], [1e6, '\u00a0Mln'], [1e3, 'K']], mark: ',' },
+    hu: { steps: [[1e9, '\u00a0Mrd'], [1e6, '\u00a0M'], [1e3, '\u00a0E']], mark: ',' },
     nl: { steps: [[1e9, '\u00a0mld.'], [1e6, '\u00a0mln.'], [1e3, 'K']], mark: ',' },
     pl: { steps: [[1e9, '\u00a0mld'], [1e6, '\u00a0mln'], [1e3, '\u00a0tys.']], mark: ',' },
     pt: { steps: [[1e9, '\u00a0bi'], [1e6, '\u00a0mi'], [1e3, '\u00a0mil']], mark: ',' },

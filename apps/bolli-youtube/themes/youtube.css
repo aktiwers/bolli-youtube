@@ -241,7 +241,7 @@ html, body { background: #0f0f0f; }
 .by-settings-list { -webkit-transition: -webkit-transform .2s ease; }
 .by-settings-group { height: 34px; padding: 8px 12px 0; line-height: 34px; font-size: 16px; font-weight: 500; color: #aaa;
                      text-transform: uppercase; }
-.by-settings-item, .by-settings-button { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.by-settings-group, .by-settings-item, .by-settings-button { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .by-settings-item { height: 52px; padding: 0 12px; border-radius: 11px; line-height: 52px; font-size: 20px; color: #f1f1f1; }
 .by-settings-item--at { background: #272727; }
 .by-settings-line { left: 393px; top: 128px; bottom: 0; width: 1px; background: #303030; }

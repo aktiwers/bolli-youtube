@@ -36,7 +36,7 @@ var ALL =
     've:Venda|vi:Vietnamese|war:Waray|cy:Welsh|fy:Western Frisian|wo:Wolof|xh:Xhosa|yi:Yiddish|yo:Yoruba|' +
     'zu:Zulu';
 
-/** Subtitle languages always in Settings' list (and first in the player's) */
+/** Subtitle languages always in Settings' list (and first in the player's), after the app's language */
 export var ALWAYS = ['da', 'en'];
 
 var list: Language[] | null = null;
@@ -85,10 +85,20 @@ export function languages(): Language[] {
     return list;
 }
 
-/** Settings' subtitle languages in order: Danish, English, those added from More languages, the current one */
+/** The subtitle languages Settings lists as its own: the app's language (one of these: in its place), Danish,
+ * English, those added from More languages (each once) */
+export function offeredLanguages(): string[] {
+    return once((ALWAYS.indexOf(language()) < 0 ? [language()] : []).concat(ALWAYS, prefs().captionLanguages));
+}
+
+/** Settings' subtitle languages in order: the offered ones, the current one */
 export function subtitleLanguages(): string[] {
-    return ALWAYS.concat(prefs().captionLanguages, [prefs().captions]).filter(function (code, i, all) {
-        return !!code && all.indexOf(code) === i;
+    return once(offeredLanguages().concat([prefs().captions]));
+}
+
+function once(codes: string[]): string[] {
+    return codes.filter(function (code, i) {
+        return !!code && codes.indexOf(code) === i;
     });
 }
 

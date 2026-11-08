@@ -14,6 +14,7 @@ export var LANGUAGES: { code: string; name: string }[] = [
     { code: 'es', name: 'Español' },
     { code: 'fr', name: 'Français' },
     { code: 'it', name: 'Italiano' },
+    { code: 'hu', name: 'Magyar' },
     { code: 'nl', name: 'Nederlands' },
     { code: 'pl', name: 'Polski' },
     { code: 'pt', name: 'Português' },
