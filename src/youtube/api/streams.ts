@@ -19,10 +19,10 @@ import { android } from '../core/platform.js';
 import { load, save } from '../core/store.js';
 import { Ended, paramBytes, text } from './feed.js';
 import { languageOrder, subtitleLanguages, trackName } from './languages.js';
-import { forgetScript, playerScript } from './player-script.js';
+import { forgetScript, playerScript, playerSts } from './player-script.js';
 import { SabrClient } from './sabr.js';
 import { forgetOnesie, onesie, prepareOnesie } from './onesie.js';
-import { freshSignIn, innertubeVia, lastAccount, newCpn, noAnswer, postYouTubeJson, restartPage, tvClient, youtubeLanguage } from './youtube.js';
+import { freshSignIn, innertubeViaText, lastAccount, newCpn, noAnswer, objectAt, postYouTubeJson, restartPage, tvClient, youtubeLanguage } from './youtube.js';
 
 var PLAYER = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
 var VISITOR = 'https://www.youtube.com/sw.js_data';
@@ -223,8 +223,9 @@ var AGAIN = 3;
 /** A SABR start from cold first fetches and runs YouTube's player script (~4 s): its requests count as hung only after
  * this long */
 var SABR_STUCK_MS = 8000;
-/** How long a /player reply's tracking URLs stay usable */
+/** How long a /player reply's tracking URLs stay usable, and how many videos' are kept */
 var TRACKING_MS = 10 * 60 * 1000;
+var TRACKING_MAX = 4;
 /** at: when it was asked, or answered once done */
 var kept: { id: string; sabr: boolean; at: number; done: boolean; streams: Promise<Streams> }[] = [];
 
@@ -485,15 +486,22 @@ export function forgetStreams(id: string): void {
     kept = kept.filter(function (k) { return k.id !== id; });
 }
 
-/** Tracking URLs of the signed-in TV client's last /player reply and its token, so History reporting (api/stats.ts)
- * needs no second request */
-var tracking: { id: string; at: number; token: string; tracking: any } | null = null;
+/** History's report URLs (a /player reply's playbackTracking) and the playback id that reply was asked with: the
+ * reports name the same */
+export interface Tracking {
+    tracking: any;
+    cpn: string;
+}
 
-/** The playbackTracking of a recent SABR /player reply for id with this token, usable once (null: none) */
-export function takeTracking(id: string, token: string): any {
-    var t = tracking;
-    tracking = null;
-    return t && t.id === id && t.token === token && Date.now() - t.at < TRACKING_MS ? t.tracking : null;
+/** Tracking of the last signed-in /player replies (the newest TRACKING_MAX videos': a preload asks for others), with
+ * their video and token, so History reporting (api/stats.ts) needs no second request */
+var tracked: (Tracking & { id: string; at: number; token: string })[] = [];
+
+/** The Tracking of a recent signed-in /player reply for id with this token, usable once (null: none) */
+export function takeTracking(id: string, token: string): Tracking | null {
+    var t = tracked.filter(function (one) { return one.id === id; })[0];
+    tracked = tracked.filter(function (one) { return one !== t; });
+    return t && t.token === token && Date.now() - t.at < TRACKING_MS ? t : null;
 }
 
 /** When the page may be restarted again for YouTube asking (0: now): RESTART_AGAIN_MS after a restart, RESTART_IDLE_MS
@@ -518,26 +526,56 @@ function asksRestart(playable: { errorScreen?: unknown }): boolean {
 var SIGNED_IN_AS: { [field: string]: string } = { deviceMake: 'Samsung', deviceModel: 'UKS9800', osName: 'Tizen', osVersion: '2.4.0',
     userAgent: 'Mozilla/5.0 (SMART-TV; Linux; Tizen 2.4.0) AppleWebKit/538.1 (KHTML, like Gecko) Version/2.4.0 TV Safari/538.1' };
 
-/** The player request as the signed-in TV client (SIGNED_IN_AS, by Onesie), with the player script's signature
- * timestamp (and a reload's token, '' none): the formats, the SABR URL (n transformed by that script) and the client
- * details SABR requests send. Asked to restart, the page, its client details and the script are made anew and it is
- * asked once more (restartAfter; restarted: this is that ask) */
-function askSigned(id: string, reloadToken: string, restarted?: boolean): Promise<Streams> {
-    return Promise.all<any>([playerScript(), tvClient(), prepareOnesie()]).then(function (ready) {
-        var script = ready[0];
+/** A signed-in player request's reply (as text) and how it was asked */
+interface SignedReply {
+    text: string;
+    /** The sign-in it went with (null: none) */
+    sign: { token: string } | null;
+    /** The client fields it was asked as (SIGNED_IN_AS), and this TV's own */
+    as: { [field: string]: string };
+    own: any;
+    cpn: string;
+}
+
+/** The player request as the signed-in TV client (SIGNED_IN_AS, by Onesie) for video id, with the player script's
+ * signature timestamp (sts, asked beside the client details and Onesie's) and a reload's token ('' none): the one way
+ * the app asks it, for playing (askSigned) and for History's report URLs (signedTracking). Rejects with SABR_SCRIPT if
+ * what it needs is not there */
+function signedPlayer(id: string, sts: Promise<number>, reloadToken: string): Promise<SignedReply> {
+    return Promise.all<any>([sts, tvClient(), prepareOnesie()]).then(function (ready) {
         var own = ready[1].context.client;
+        // SIGNED_IN_AS with the TV app's version this TV's /tv page gives
         var as: { [field: string]: string } = { clientVersion: own.clientVersion || '' };
         for (var field in SIGNED_IN_AS) {
             as[field] = SIGNED_IN_AS[field];
         }
-        return Promise.all<any>([freshSignIn(), innertubeVia('player', {
+        var cpn = newCpn();
+        return Promise.all<any>([freshSignIn(), innertubeViaText('player', {
             videoId: id,
-            cpn: newCpn(),
+            cpn: cpn,
             contentCheckOk: true,
             racyCheckOk: true,
-            playbackContext: sabrPlayback(script.sts, reloadToken)
+            playbackContext: sabrPlayback(ready[0], reloadToken)
         }, onesie(as))]).then(function (got) {
-            var reply = got[1] || {};
+            return { text: got[1], sign: got[0], as: as, own: own, cpn: cpn };
+        });
+    }, function (e: Error) {
+        throw { status: 'SABR_SCRIPT', reason: e.message } as NoStreams;
+    });
+}
+
+/** The player request as the signed-in TV client (signedPlayer), with the player script's signature timestamp (and a
+ * reload's token, '' none): the formats, the SABR URL (n transformed by that script) and the client details SABR
+ * requests send; History's report URLs are kept (takeTracking). Asked to restart, the page, its client details and the
+ * script are made anew and it is asked once more (restartAfter; restarted: this is that ask) */
+function askSigned(id: string, reloadToken: string, restarted?: boolean): Promise<Streams> {
+    var asked = playerScript();
+    return signedPlayer(id, asked.then(function (script) { return script.sts; }), reloadToken).then(function (signed) {
+        // (in: the timestamp came from it)
+        return asked.then(function (script) {
+            var own = signed.own;
+            var as = signed.as;
+            var reply = JSON.parse(signed.text) || {};
             var playable = reply.playabilityStatus || {};
             if (playable.status !== 'OK' && asksRestart(playable)) {
                 if (Date.now() >= restartAfter) {
@@ -561,10 +599,14 @@ function askSigned(id: string, reloadToken: string, restarted?: boolean): Promis
                     throw failed;
                 }
                 // Not signed in: as YouTube's player only if there is no account (else its token may just have failed)
-                return (got[0] ? Promise.resolve('') : lastAccount()).then(function (key) {
+                return (signed.sign ? Promise.resolve('') : lastAccount()).then(function (key) {
                     failed.asYouTube = !key;
                     throw failed;
                 });
+            }
+            if (signed.sign && reply.playbackTracking) {
+                tracked = [{ id: id, at: Date.now(), token: signed.sign.token, tracking: reply.playbackTracking, cpn: signed.cpn }]
+                    .concat(tracked.filter(function (one) { return one.id !== id; })).slice(0, TRACKING_MAX);
             }
             var url = reply.streamingData && reply.streamingData.serverAbrStreamingUrl;
             var config = reply.playerConfig && reply.playerConfig.mediaCommonConfig && reply.playerConfig.mediaCommonConfig.mediaUstreamerRequestConfig &&
@@ -577,7 +619,6 @@ function askSigned(id: string, reloadToken: string, restarted?: boolean): Promis
                 if (n) {
                     url = url.replace(/([?&]n=)[^&]*/, '$1' + encodeURIComponent(changed));
                 }
-                tracking = got[0] ? { id: id, at: Date.now(), token: got[0].token, tracking: reply.playbackTracking || null } : null;
                 var s = streamsOf(reply, true);
                 s.sabr = {
                     url: url,
@@ -590,10 +631,18 @@ function askSigned(id: string, reloadToken: string, restarted?: boolean): Promis
                 throw { status: 'SABR_SCRIPT', reason: e.message } as NoStreams;
             });
         });
-    }, function (e: Error) {
-        throw { status: 'SABR_SCRIPT', reason: e.message } as NoStreams;
     }).then(null, function (e: NoStreams | Error) {
         throw noStreams(e);
+    });
+}
+
+/** History's report URLs for video id (api/stats.ts; null: none came): the signed-in player request (signedPlayer), its
+ * playbackTracking alone read from the reply. As this TV's own client, YouTube refuses it without the LG variant's
+ * signature timestamp ("The page needs to be reloaded"); the classic one comes without running the script (playerSts) */
+export function signedTracking(id: string): Promise<Tracking | null> {
+    return signedPlayer(id, playerSts(), '').then(function (signed) {
+        var tracking = objectAt(signed.text, '"playbackTracking":');
+        return tracking ? { tracking: tracking, cpn: signed.cpn } : null;
     });
 }
 

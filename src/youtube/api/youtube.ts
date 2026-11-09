@@ -313,9 +313,9 @@ export interface Via {
     send?: (w: Window, path: string, json: string, headers: { [name: string]: string }) => Promise<string>;
 }
 
-/** innertube by another way (Via) */
-export function innertubeVia(endpoint: string, body: { [key: string]: unknown }, via: Via): Promise<unknown> {
-    return ask(endpoint, body, freshSignIn, false, via).then(JSON.parse);
+/** innertube by another way (Via), its reply as text (parsed whole, or a part read with objectAt) */
+export function innertubeViaText(endpoint: string, body: { [key: string]: unknown }, via: Via): Promise<string> {
+    return ask(endpoint, body, freshSignIn, false, via);
 }
 
 /** innertube with a given token (an account just signed in, before it is stored) */

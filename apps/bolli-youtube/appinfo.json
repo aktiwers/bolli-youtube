@@ -1,6 +1,6 @@
 {
     "id": "org.bolli.youtube",
-    "version": "0.1.371",
+    "version": "0.1.372",
     "vendor": "bolli",
     "type": "web",
     "main": "index.html",
@@ -8,7 +8,6 @@
     "icon": "icon-bolli-80.png",
     "largeIcon": "icon-bolli-130.png",
     "iconColor": "#0d0d12",
-    "resolution": "1920x1080",
     "disableBackHistoryAPI": true,
     "dialAppName": "youtube"
 }

@@ -56,6 +56,8 @@ var holdOk = false;
 var okDown = false;
 var okTimer = 0;
 var okHeld = false;
+/** When a key last reached the app (keyCame; the app's start before any) */
+var keyAt = Date.now();
 
 export function setActive(handler: KeyHandler): void {
     active = handler;
@@ -95,6 +97,18 @@ export function initKeys(): void {
 function releaseOk(): void {
     clearTimeout(okTimer);
     okDown = false;
+}
+
+/** A key reached the app: the remote's, the pointer's click or a casting phone's arrow (main.ts pressKey, which gets
+ * them all) */
+export function keyCame(): void {
+    keyAt = Date.now();
+}
+
+/** When a key last reached the app (ms, as Date.now): screens wait for keys to rest (main.ts), History's reports say
+ * how long ago (api/stats.ts, as YouTube's TV app does) */
+export function lastKeyAt(): number {
+    return keyAt;
 }
 
 function down(code: number): boolean {

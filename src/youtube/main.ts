@@ -12,7 +12,7 @@
 
 import { fadeInImages, h, LAYOUT_HEIGHT, LAYOUT_WIDTH, toggleClass } from './core/dom.js';
 import { tr } from './core/i18n.js';
-import { initKeys, KEY, setActive, setHoldOk } from './core/keys.js';
+import { initKeys, KEY, keyCame, lastKeyAt, setActive, setHoldOk } from './core/keys.js';
 import { initPerf, mark, noteKey } from './core/perf.js';
 import { android, exitApp, ignorePointer } from './core/platform.js';
 import { initPointer, Layer, takesPointer } from './core/pointer.js';
@@ -147,7 +147,6 @@ var clockTimer = 0;
  * stalling pictures and keys */
 var IDLE_START_MS = 2000;
 var START_LATEST_MS = 15000;
-var lastKeyAt = 0;
 /** A video tile focused this long is preloaded (Settings: Videos start sooner; each costs a request and a parse on
  * this app's thread) */
 var PRELOAD_REST_MS = 1500;
@@ -632,7 +631,7 @@ function whenScreenRests(then: () => void, patient?: boolean): void {
         if (!drawnAt && view.settled !== false && !picturesWaiting()) {
             drawnAt = now;
         }
-        var restsAt = drawnAt ? Math.max(drawnAt, lastKeyAt) + IDLE_START_MS : 0;
+        var restsAt = drawnAt ? Math.max(drawnAt, lastKeyAt()) + IDLE_START_MS : 0;
         if (drawnAt && now >= restsAt || !patient && now - since > START_LATEST_MS) {
             then();
         } else {
@@ -1588,7 +1587,7 @@ function pointerLayer(): Layer | null {
  * previewed tile takes the preview over. A playlist's preview plays on while the arrows go to its buttons and back
  * (Settings › Preview on the buttons) */
 function pressKey(code: number): boolean {
-    lastKeyAt = Date.now();
+    keyCame();
     // The screen off: a key wakes it (any, or only Screen off's button) and does nothing else (a playlist's stage plays on)
     if (screenKey(code)) {
         return true;

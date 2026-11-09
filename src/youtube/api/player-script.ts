@@ -19,7 +19,8 @@
 // is needed; the app keeps it too. If all fail, SABR is unavailable and the
 // player carries on. The signature timestamp is handed out as soon as the
 // script is read, so /player is asked while the script still starts in its
-// worker.
+// worker; it is kept per build, so History's /player (api/streams.ts
+// signedTracking) has it without running the script (playerSts).
 
 import { getText } from '../core/http.js';
 import { oldEngine } from '../core/platform.js';
@@ -61,6 +62,8 @@ var KEPT_COUNT = 3;
 /** The script path the last /tv page named: a cold start fetches it beside the page (the path seldom changes), and
  * takes it if the page names it too */
 var PATH_KEY = 'youtube.playerPath';
+/** The last build's signature timestamp ({ build, sts }), so it is known without its script (playerSts) */
+var STS_KEY = 'youtube.playerSts';
 /** The TV player script its /tv page names: /s/player/<id>/tv-player….vflset/<name>.js */
 var PLAYER_PATH = /\/s\/player\/([\w-]+)\/tv-player[\w-]*\.vflset\/([\w-]+)\.js/;
 /** The variant of the script used (the /tv page names the build; an LG TV's YouTube app runs another variant, tcl) */
@@ -93,22 +96,19 @@ export function playerScript(): Promise<PlayerScript> {
     clearTimeout(idleTimer);
     if (!script) {
         fetchEarly();
-        var made: Promise<PlayerScript> = script = Promise.all<any>([tvPage(), youtubePage()]).then(function (got) {
-            var found = PLAYER_PATH.exec(got[0].html);
-            if (!found) {
-                // (a page without it, e.g. an interstitial: the next try asks for the page again)
-                forgetTvPage();
-                throw lasting('No TV player script');
-            }
-            // The build's classic variant, whatever variant the page names (that a Samsung TV runs: SIGNED_IN_AS)
-            var file = found[1] + '/' + CLASSIC + '.js';
-            return scriptAt(got[1] as Window, '/s/player/' + found[1] + '/' + CLASSIC + '.vflset/' + CLASSIC + '.js').then(function (r) {
+        var made: Promise<PlayerScript> = script = classicScript().then(function (c) {
+            var file = c.build + '/' + CLASSIC + '.js';
+            return scriptAt(c.w, c.path).then(function (r) {
                 if (r.status !== 200) {
                     throw new Error('The TV player script: ' + r.status);
                 }
                 var js = r.text;
-                // (as yt-dlp finds it: a space or the short name would not lose it; a whole name, not the end of another)
-                var sts = +(/\b(?:signatureTimestamp|sts)\s*:\s*(\d{5,})/.exec(js) || [])[1];
+                var sts = stsIn(js);
+                keepSts(c.build, sts);
+                if (!sts) {
+                    // (playerSts does not read it again either)
+                    stsFailedAt = Date.now();
+                }
                 if (!sts || js.lastIndexOf(END) < 0) {
                     throw lasting('The TV player script has an unexpected shape');
                 }
@@ -146,6 +146,67 @@ export function playerScript(): Promise<PlayerScript> {
         }
     }, function () { return undefined; });
     return script;
+}
+
+/** The build the /tv page names and the path of its classic variant, whatever variant the page names (that a Samsung
+ * TV runs: api/streams.ts SIGNED_IN_AS); none named (e.g. an interstitial): the next try asks for the page again */
+function classicScript(): Promise<{ w: Window; build: string; path: string }> {
+    return Promise.all<any>([tvPage(), youtubePage()]).then(function (got) {
+        var found = PLAYER_PATH.exec(got[0].html);
+        if (!found) {
+            forgetTvPage();
+            throw lasting('No TV player script');
+        }
+        return { w: got[1] as Window, build: found[1], path: '/s/player/' + found[1] + '/' + CLASSIC + '.vflset/' + CLASSIC + '.js' };
+    });
+}
+
+/** The signature timestamp being read for playerSts (one read at a time), and when one last found none */
+var stsAsked: Promise<number> | null = null;
+var stsFailedAt = 0;
+
+/** The signature timestamp of the classic script the /tv page names, without running it: the script's if it is loaded
+ * (playerScript), else the one kept for that build, else read from the script (its 2.5 MB fetched and searched once
+ * per build; not again for FAILED_MS after it had none) */
+export function playerSts(): Promise<number> {
+    return (script ? script.then(function (s) { return s.sts; }) : Promise.reject(null)).then(null, function () {
+        if (Date.now() - stsFailedAt < FAILED_MS) {
+            throw new Error('The TV player script: no signature timestamp');
+        }
+        if (!stsAsked) {
+            var asked = stsAsked = classicScript().then(function (c) {
+                var known = load<{ build: string; sts: number }>(STS_KEY);
+                return known && known.build === c.build ? known.sts : scriptAt(c.w, c.path).then(function (r) {
+                    var sts = r.status === 200 ? stsIn(r.text) : 0;
+                    if (!sts) {
+                        throw lasting('The TV player script: no signature timestamp');
+                    }
+                    keepSts(c.build, sts);
+                    return sts;
+                });
+            });
+            // (a failure that stays as long as the script does is not asked again for a while; the network's is)
+            asked.then(function () { stsAsked = null; }, function (e?: { lasting?: boolean }) {
+                stsAsked = null;
+                stsFailedAt = e && e.lasting ? Date.now() : 0;
+            });
+        }
+        return stsAsked;
+    });
+}
+
+/** Keeps build's signature timestamp (none: nothing; written only when it changed) */
+function keepSts(build: string, sts: number): void {
+    var known = load<{ build: string; sts: number }>(STS_KEY);
+    if (sts && !(known && known.build === build && known.sts === sts)) {
+        save(STS_KEY, { build: build, sts: sts });
+    }
+}
+
+/** The signature timestamp in a script's text (0: none; as yt-dlp finds it: a space or the short name would not lose
+ * it; a whole name, not the end of another) */
+function stsIn(js: string): number {
+    return +(/\b(?:signatureTimestamp|sts)\s*:\s*(\d{5,})/.exec(js) || [])[1] || 0;
 }
 
 /** Starts fetching the script at the path the last /tv page named, if any (the page is often not loaded yet: a cold

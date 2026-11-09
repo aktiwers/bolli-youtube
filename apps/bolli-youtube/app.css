@@ -5,7 +5,7 @@
 .by-hidden { position: absolute; left: -9999px; top: 0; width: 10px; height: 10px; border: 0; }
 
 /* YouTube's TV app (player/tv-app.ts): over everything while a video plays.
-   Its page is drawn at the TV's size (1920x1080), so it undoes the app's zoom. */
+   Its page is laid out at 1920x1080 and shrunk to the app's 1280x720 units: the whole window on any TV. */
 .by-tv { position: fixed; left: 0; top: 0; width: 1920px; height: 1080px; border: 0; z-index: 50; background: #000; zoom: .6667; }
 
 /* The own player (player/own-player.ts): over everything while a video plays, its info bar (base.css .osd) over the video */
