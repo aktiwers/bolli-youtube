@@ -10,10 +10,22 @@
 // over its corners. It stops on any other key, after PREVIEW_MS (or at the
 // video's end), its sound fading out over the last FADE_MS to silence as it
 // stops, or when a player shows; its position is kept a while so the opened
-// video resumes there. Fails quietly (the picture stays).
+// video resumes there. Fails quietly (the picture stays). A playlist's frame
+// may play the whole video (Settings › Autoplay on the playlist page), and is
+// told when it ends, so the next one plays there.
+
+/** How a preview shows: its look (own-player.ts PeekLook); whole (the whole video, its sound kept); resume (the video
+ * the player closed, kept loaded, plays on where it was, at once: a playlist's frame after Back); done (called once it
+ * stops), ended (called when the video reached its end, after done) */
+export interface PreviewWay extends PeekLook {
+    whole?: boolean;
+    resume?: boolean;
+    done?: () => void;
+    ended?: () => void;
+}
 
 import { kindOf, pickFormat, streams } from '../api/streams.js';
-import { OwnPlayer, startOf } from './own-player.js';
+import { OwnPlayer, PeekLook, startOf } from './own-player.js';
 
 var HEIGHT = 480;
 /** How long a preview plays at most, and how long its sound fades out before it stops */
@@ -37,13 +49,32 @@ export class TilePreview {
 
     constructor(private player: OwnPlayer) {}
 
-    /** Previews video id in frame (a tile's picture box), with sound if sound; square: no rounded corners (a channel's
-     * banner); done: called once it stops */
-    show(id: string, frame: HTMLElement, sound: boolean, square?: boolean, done?: () => void): void {
+    /** Previews video id in frame (a tile's picture box), with sound if sound, as way says */
+    show(id: string, frame: HTMLElement, sound: boolean, way?: PreviewWay): void {
         this.stop();
-        this.done = done || null;
+        var how = way || {};
+        this.done = how.done || null;
         var gen = this.gen;
         var self = this;
+        // Stopped by itself (at its end: how.ended told, after done)
+        var stopped = function (ended: boolean): void {
+            if (gen === self.gen) {
+                self.stop();
+                if (ended && how.ended) {
+                    how.ended();
+                }
+            }
+        };
+        if (how.resume) {
+            var rect = frame.getBoundingClientRect();
+            if (rect.width && rect.height && this.player.peekKept(id, rect, sound, stopped, how)) {
+                this.id = id;
+                if (!how.whole) {
+                    this.limit(PREVIEW_MS);
+                }
+            }
+            return;
+        }
         startOf(streams(id), id, 0).then(function (start) {
             var s = start.streams;
             var chosen = start.formats;
@@ -61,17 +92,20 @@ export class TilePreview {
             self.id = id;
             // (the tile's picture, laid over the video until it moves)
             var picture = (frame.tagName === 'IMG' ? frame : frame.querySelector('.bd-tile-img')) as HTMLImageElement | null;
-            self.player.peekStart(id, s, format, chosen.video, s.audios[0], start.t, at, sound, function () {
-                if (gen === self.gen) {
-                    self.stop();
-                }
-            }, square, picture && picture.getAttribute('src') || '');
-            // Until PREVIEW_MS, or the video's end if that comes first, the sound fading out over the last FADE_MS
-            var left = format.duration > 0 ? (format.duration - start.t) * 1000 : 0;
-            var length = left > 0 ? Math.min(PREVIEW_MS, left) : PREVIEW_MS;
-            self.fadeTimer = setTimeout(function () { self.player.peekFade(Math.min(FADE_MS, length)); }, Math.max(0, length - FADE_MS)) as unknown as number;
-            self.timer = setTimeout(function () { self.stop(); }, length) as unknown as number;
+            self.player.peekStart(id, s, format, chosen.video, s.audios[0], start.t, at, sound, stopped, how, picture && picture.getAttribute('src') || '');
+            // The whole video (its end tells), else until PREVIEW_MS or the video's end if that comes first
+            if (!how.whole) {
+                var left = format.duration > 0 ? (format.duration - start.t) * 1000 : 0;
+                self.limit(left > 0 ? Math.min(PREVIEW_MS, left) : PREVIEW_MS);
+            }
         }, function () { return undefined; });
+    }
+
+    /** The preview stops after length (ms), its sound fading out over the last FADE_MS */
+    private limit(length: number): void {
+        var self = this;
+        this.fadeTimer = setTimeout(function () { self.player.peekFade(Math.min(FADE_MS, length)); }, Math.max(0, length - FADE_MS)) as unknown as number;
+        this.timer = setTimeout(function () { self.stop(); }, length) as unknown as number;
     }
 
     /** Whether a preview of id is playing (OK on its tile takes it over) */

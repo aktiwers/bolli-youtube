@@ -1,6 +1,6 @@
 {
     "id": "org.bolli.youtube",
-    "version": "0.1.363",
+    "version": "0.1.370",
     "vendor": "bolli",
     "type": "web",
     "main": "index.html",
@@ -10,9 +10,5 @@
     "iconColor": "#0d0d12",
     "resolution": "1920x1080",
     "disableBackHistoryAPI": true,
-    "dialAppName": "youtube",
-    "vendorExtension": {
-        "userAgent": "$browserName$/$browserVersion$ ($platformName$-$platformVersion$), _TV_O18/$firmwareVersion$ (LG, $modelName$, $networkMode$)"
-    },
-    "trustLevel": "netcast"
+    "dialAppName": "youtube"
 }

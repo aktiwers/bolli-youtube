@@ -43,6 +43,22 @@ export function setShown(el: HTMLElement, shown: boolean): void {
     el.style.visibility = shown ? '' : 'hidden';
 }
 
+/** How far to scroll list (in a view this tall) to keep el centred, clamped at both ends (-1: not laid out yet) */
+export function centred(list: HTMLElement, view: number, el: HTMLElement): number {
+    return view ? Math.max(0, Math.min(list.offsetHeight - view, el.offsetTop + el.offsetHeight / 2 - view / 2)) : -1;
+}
+
+/** Scrolls list (in a view this tall) to keep el centred, as centred() says (not laid out: left as it was); the
+ * offset it is scrolled by now (was: before) */
+export function keepCentred(list: HTMLElement, view: number, el: HTMLElement, was: number): number {
+    var to = centred(list, view, el);
+    if (to < 0 || to === was) {
+        return was;
+    }
+    translate(list, 0, -to);
+    return to;
+}
+
 /** Move an element as a composited layer (no layout) */
 export function translate(el: HTMLElement, x: number, y: number): void {
     el.style.webkitTransform = 'translate3d(' + x + 'px,' + y + 'px,0)';

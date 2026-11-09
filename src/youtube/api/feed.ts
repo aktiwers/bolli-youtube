@@ -15,6 +15,8 @@ import { innertubeText } from './youtube.js';
 
 /** Pages and search results are cached this long */
 var KEEP_MS = 5 * 60 * 1000;
+/** The start of the ids of YouTube's chart playlists (its Charts channel's, in every language) */
+var CHARTS = /^PL4fGSI1pDJn/;
 
 export interface Video {
     /** The video id (watch?v=); for a page, its browseId plus params */
@@ -29,6 +31,9 @@ export interface Video {
     page?: Page;
     /** A page's picture ('' none: the tile shows its name), or a mix's own; videos use their id's thumbnail */
     image?: string;
+    /** A page's picture is a copy of this video's thumbnail narrower than a tile (its width): pagePicture may take a
+     * bigger one */
+    imageOf?: { id: string; width: number };
     /** Watched share (0..1), and YouTube's resume position (s) */
     progress?: number;
     start?: number;
@@ -57,6 +62,8 @@ export interface Video {
      * Repeat) */
     list?: string[];
     repeat?: boolean;
+    /** Played from a playlist's page: the playlist (the player shows it: player/list-panel.ts, the watch page's row) */
+    playlist?: PlaylistInfo;
     /** A YouTube Movies film (to buy or rent, or bought): only YouTube's own player plays it */
     movie?: boolean;
     /** The paid-content badge's text (a film's "Buy or rent") */
@@ -64,6 +71,16 @@ export interface Video {
     /** Poster tiles (style 'poster'): the poster, and the wide picture shown when focused */
     poster?: string;
     wide?: string;
+}
+
+/** A playlist a video plays from: its name, how many videos it has (0: not said) and those loaded, in its order (more
+ * are added as the queue nears its end) */
+export interface PlaylistInfo {
+    title: string;
+    count: number;
+    videos: Video[];
+    /** Its id ('' not known) */
+    id?: string;
 }
 
 /** A live stream that has ended: its id, title, and its channel's name and id */
@@ -107,9 +124,13 @@ export interface Rows {
     nudge?: Nudge;
     /** Buttons above the grid (History: All, Pause watch history, Clear all; a playlist: Repeat) */
     buttons?: PageButton[];
-    /** A playlist page's left column: its byline ("Channel • 16 videos • No views") and whether it is private (lock
-     * icon) */
-    side?: { byline: string; private: boolean };
+    /** A playlist page's left column: its byline ("Channel • 16 videos • No views"), whether it is private (lock icon),
+     * and how many videos it has (0: not said) */
+    side?: { byline: string; private: boolean; count?: number };
+    /** A playlist that is one of YouTube's charts ("Top 100 Songs Global"): its order is the chart's */
+    chart?: boolean;
+    /** A playlist's page: its id (its Shortcut button: views/list-stage.ts) */
+    playlistId?: string;
     /** When fetched, for rows served from storage (refreshed in the background once old) */
     at?: number;
     /** YouTube's text for a page with nothing on it yet (e.g. Library's Movies & TV) */
@@ -126,6 +147,11 @@ export interface PageButton {
     ask?: Ask;
     /** Plays the playlist (Repeat: loops at the end; Shuffle: shuffled) */
     play?: { loop: boolean; shuffle: boolean };
+    /** A playlist page's Repeat or Shuffle switch (views/list-stage.ts): what is played from the page starts over after its
+     * last video, or comes in a random order */
+    turn?: 'repeat' | 'shuffle';
+    /** A playlist page's Shortcut: puts the playlist (this id) on a button of the remote (views/shortcuts.ts) */
+    shortcut?: string;
 }
 
 /** YouTube's confirmation before clearing: title, subtitle, picture, button texts, the command, and the toast when
@@ -351,9 +377,41 @@ export function videoOf(id: string): Video {
  * bytes, but the TV decodes it faster (26 vs 38 ms), and each screen decodes its pictures again. Memory with Home
  * browsed: ~88 / 91 / 105 MB (320 / 480 / 640). */
 export function thumbnail(id: string): string {
-    var size = prefs().pictures;
-    return size === 'sharpest' ? 'https://i.ytimg.com/vi/' + id + '/sddefault.jpg' :
-        'https://i.ytimg.com/vi/' + id + (size === 'sharp' ? '/hqdefault.jpg' : '/mqdefault.jpg');
+    return 'https://i.ytimg.com/vi/' + id + '/' + thumbnailSize().file + '.jpg';
+}
+
+/** A video's thumbnail at each size Settings offer: its file, the width of its 16:9 part */
+var THUMBNAILS: { [size: string]: { file: string; width: number } } = {
+    sharpest: { file: 'sddefault', width: 640 }, sharp: { file: 'hqdefault', width: 480 }, standard: { file: 'mqdefault', width: 320 }
+};
+
+function thumbnailSize(): { file: string; width: number } {
+    return THUMBNAILS[prefs().pictures] || THUMBNAILS.standard;
+}
+
+/** A page tile's picture and its fallback: YouTube's, or where that is a video's thumbnail narrower than the size set
+ * in Settings (imageOf: a show's on Home, 320x180 on a 720 px wide tile, blurry), that video's at the size set,
+ * YouTube's the fallback. Picked here, as the tiles are drawn: rows are parsed off the page too, where Settings are not
+ * read */
+export function pagePicture(v: Video): { image: string; fallback: string } {
+    var of = v.imageOf;
+    return of && thumbnailSize().width > of.width ? { image: thumbnail(of.id), fallback: v.image || '' } : { image: v.image || '', fallback: '' };
+}
+
+/** A video's biggest thumbnail (1280x720; some videos lack it: thumbnail(id) as the fallback) */
+export function largestThumbnail(id: string): string {
+    return 'https://i.ytimg.com/vi/' + id + '/maxresdefault.jpg';
+}
+
+/** Where video id is in a playlist, as "3 / 100" (its place alone when the count is not said; '' not in it) */
+export function placeIn(list: PlaylistInfo, id: string): string {
+    var at = -1;
+    for (var i = 0; i < list.videos.length && at < 0; i++) {
+        if (list.videos[i].id === id) {
+            at = i;
+        }
+    }
+    return at < 0 ? '' : list.count ? at + 1 + ' / ' + list.count : String(at + 1);
 }
 
 /** The picture to use when thumbnail(id) is missing (some videos lack the 640 px one; '' none) */
@@ -425,6 +483,10 @@ function walk(v: any, shelf: Shelf, rows: Rows): void {
         } else if (key === 'gridRenderer' || key === 'gridContinuation' || key === 'playlistVideoListRenderer' || key === 'playlistVideoListContinuation') {
             var grid: Shelf = { title: '', videos: [], grid: true, next: nextOf(x) };
             rows.shelves.push(grid);
+            if (key === 'playlistVideoListRenderer' && x.playlistId) {
+                rows.playlistId = x.playlistId;
+                rows.chart = CHARTS.test(x.playlistId) || undefined;
+            }
             walk(x, grid, rows);
         } else if (key === 'horizontalListRenderer' || key === 'horizontalListContinuation') {
             shelf.next = nextOf(x);
@@ -465,7 +527,7 @@ function walk(v: any, shelf: Shelf, rows: Rows): void {
             }
             // A playlist's left column: byline and privacy lock
             if (key === 'entityMetadataRenderer' && x.bylines) {
-                rows.side = { byline: lineText(x.bylines[0]), private: all(x.bylines[0], 'iconType').indexOf('PRIVACY_PRIVATE') >= 0 };
+                rows.side = { byline: lineText(x.bylines[0]), private: all(x.bylines[0], 'iconType').indexOf('PRIVACY_PRIVATE') >= 0, count: countOf(x.bylines[0]) };
             }
         } else if (key === 'genericPromoRenderer') {
             rows.empty = rows.empty || text(x.bodyText);
@@ -548,7 +610,7 @@ var PICTURE_PX = 528;
 /** A picture URL from YouTube's list of sizes: the smallest at least a tile (or fill px) wide, else the largest; '//'
  * URLs get https; px: request a round picture at that size */
 export function picture(thumbs: any, px?: number, fill?: number): string {
-    var list: any[] = (thumbs && (thumbs.thumbnails || thumbs.sources)) || [];
+    var list = sizesOf(thumbs);
     var pick: any = null;
     var largest: any = null;
     // The smallest that fills a tile, or fill px (a 1200 px mix picture takes the TV ~200 ms to decode), in whatever
@@ -567,6 +629,25 @@ export function picture(thumbs: any, px?: number, fill?: number): string {
     var url = pick ? String(pick.url || '') : '';
     url = url.indexOf('//') === 0 ? 'https:' + url : url;
     return px ? sized(url, px) : url;
+}
+
+/** YouTube's list of a picture's sizes */
+function sizesOf(thumbs: any): any[] {
+    return (thumbs && (thumbs.thumbnails || thumbs.sources)) || [];
+}
+
+/** A page tile with its picture as YouTube lists it, and where that is a video's own thumbnail and none listed fills a
+ * tile, that video and the width listed (imageOf: a bigger copy for pagePicture; a playlist's own picture, signed for
+ * its size, has none) */
+function withPicture(video: Video, thumbs: any): Video {
+    video.image = picture(thumbs);
+    var widest = 0;
+    sizesOf(thumbs).forEach(function (one) { widest = Math.max(widest, +one.width || 0); });
+    var of = widest && widest < PICTURE_PX ? /^https:\/\/i\.ytimg\.com\/vi\/([\w-]{11})\/(?:mq|hq)default\.jpg/.exec(video.image) : null;
+    if (of) {
+        video.imageOf = { id: of[1], width: widest };
+    }
+    return video;
 }
 
 /** A round picture's URL (a channel's, an account's) at another size */
@@ -636,8 +717,8 @@ function fromTile(tile: any): Video | null {
         var opens = pageOf(tile.onSelectCommand);
         // Library's own tiles have their name over the picture, not under it
         var name = get(meta, 'title') || get(overlays[0], 'tileMetadataRenderer', 'title');
-        var found: Video | null = opens ? { id: opens.browseId + (opens.params || ''), title: text(name), channel: lines[0] || '', length: badge,
-            info: lines[1] || '', page: opens, image: picture(get(header, 'thumbnail')) } : null;
+        var found: Video | null = opens ? withPicture({ id: opens.browseId + (opens.params || ''), title: text(name), channel: lines[0] || '', length: badge,
+            info: lines[1] || '', page: opens }, get(header, 'thumbnail')) : null;
         if (found && style) {
             found.style = style;
             // Round tiles (e.g. Music's favourite artists)
@@ -742,8 +823,8 @@ function fromLockup(lockup: any): Video | null {
     var plays = (lockup.contentType === 'LOCKUP_CONTENT_TYPE_VIDEO' || lockup.contentType === 'LOCKUP_CONTENT_TYPE_MUSIC') && lockup.contentId;
     if (!plays && !mix) {
         var opens = pageOf(tap);
-        var page: Video | null = opens ? { id: opens.browseId + (opens.params || ''), title: text(get(meta, 'title')), channel: '', length: '',
-            info: '', page: opens, image: picture(get(thumb, 'image')) } : null;
+        var page: Video | null = opens ? withPicture({ id: opens.browseId + (opens.params || ''), title: text(get(meta, 'title')), channel: '', length: '',
+            info: '', page: opens }, get(thumb, 'image')) : null;
         // A playlist or show: a stack, with its count ("76 episodes")
         var collection = get(lockup, 'contentImage', 'collectionThumbnailViewModel');
         if (page && collection) {
@@ -865,15 +946,22 @@ function iconOf(icon: any): string {
     return get(icon, 'iconType') || '';
 }
 
-/** A command's commands (a commandExecutorCommand's in their order, nested ones too, else itself) */
+/** A command's commands (a commandExecutorCommand's in their order, nested ones too; an authDeterminedCommand's for a
+ * signed-in account, as the app sends them: e.g. a playlist's Save to library; else itself) */
 export function commandsOf(command: any): any[] {
+    var signedIn = get(command, 'authDeterminedCommand', 'authenticatedCommand');
+    if (signedIn) {
+        return commandsOf(signedIn);
+    }
     var inner = get(command, 'commandExecutorCommand', 'commands');
     return inner ? inner.reduce(function (all: any[], c: any) { return all.concat(commandsOf(c)); }, []) : command ? [command] : [];
 }
 
-/** The message YouTube gives with a command (its toast; '' none) */
+/** The message YouTube gives with a command (its toast, or an overlay message shown as one, e.g. Saved to library; ''
+ * none) */
 export function toastOf(command: any): string {
-    return text(get(first(command, 'overlayToastRenderer'), 'title'));
+    var message = first(command, 'overlayMessageRenderer');
+    return text(get(first(command, 'overlayToastRenderer'), 'title')) || (message && /TOAST/.test(message.style) ? text(message.title) : '');
 }
 
 /** A confirmation in an overlay panel: its header and yes/no buttons, where yes runs a command named in names (null:
@@ -893,6 +981,23 @@ export function lineText(line: any): string {
     return (get(line, 'lineRenderer', 'items') || []).map(function (item: any) {
         return text(get(item, 'lineItemRenderer', 'text'));
     }).filter(function (t: string) { return t; }).join(' ');
+}
+
+/** How many videos a playlist's byline says it has: its first part after its owner (the first "•") that starts with a
+ * number ("101 videos", "99 songs"; the views come after it; an owner's name may start with a number: "88rising"), 0
+ * when none does */
+function countOf(line: any): number {
+    var items = get(line, 'lineRenderer', 'items') || [];
+    var owned = false;
+    for (var i = 0; i < items.length; i++) {
+        var part = text(get(items[i], 'lineItemRenderer', 'text'));
+        var number = owned && /^\d[\d.,\s]*/.exec(part);
+        if (number) {
+            return +number[0].replace(/\D/g, '');
+        }
+        owned = owned || part === '•';
+    }
+    return 0;
 }
 
 /** A line's chips ("4K", "New": its badges' labels) */

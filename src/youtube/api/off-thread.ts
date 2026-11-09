@@ -7,8 +7,11 @@
 // made, so it is ready for the reply, and is terminated after idling to free
 // its memory. Without a worker, the work runs on the main thread.
 
-/** The worker's script, beside index.html */
+import { oldEngine } from '../core/platform.js';
+
+/** The worker's script, beside index.html (webOS TV 2.x's old engine: with promise.js before it) */
 var SCRIPT = 'parse.js';
+var OLD_SCRIPT = 'parse-old.js';
 /** The worker is terminated after idling this long */
 var IDLE_MS = 60000;
 /** A reply not back by then (app visible) marks the worker as stuck; pending work then runs here */
@@ -116,7 +119,7 @@ function overdue(id: number): number {
 function started(): Worker | null {
     if (!worker && !failed) {
         try {
-            worker = new Worker(SCRIPT);
+            worker = new Worker(oldEngine() ? OLD_SCRIPT : SCRIPT);
             worker.onmessage = answered;
             worker.onerror = broke;
         } catch (e) {

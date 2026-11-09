@@ -16,11 +16,13 @@ import { afterClick, takesPointer, toPart } from '../core/pointer.js';
 import { View } from '../core/view.js';
 import { RowStack } from '../ui/row-stack.js';
 import { TileItem, TileRow } from '../ui/tile-row.js';
-import { more, Nudge, PageButton, Rows, Shelf, Tab, Video } from '../api/feed.js';
+import { more, Nudge, PageButton, PlaylistInfo, Rows, Shelf, Tab, Video } from '../api/feed.js';
+import { prefs } from '../api/prefs.js';
 import { Pills } from '../ui/pills.js';
 import { FillLoader, LOGO } from '../ui/fill-loader.js';
 import { icon } from '../ui/icons.js';
 import { metrics, RowSpacing, word } from '../ui/theme.js';
+import { listButtons, ListStage, shuffle } from './list-stage.js';
 import { brandedRows, copied, gridLines, Paging, rowH, VideoTiles } from './tiles.js';
 
 /** The loading sign fills at its theme pace (~1.2 s, about when Home's rows usually arrive) */
@@ -32,11 +34,18 @@ var BUTTON_ICONS: { [iconType: string]: string } = {
     ARROW_PLAY: 'playcircle',
     CLEAR_WATCH_HISTORY: 'delete',
     LOOP: 'loop',
-    SHUFFLE: 'shuffle'
+    SHUFFLE: 'shuffle',
+    // A playlist's Play all (views/list-stage.ts)
+    PLAY_ALL: 'play',
+    // A playlist's Save to library: saved (as Library's), or not
+    BOOKMARK: 'library',
+    BOOKMARK_BORDER: 'bookmark',
+    // A playlist's Shortcut (views/shortcuts.ts)
+    SHORTCUT: 'remote'
 };
 
 /** Rows this old are refreshed behind the ones shown (Subscriptions sooner: main.ts) */
-var REFRESH_MS = 60 * 60 * 1000;
+var REFRESH_MS = 30 * 60 * 1000;
 
 /** A screen passed through on the rail fetches its first rows only after showing this long */
 var REST_MS = 300;
@@ -244,6 +253,8 @@ export interface FeedOptions {
     big?: boolean;
     /** Row spacing (Library's own; default: the theme's) */
     spacing?: RowSpacing;
+    /** A playlist's videos were drawn while it shows (its frame's preview starts after the rest, as after a key) */
+    onList?: () => void;
 }
 
 export interface FeedTexts {
@@ -292,6 +303,21 @@ export class FeedView implements View {
     private list = false;
     /** A playlist's line under its title (Rows.side) */
     private byline: HTMLElement;
+    /** A playlist's frame with the focused video and its details (made with the first list); its video count (0: not
+     * said), and whether it is one of YouTube's charts */
+    private stage: ListStage | null = null;
+    private count = 0;
+    private chart = false;
+    /** A playlist's page: its id ('' not known) */
+    private playlistId = '';
+    /** A playlist's Repeat and Shuffle switches (main.ts pressPageButton): what is played from it starts over after its
+     * last video, and comes in a random order (shuffled: that order of its videos' ids, following the list: order) */
+    repeating = false;
+    shuffling = false;
+    private shuffled: string[] = [];
+    /** Told of a playlist's videos added (its next part: their ids in the order they play, and the videos; main.ts adds
+     * them to the queue played from it) */
+    added: ((ids: string[], videos: Video[]) => void) | null = null;
     /** The column kept by Up/Down in a grid */
     private col = 0;
     /** Incremented on every fetch, so a late reply for an older one is dropped */
@@ -426,6 +452,7 @@ export class FeedView implements View {
     destroy(): void {
         this.gen++;
         this.dead = true;
+        this.added = null;
         this.paging.stop();
         this.tiles.stop();
     }
@@ -453,12 +480,7 @@ export class FeedView implements View {
         }
         // Rebuild its line and the following ones, shifted one tile back (the full lines before it stay)
         var stack = this.stack;
-        var line = -1;
-        for (var r = 0; r < stack.rows.length && line < 0; r++) {
-            if (stack.rows[r].items.some(function (item) { return item.id === id; })) {
-                line = r;
-            }
-        }
+        var line = this.rowOf(id);
         if (line < 0) {
             return;
         }
@@ -593,11 +615,133 @@ export class FeedView implements View {
                 var video = this.freshVideo(row ? row.focused : null) || this.tiles.video(row ? row.focused : null);
                 if (video) {
                     this.played = video.id;
-                    this.open(video);
+                    this.open(this.list && !video.page ? this.fromList(video) : video);
                 }
                 return true;
         }
         return false;
+    }
+
+    /** video played from a playlist: the rest of the list after it in its order or Shuffle's (all of it again after the
+     * last with Repeat on) */
+    private fromList(video: Video): Video {
+        var played = copied(video);
+        var videos = this.playable();
+        played.list = this.order(video.id, videos);
+        played.repeat = this.repeating;
+        played.playlist = this.playlistInfo(videos);
+        return played;
+    }
+
+    /** A playlist's videos that play here (not films) */
+    playable(): Video[] {
+        return this.videos().filter(function (v) { return !v.movie; });
+    }
+
+    /** A playlist's name, count and videos (those given, else those that play here), for the player to show */
+    playlistInfo(videos?: Video[]): PlaylistInfo {
+        return { title: this.headingText.textContent || '', count: this.count, videos: videos || this.playable(), id: this.playlistId };
+    }
+
+    /** A playlist's videos' ids (of those given, else those that play here) in the order they play: its own, or
+     * Shuffle's with first first. Shuffle's order follows the list: videos gone are left out, new ones come after the
+     * rest in a random order */
+    order(first?: string, videos?: Video[]): string[] {
+        var ids = (videos || this.playable()).map(function (v) { return v.id; });
+        if (!this.shuffling) {
+            return ids;
+        }
+        var have: { [id: string]: boolean } = {};
+        ids.forEach(function (id) { have[id] = true; });
+        var kept = this.shuffled.filter(function (id) { return have[id]; });
+        kept.forEach(function (id) { have[id] = false; });
+        this.shuffled = kept.concat(shuffle(ids.filter(function (id) { return have[id]; })));
+        var rest = this.shuffled.filter(function (id) { return id !== first; });
+        return first ? [first].concat(rest) : rest;
+    }
+
+    /** The video after id in a playlist's order (or Shuffle's), the first again after the last with Repeat on ('' none) */
+    nextAfter(id: string): string {
+        var ids = this.order();
+        var i = ids.indexOf(id);
+        if (i >= 0 && i + 1 < ids.length) {
+            return ids[i + 1];
+        }
+        return this.repeating && ids.length && ids[0] !== id ? ids[0] : '';
+    }
+
+    /** Turns a playlist's Repeat or Shuffle switch (Shuffle on: a new random order); returns whether it is on now */
+    turn(which: 'repeat' | 'shuffle'): boolean {
+        var on: boolean;
+        if (which === 'repeat') {
+            on = this.repeating = !this.repeating;
+        } else {
+            // (a new random order: order makes it)
+            on = this.shuffling = !this.shuffling;
+            this.shuffled = [];
+        }
+        this.drawButtons();
+        return on;
+    }
+
+    /** Fetches a playlist's next part now (the queue played from it nears its end): added hears of it */
+    loadMore(): void {
+        if (this.list && !this.dead) {
+            this.paging.fetchNext(this.stack);
+        }
+    }
+
+    /** A playlist's next part arrived: told to the queue played from it, in the order it plays */
+    private more(videos: Video[]): void {
+        if (!this.added) {
+            return;
+        }
+        var fresh: { [id: string]: boolean } = {};
+        videos.forEach(function (v) {
+            if (!v.movie) {
+                fresh[v.id] = true;
+            }
+        });
+        var ids = this.order().filter(function (id) { return fresh[id]; });
+        if (ids.length) {
+            this.added(ids, videos.filter(function (v) { return fresh[v.id]; }));
+        }
+    }
+
+    /** A playlist's frame: its focused video, preview and details (null: not a playlist) */
+    get frame(): ListStage | null {
+        return this.list ? this.stage : null;
+    }
+
+    /** The row (one video to a line in a playlist) that has video id (-1: none) */
+    private rowOf(id: string): number {
+        var rows = this.stack.rows;
+        for (var r = 0; r < rows.length; r++) {
+            if (rows[r].items.some(function (item) { return item.id === id; })) {
+                return r;
+            }
+        }
+        return -1;
+    }
+
+    /** A playlist's focus on video id where it lists it (one played from it: the list may have played on meanwhile; the
+     * frame's next video); keep: the focus stays on the buttons if there */
+    focusOn(id: string, keep?: boolean): void {
+        var r = this.list ? this.rowOf(id) : -1;
+        if (r < 0) {
+            return;
+        }
+        this.stack.focusRow(r);
+        if (!keep) {
+            this.goTo('rows');
+        }
+        this.place();
+        this.paging.ahead(this.stack, false);
+    }
+
+    /** The page over the player's preview filling the screen behind it (Settings › Playlist page: Backdrop) */
+    previewing(on: boolean): void {
+        toggleClass(this.el, 'bd-page--previewing', on);
     }
 
     /** It has rows (or grid lines) to focus */
@@ -770,7 +914,9 @@ export class FeedView implements View {
         this.buttonPills.clear();
         this.buttons.forEach(function (b) {
             var on = b.toggle && b.toggle.on ? 1 : 0;
-            var el = h('div', 'by-page-button');
+            // A playlist's Play all with its name, its Repeat switch marked while on
+            var lit = b.turn === 'repeat' ? self.repeating : b.turn === 'shuffle' && self.shuffling;
+            var el = h('div', 'by-page-button' + (b.icon === 'PLAY_ALL' ? ' by-page-button--wide' : '') + (lit ? ' by-page-button--on' : ''));
             var name = BUTTON_ICONS[b.toggle ? b.toggle.icons[on] : b.icon];
             if (name) {
                 el.appendChild(icon(name, 'by-page-button-icon'));
@@ -787,6 +933,15 @@ export class FeedView implements View {
             this.at = 'rows';
         }
         this.setFocused(this.focused);
+    }
+
+    /** A playlist's frame and details show its focused video (the last one focused while on the buttons) */
+    private showStage(): void {
+        var row = this.stack.row;
+        var item = row ? row.focused : null;
+        if (this.stage) {
+            this.stage.show(item);
+        }
     }
 
     /** Draws a playlist's byline (with a lock icon when private), or hides it */
@@ -1155,6 +1310,10 @@ export class FeedView implements View {
         var empty = !self.hasRows;
         var grid = shelves.length === 1 && shelves[0].grid ? shelves[0] : null;
         var list = !!grid && grid.style === 'list';
+        // A playlist's frame and details, under and over its list
+        if (list && !self.stage) {
+            self.stage = new ListStage(self.el);
+        }
         if (!grid !== !self.grid || list !== self.list || !self.paging.shelves.length) {
             // Switching between rows, grid and list: each has its own row height
             self.el.removeChild(self.stack.el);
@@ -1163,12 +1322,19 @@ export class FeedView implements View {
         }
         self.grid = grid;
         toggleClass(self.el, 'bd-page--list', list);
+        self.chart = list && !!rows && !!rows.chart;
+        self.playlistId = rows && rows.playlistId || '';
+        toggleClass(self.el, 'bd-page--chart', self.chart);
+        if (self.stage) {
+            self.stage.arrange(list);
+        }
         self.drawSide(rows && rows.side || null);
+        self.count = rows && rows.side && rows.side.count || 0;
         self.col = 0;
         setText(self.headingText, rows ? word(rows.title) : '');
         self.tabs = rows && rows.tabs || [];
         self.buildTabs();
-        self.buttons = rows && rows.buttons || [];
+        self.buttons = list ? listButtons(rows && rows.buttons || [], rows && rows.playlistId || undefined) : rows && rows.buttons || [];
         self.drawButtons();
         // If focus moved to the tabs during the fetch, put it on the chosen one
         self.focusTabs(self.at === 'tabs' && self.tabPills.count > 0);
@@ -1181,7 +1347,10 @@ export class FeedView implements View {
             self.goTo('back');
         }
         if (grid) {
-            self.paging.set([], grid.next || '', function (videos) { self.addLines(self.tiles.items(videos)); });
+            self.paging.set([], grid.next || '', function (videos) {
+                self.addLines(self.tiles.items(videos));
+                self.more(videos);
+            });
             self.stack.setRows([]);
             self.tiles.reset();
             self.addLines(self.tiles.items(grid.videos));
@@ -1201,6 +1370,9 @@ export class FeedView implements View {
         if (self.opts.fade && empty && (self.hasRows || nudge)) {
             fadeIn(self.el);
         }
+        if (list && self.shown && self.hasRows && self.opts.onList) {
+            self.opts.onList();
+        }
     }
 
     private newStack(grid: boolean): RowStack {
@@ -1216,7 +1388,8 @@ export class FeedView implements View {
         }
         stack.setFocused(this.focused && this.at === 'rows');
         stack.setShown(this.shown);
-        this.el.insertBefore(stack.el, this.el.firstChild);
+        // (over a playlist's frame)
+        this.el.insertBefore(stack.el, this.stage ? this.stage.back.nextSibling : this.el.firstChild);
         return stack;
     }
 
@@ -1227,6 +1400,12 @@ export class FeedView implements View {
         var shape = this.list ? m.list.tile : m.grid;
         var layout = this.list ? copied(m.rows, { pad: m.list.left, under: 0, rowGap: m.list.pitch - m.list.tile.h }) : m.rows;
         var perLine = this.list ? 1 : Math.max(1, Math.floor((LAYOUT_WIDTH - m.rows.pad - m.page.right + m.rows.gap) / (m.grid.w + m.rows.gap)));
+        // A playlist's numbers before its videos (Settings › Rank numbers): their places, one video to a line
+        var numbers = prefs().listNumbers;
+        if (this.list && (numbers === 'all' || numbers === 'charts' && this.chart)) {
+            var first = this.stack.rows.length;
+            items.forEach(function (item, i) { item.rank = String(first + i + 1); });
+        }
         var last = this.stack.rows[this.stack.rows.length - 1];
         var fill = last ? Math.min(perLine - last.count, items.length) : 0;
         if (fill > 0) {
@@ -1245,6 +1424,7 @@ export class FeedView implements View {
             translate(this.heading, 0, m.list.title);
             translate(this.buttonsEl, 0, 0);
             translate(this.stack.el, 0, m.list.top - Math.max(0, this.stack.top - m.list.pitch));
+            this.showStage();
             return;
         }
         // Title and buttons scroll with the grid so they never overlap its tiles (also an empty page's title)

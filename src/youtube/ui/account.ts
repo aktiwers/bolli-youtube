@@ -67,6 +67,28 @@ export function pressSubscribe(sub: Subscribe, channel: string, panel: SidePanel
     });
 }
 
+/** A shortcut's Subscribe (views/shortcuts.ts): subscribes to channel at once; subscribed, a first press asks for a
+ * second within UNSUBSCRIBE_MS, which unsubscribes (a stray press in the dark keeps the channel) */
+var UNSUBSCRIBE_MS = 4000;
+var unsubscribing = { channel: '', at: 0 };
+export function flipSubscription(sub: Subscribe, channel: string): void {
+    var id = channelOf(sub);
+    var drawn = function (): void {
+        if (id) {
+            subscribedNow[id] = sub.subscribed;
+        }
+    };
+    if (!subscribed(sub)) {
+        apply(sub, 'subscribed', true, sub.on, drawn, tr('Could not subscribe.'), tr('Subscribed to {1}', channel));
+    } else if (unsubscribing.channel === channel && Date.now() - unsubscribing.at < UNSUBSCRIBE_MS) {
+        unsubscribing.channel = '';
+        apply(sub, 'subscribed', false, sub.off, drawn, tr('Could not unsubscribe.'), tr('Unsubscribed from {1}', channel));
+    } else {
+        unsubscribing = { channel: channel, at: Date.now() };
+        toast(tr('Press again to unsubscribe from {1}', channel), 'info');
+    }
+}
+
 /** Lists the playlists to save a video to (Watch later first), ticked when it is in them; OK adds or removes it.
  * Opens as the panel's list, or over the current one (push); saved is told whether the video is in any */
 export function openSaveTo(panel: SidePanel, videoId: string, push: boolean, saved?: (any: boolean) => void): void {

@@ -160,6 +160,13 @@ export function channelPicture(id: string): Promise<string> {
     });
 }
 
+/** A video's likes as YouTube writes them ('' none), read from the /next reply without parsing it all */
+export function likesOf(id: string): Promise<string> {
+    return nextText(id).then(function (reply) {
+        return text(get(objectAt(reply, '"likeButtonRenderer":'), 'likeCountText'));
+    });
+}
+
 /** A video's /next reply as its text */
 function nextText(id: string): Promise<string> {
     return nextTexts.get(id, function () { return innertubeText('next', { videoId: id }); });

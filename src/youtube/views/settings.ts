@@ -1,15 +1,19 @@
-// Settings, laid out like YouTube's TV app: a grouped list on the left, the
-// focused setting on the right (picture, description, choices as buttons
-// with the set one ticked, a note on the focused choice). Right or OK enter
-// the choices; OK sets one (or toggles it where several can be set); Left or
-// Back return to the list, then to the rail. The list keeps the focused
-// setting centred once it scrolls. Order: the app's own settings
-// (api/prefs.ts, saved at once), phone linking, the account's History & data
-// settings that have an effect here (fetched when Settings shows), then About
-// (the version, the device).
-// Clearing a history asks first, with YouTube's question.
+// Settings in three columns: the categories on the left; the focused one's
+// settings in the middle, each with how it is set under its name (small
+// headings among them); the focused setting on the right, in the look of
+// YouTube's TV app's (picture, description, choices as buttons with the set
+// one ticked, a note on the focused choice). A category of one setting (a
+// page of its own, About) shows it on the right at once, wide, without the
+// middle. Right or OK go a column further (a page opens); OK sets a choice
+// (or toggles it where several can be set); Left or Back go back a column,
+// then to the rail. Each category keeps the setting it was on while the app
+// runs; the lists keep the focused row centred once they scroll. The
+// categories: the app's own settings (api/prefs.ts, saved at once), Account
+// & phone (phone linking, and the account's History & data settings that
+// have an effect here, fetched when Settings shows), then About (the version,
+// the device). Clearing a history asks first, with YouTube's question.
 
-import { h, setShown, setSrc, setText, toggleClass, translate } from '../core/dom.js';
+import { h, keepCentred, setShown, setSrc, setText, toggleClass, translate } from '../core/dom.js';
 import { language, LANGUAGES, setLanguage, tr } from '../core/i18n.js';
 import { KEY } from '../core/keys.js';
 import { holding, takesPointer } from '../core/pointer.js';
@@ -18,36 +22,24 @@ import { View } from '../core/view.js';
 import { AccountGroup, AccountSetting, historySettings } from '../api/account-settings.js';
 import { Ask } from '../api/feed.js';
 import { ALWAYS, languageName, offeredLanguages } from '../api/languages.js';
-import { HIGHEST, prefs, Prefs, setPref } from '../api/prefs.js';
+import { Choice, Choices, ChoiceSetting, HIGHEST, prefDefault, prefs, Prefs, setNames, setPref, Value } from '../api/prefs.js';
+import { keyName, shortcutOf, shortcuts } from '../api/shortcuts.js';
 import { PARTS } from '../api/sponsorblock.js';
 import { apply, askToClear } from '../ui/account.js';
 import { icon } from '../ui/icons.js';
 import { keyboardFor, recentWith } from '../ui/keyboard-languages.js';
 import { LanguagePicker } from '../ui/language-picker.js';
+import { LOGO } from '../ui/fill-loader.js';
 import { CAPTION_STYLES } from '../player/captions.js';
+import { ChatSettings, chatSummary } from '../player/chat-settings.js';
 import { Question } from '../ui/question.js';
+import { screenOff } from '../ui/screen-off.js';
 import { applyBlack, applyTheme, themes } from '../ui/theme.js';
-
-/** A choice's value (an on/off pref's: true or false) */
-type Value = string | number | boolean;
-
-/** A setting's choice: value, name, note ('' for none) */
-interface Choice {
-    value: Value;
-    name: string;
-    note: string;
-}
-
-/** A setting's choices: list, isSet, choose; many: several can be set (OK toggles one) */
-interface Choices {
-    list: () => Choice[];
-    isSet: (value: Value) => boolean;
-    choose: (value: Value) => void;
-    many?: boolean;
-}
+import { ShortcutHost, ShortcutsPage } from './shortcuts.js';
 
 /** A setting: name, description, picture ('' for none); its choices, or the steps to link a phone (code: shows a TV
- * code, for a phone on another network), or lines to read (info) */
+ * code, for a phone on another network), or lines to read (info); open: Right or OK opens its own page (its one
+ * choice too, its note always shown) */
 interface Setting {
     label: string;
     summary: string;
@@ -56,6 +48,15 @@ interface Setting {
     steps?: string[];
     code?: boolean;
     info?: string[];
+    open?: () => void;
+}
+
+/** A page of Settings' own over it: it takes every key while shown */
+interface SubPage {
+    shown: boolean;
+    onKey(code: number): boolean;
+    layer(): HTMLElement | null;
+    close(): void;
 }
 
 /** A rail page the app can start on */
@@ -99,20 +100,24 @@ function onOff(on: string, off: string): Choice[] {
     return [{ value: true, name: tr('On'), note: on }, { value: false, name: tr('Off'), note: off }];
 }
 
-/** Autoplay: off, or the next video after an "Up next" countdown of so many seconds (overrides the account's own
- * autoplay setting) */
-function autoplay(): Setting {
+/** What comes at a video's end: nothing (-1: the player closes), the next video at once (0), or after an "Up next"
+ * countdown of so many seconds (Autoplay, Next in a playlist) */
+function waits(): Choice[] {
     var after = function (s: number): Choice {
         return { value: s, name: tr('After {1} seconds', s), note: tr('"Up next" counts down, then the next video plays') };
     };
+    return [
+        { value: -1, name: tr('Off'), note: tr('the player closes at a video\'s end') },
+        { value: 0, name: tr('Right away'), note: tr('the next video plays at once') },
+        after(3), after(5), after(10)
+    ];
+}
+
+/** Autoplay: off, or the next video after an "Up next" countdown of so many seconds (overrides the account's own
+ * autoplay setting) */
+function autoplay(): Setting {
     return pick(tr('Autoplay'), tr('When a video ends in Bolli\'s player, the next one plays. When on, this overrides your YouTube account\'s autoplay setting.'),
-        pic('autoplay'), function () {
-            return [
-                { value: -1, name: tr('Off'), note: tr('the player closes at a video\'s end') },
-                { value: 0, name: tr('Right away'), note: tr('the next video plays at once') },
-                after(3), after(5), after(10)
-            ];
-        }, function () {
+        pic('autoplay'), waits, function () {
             return prefs().autoplay ? prefs().autoplayWait : -1;
         }, function (value) {
             var seconds = value as number;
@@ -151,20 +156,27 @@ function subtitles(more: () => void): Setting {
     });
 }
 
-/** An app pref listing several choices, each turned on and off by itself */
-function several(label: string, summary: string, picture: string, name: 'skip' | 'dearrowOptions', list: () => Choice[]): Setting {
+/** The value of a list's Off (several: none of its choices set) */
+var NONE = '';
+
+/** An app pref listing several choices, each turned on and off by itself; offNote: an Off first (with that note) that sets
+ * none of them (set while none is; chosen again then, the default ones are set again) */
+function several(label: string, summary: string, picture: string, name: 'skip' | 'dearrowOptions' | 'listButtons', list: () => Choice[], offNote?: string): Setting {
     return {
         label: label,
         summary: summary,
         picture: picture,
         choices: {
-            list: list,
+            list: function () {
+                var off: Choice[] = offNote ? [{ value: NONE, name: tr('Off'), note: offNote }] : [];
+                return off.concat(list());
+            },
             isSet: function (id) {
-                return prefs()[name].indexOf(id as string) >= 0;
+                return id === NONE ? !prefs()[name].length : prefs()[name].indexOf(id as string) >= 0;
             },
             choose: function (id) {
                 var on = prefs()[name];
-                setPref(name, on.indexOf(id as string) >= 0 ? on.filter(function (one) { return one !== id; }) : on.concat([id as string]));
+                setPref(name, id === NONE ? (on.length ? [] : prefDefault(name)) : on.indexOf(id as string) >= 0 ? on.filter(function (one) { return one !== id; }) : on.concat([id as string]));
             },
             many: true
         }
@@ -174,7 +186,7 @@ function several(label: string, summary: string, picture: string, name: 'skip' |
 function sponsorBlock(): Setting {
     // SponsorBlock's logo (from github.com/ajayyy/SponsorBlock), bundled with the app
     return several('SponsorBlock', tr('Skips the parts of videos that SponsorBlock\'s users marked. Choose the kinds to skip.'), 'sponsorblock.png', 'skip',
-        function () { return PARTS.map(function (k) { return { value: k.id, name: k.name, note: k.note }; }); });
+        function () { return PARTS.map(function (k) { return { value: k.id, name: k.name, note: k.note }; }); }, tr('nothing is skipped'));
 }
 
 /** DeArrow's options (used while it is on) */
@@ -185,6 +197,111 @@ function dearrowOptions(): Setting {
         { value: 'tidy', name: tr('Tidy titles'), note: tr('every title in Title Case, without shouting capitals, emoji or extra exclamation marks') }
     ];
     return several(tr('DeArrow options'), tr('What DeArrow changes besides the titles its users wrote.'), 'dearrow.png', 'dearrowOptions', function () { return options; });
+}
+
+/** What wakes the screen while it is off: any button, or only the Screen off shortcut's, named as it is set now (none
+ * has it: any) */
+function screenWaking(): Setting {
+    return pref(tr('Waking the screen'), tr('Which buttons wake the screen while it is off'), 'screenoff.png', 'screenWake', function () {
+        var button = shortcutOf('screenOff');
+        return [
+            { value: 'any', name: tr('Any button'), note: tr('any button on the remote wakes it, and does nothing else') },
+            { value: 'button', name: button ? tr('Only {1}', keyName(button.key)) : tr('Only the Screen off button'),
+                note: button ? tr('the button with the Screen off shortcut; the others do nothing while it is off') :
+                    tr('no button has the Screen off shortcut yet (Settings › Remote): until one has, any button wakes it') }
+        ];
+    });
+}
+
+/** A setting that opens a page of its own (open): its one choice the page's name, note() saying how it is set */
+function pageSetting(label: string, summary: string, picture: string, open: () => void, name: string, note: () => string): Setting {
+    return { label: label, summary: summary, picture: picture, open: open, choices: { list: function () { return [{ value: 0, name: name, note: note() }]; },
+        isSet: function () { return false; }, choose: open } };
+}
+
+/** Live chat: its settings on their own page over an example (open: player/chat-settings.ts); the note says how they
+ * are set. Its picture drawn for the app, as Most replayed's */
+function liveChat(open: () => void): Setting {
+    return pageSetting(tr('Live chat'), tr('A live stream\'s chat in Bolli\'s player: whether it shows, where, how big and how it looks (also in the player\'s settings)'),
+        'chat.png', open, tr('Live chat settings'), chatSummary);
+}
+
+/** Shortcuts: the remote's spare buttons, on their own page (open: views/shortcuts.ts); the note says how many have
+ * one */
+function shortcutsSetting(open: () => void): Setting {
+    return pageSetting(tr('Shortcuts'), tr('Your remote\'s spare buttons for the things you do most: a screen, a channel, a playlist, or something in the player'),
+        'shortcuts.png', open, tr('Shortcuts'), function () {
+            var keys: { [key: number]: boolean } = {};
+            shortcuts().forEach(function (one) { keys[one.key] = true; });
+            return tr('{1} buttons have shortcuts', Object.keys(keys).length);
+        });
+}
+
+/** The pictures of Settings › Playlists */
+var PLAYLIST_PICTURE = 'playlist.png';
+
+/** A playlist's page (views/list-stage.ts): its look, its frame's preview and autoplay, numbers, details and buttons,
+ * where OK starts a video, the preview on the buttons. Its picture drawn for the app, as Most replayed's */
+function listPage(): Setting[] {
+    var picture = PLAYLIST_PICTURE;
+    var buttons: Choice[] = [
+        { value: 'play', name: tr('Play all'), note: tr('plays the playlist from its first video') },
+        { value: 'shuffle', name: tr('Shuffle'), note: tr('plays the playlist in a random order') },
+        { value: 'repeat', name: tr('Repeat'), note: tr('a switch: what you play from the playlist starts over after its last video') },
+        { value: 'save', name: tr('Save to library'), note: tr('YouTube\'s button, on playlists that are not your own') },
+        { value: 'shortcut', name: tr('Shortcut'), note: tr('puts the playlist on a button of the remote (Settings › Shortcuts)') }
+    ];
+    return [
+        pref(tr('Playlist page'), tr('How a playlist\'s page shows the video you are on'), picture, 'listLayout', [
+            { value: 'stage', name: tr('Stage'), note: tr('it plays in a frame beside the list, its title and views under it') },
+            { value: 'backdrop', name: tr('Backdrop'), note: tr('it fills the screen behind the page, dimmed') }
+        ]),
+        pref(tr('Playlist preview'), tr('What a playlist\'s page shows of the video you are on'), picture, 'listPreview', [
+            { value: 'sound', name: tr('With sound'), note: tr('it plays once you rest on it') },
+            { value: 'muted', name: tr('Without sound'), note: tr('it plays once you rest on it') },
+            { value: 'still', name: tr('Its picture only'), note: tr('nothing plays until you press OK') },
+            { value: 'previews', name: tr('As Previews'), note: tr('with sound, without or off, as Settings › Previews') }
+        ]),
+        pref(tr('Autoplay on the playlist page'), tr('When the video playing in a playlist\'s frame ends'), picture, 'listAutoplay', [
+            { value: true, name: tr('The next one plays'), note: tr('in the playlist\'s order, or shuffled, as its switches say') },
+            { value: false, name: tr('It stops'), note: tr('a preview of 90 seconds at most') }
+        ]),
+        pref(tr('Rank numbers'), tr('A number before each video in a playlist: its place in the list'), picture, 'listNumbers', [
+            { value: 'charts', name: tr('On charts'), note: tr('on YouTube\'s charts, where it is the chart position') },
+            { value: 'all', name: tr('On every playlist'), note: '' },
+            { value: 'off', name: tr('Off'), note: '' }
+        ]),
+        pref(tr('Video details'), tr('The title, channel and views of the video you are on, on a playlist\'s page'), picture, 'listDetails', onOff('', '')),
+        several(tr('Playlist buttons'), tr('The buttons on a playlist\'s page'), picture, 'listButtons', function () { return buttons; }),
+        pref(tr('Starting from a playlist'), tr('Where a video starts when you press OK on it in a playlist'), picture, 'listCarryOn', [
+            { value: true, name: tr('Where the preview is'), note: tr('it carries on, so a song does not start over') },
+            { value: false, name: tr('From the start'), note: '' }
+        ]),
+        pref(tr('Preview on the buttons'), tr('When you go to a playlist\'s buttons'), picture, 'listKeep', [
+            { value: true, name: tr('Keeps playing'), note: tr('the video you were on plays on') },
+            { value: false, name: tr('Stops'), note: tr('its picture shows instead') }
+        ])
+    ];
+}
+
+/** The playlist in the player (player/list-panel.ts): its next at a video's end, what Down shows, the list at the side
+ * over or beside the picture (also in the player's settings while a playlist's video plays: main.ts) */
+export function playerPlaylists(): (Setting & ChoiceSetting)[] {
+    var picture = PLAYLIST_PICTURE;
+    // (each made by pref: with its choices)
+    return [
+        pref(tr('Next in a playlist'), tr('When a video from a playlist ends in Bolli\'s player, the next one in it plays, whatever Autoplay says'), picture, 'listNext', waits),
+        pref(tr('Playlist in the player'), tr('What Down shows while a video from a playlist plays'), picture, 'listDown', [
+            { value: 'row', name: tr('Watch page, playlist first'), note: tr('the watch page as always, the playlist as its first row, as in YouTube\'s app') },
+            { value: 'strip', name: tr('Strip first'), note: tr('the playlist across the bottom of the picture; Down again: the watch page') },
+            { value: 'side', name: tr('List at the side'), note: tr('the playlist at the side; Right goes into it, Down again: the watch page') },
+            { value: 'button', name: tr('Playlist button'), note: tr('a Playlist button on the watch page opens it at the side') }
+        ]),
+        pref(tr('Playlist at the side'), tr('Where the playlist at the side shows in the player'), picture, 'listSide', [
+            { value: 'over', name: tr('Over the picture'), note: '' },
+            { value: 'beside', name: tr('Beside the picture'), note: tr('the picture narrower beside it') }
+        ])
+    ] as (Setting & ChoiceSetting)[];
 }
 
 /** The app's language (core/i18n.ts); a new one also becomes Search's keyboard language, then the app starts again in
@@ -205,9 +322,15 @@ function appLanguage(restart: () => void): Setting {
         });
 }
 
-/** The app's own settings, under headings (pages: possible start pages; more: Subtitles' "More languages"; restart:
- * starts the app again) */
-function bolli(pages: StartPage[], more: () => void, restart: () => void): { title: string; settings: Setting[] }[] {
+/** A category of settings; a text among them is a small heading over those after it */
+interface Category {
+    title: string;
+    settings: (Setting | string)[];
+}
+
+/** The app's own settings, in categories (pages: possible start pages; more: Subtitles' "More languages"; chat: Live
+ * chat settings; keys: Shortcuts; restart: starts the app again) */
+function bolli(pages: StartPage[], more: () => void, chat: () => void, keys: () => void, restart: () => void): Category[] {
     var browsing = [
         // Any page of the rail
         pref(tr('Start page'), tr('The screen the app starts on'), pic('location'), 'startPage', function () {
@@ -231,7 +354,6 @@ function bolli(pages: StartPage[], more: () => void, restart: () => void): { tit
         }, function (id) { applyTheme(String(id)); }));
     }
     return [
-        { title: tr('Language'), settings: [appLanguage(restart)] },
         { title: tr('Playback'), settings: [
             autoplay(),
             pref(tr('Video quality'), tr('The quality videos start at'), pic('clear_search_history'), 'quality', [
@@ -245,9 +367,6 @@ function bolli(pages: StartPage[], more: () => void, restart: () => void): { tit
             ]),
             pref(tr('History'), tr('What you watch in Bolli\'s player, told to YouTube'), pic('privacy_and_terms'), 'history',
                 onOff(tr('it goes into your YouTube history, and YouTube remembers where you stopped'), tr('Bolli\'s player tells YouTube nothing of what you watch'))),
-            // Its picture drawn for the app, as Most replayed's
-            pref(tr('Live chat'), tr('A live stream\'s chat beside the picture in Bolli\'s player (also in the player\'s settings)'), 'chat.png',
-                'liveChat', onOff(tr('the latest messages at the right of the picture'), tr('no chat'))),
             // Its picture drawn for the app in the style of YouTube's
             pref(tr('Most replayed'), tr('A graph over the progress bar in Bolli\'s player of the parts people watch again the most, from YouTube'),
                 'replays.png', 'replays', onOff(tr('shown on videos YouTube has one for (popular ones)'), tr('no graph'))),
@@ -261,18 +380,19 @@ function bolli(pages: StartPage[], more: () => void, restart: () => void): { tit
             pref(tr('Streams by SABR'), tr('How Bolli\'s player gets the videos'), pic('parent_code'), 'sabr',
                 onOff(tr('as YouTube\'s TV app does (signed in, by SABR), as a guest when that fails'), tr('as a guest, signed in (by SABR) only when YouTube asks, as for an age check')))
         ] },
-        { title: tr('Subtitles'), settings: [
+        { title: tr('Language & subtitles'), settings: [
+            appLanguage(restart),
             subtitles(more),
             pref(tr('Subtitle style'), tr('How YouTube\'s automatic subtitles appear'), pic('language'), 'captionStyle', CAPTION_STYLES)
         ] },
-        { title: tr('Starting videos'), settings: [
-            pref(tr('Videos start sooner'), tr('The video or page whose tile you rest on gets ready'), pic('send_feedback'), 'preload',
-                onOff(tr('it opens about a second sooner'), '')),
+        { title: tr('Previews & starting'), settings: [
             pref(tr('Previews'), tr('The video whose tile you rest on plays in the tile (in Bolli\'s player)'), pic('clear_watch_history'), 'previews', [
                 { value: 'sound', name: tr('With sound'), note: '' },
                 { value: 'muted', name: tr('Without sound'), note: '' },
                 { value: 'off', name: tr('Off'), note: '' }
             ]),
+            pref(tr('Videos start sooner'), tr('The video or page whose tile you rest on gets ready'), pic('send_feedback'), 'preload',
+                onOff(tr('it opens about a second sooner'), '')),
             pref(tr('Loading sign'), tr('What shows while a video starts in Bolli\'s player'), pic('reset_app'), 'startSign',
                 onOff(tr('the channel\'s picture fills up'), tr('the screen stays dark until the video plays'))),
             pref(tr('Start picture'), tr('What shows behind the loading sign while a video starts in Bolli\'s player, until it moves'), pic('reset_app'), 'startPicture', [
@@ -281,7 +401,10 @@ function bolli(pages: StartPage[], more: () => void, restart: () => void): { tit
                 { value: 'none', name: tr('None'), note: tr('dark until the video plays: its picture comes soonest') }
             ])
         ] },
-        { title: tr('Browsing'), settings: browsing },
+        { title: tr('Playlists'), settings: ([tr('On a playlist\'s page')] as (Setting | string)[]).concat(listPage(), [tr('In the player')], playerPlaylists()) },
+        { title: tr('Live chat'), settings: [liveChat(chat)] },
+        { title: tr('Remote'), settings: [shortcutsSetting(keys)] },
+        { title: tr('Look'), settings: browsing },
         { title: tr('Add-ons'), settings: [
             sponsorBlock(),
             // DeArrow's logo (from github.com/ajayyy/DeArrow, based on Twemoji), bundled with the app
@@ -293,7 +416,26 @@ function bolli(pages: StartPage[], more: () => void, restart: () => void): { tit
             dearrowOptions(),
             // Its picture drawn for the app, as Most replayed's
             pref(tr('Dislike counts'), tr('How many dislike a video, on its watch page beside the likes, as Return YouTube Dislike estimates them'),
-                'dislikes.png', 'dislikes', onOff(tr('asked of returnyoutubedislike.com for each video whose watch page you open'), tr('no count')))
+                'dislikes.png', 'dislikes', onOff(tr('asked of returnyoutubedislike.com for each video whose watch page you open'), tr('no count'))),
+            tr('Screen off'),
+            // Choosing one shows it; its picture drawn for the app, as Most replayed's
+            pref(tr('Screen off'), tr('How the screen goes black while the sound plays on: the Screen off shortcut (Settings › Remote) or the player\'s settings.'),
+                'screenoff.png', 'screenOff', [
+                    { value: 'iris', name: tr('Film iris'), note: tr('a circle closes on the middle, like the end of an old film') },
+                    { value: 'crt', name: tr('Old TV'), note: tr('the picture closes into a glowing line and a dot, like a tube TV switched off') },
+                    { value: 'shutter', name: tr('Camera shutter'), note: tr('six blades close in, turning, like a camera\'s shutter') },
+                    { value: 'curtain', name: tr('Theatre curtain'), note: tr('red curtains meet in the middle, then the stage goes dark') },
+                    { value: 'blinds', name: tr('Blinds'), note: tr('strips close from the top down, like blinds') },
+                    { value: 'sweep', name: tr('Sweep'), note: tr('black sweeps across from the right with a soft edge') },
+                    { value: 'fade', name: tr('Slow fade'), note: tr('the picture fades to black in a second and a half') },
+                    { value: 'random', name: tr('Random'), note: tr('a different one of these each time') },
+                    { value: 'none', name: tr('None'), note: tr('black at once') }
+                ], function () { screenOff(true); }),
+            screenWaking(),
+            pref(tr('Casting with the screen off'), tr('When a video is cast from a phone while the screen is off'), 'screenoff.png', 'castWakes', [
+                { value: false, name: tr('The screen stays off'), note: tr('the video plays with the screen dark, as for music from your phone') },
+                { value: true, name: tr('The screen wakes'), note: tr('the screen comes back for the new video') }
+            ])
         ] }
     ];
 }
@@ -309,7 +451,7 @@ var LINK: Setting[] = [
 /** About: the app's version, the device it runs on, where its code is, what it uses */
 function about(): Setting {
     var where = device();
-    return { label: tr('About'), summary: tr('Bolli YouTube, a light YouTube app for TVs'), picture: 'logo.webp', info: [
+    return { label: tr('About'), summary: tr('Bolli YouTube, a light YouTube app for TVs'), picture: LOGO, info: [
         tr('Version {1}', document.documentElement.getAttribute('data-version') || ''),
         where ? tr('On {1}', where) : '',
         tr('Source code: {1}', 'github.com/aktiwers/bolli-youtube'),
@@ -319,11 +461,21 @@ function about(): Setting {
 }
 
 /** The device: the Android app's model and version (its browser names an LG TV, as YouTube needs), else an LG TV's
- * model, webOS year and firmware as its browser names them ('' none) */
+ * model and firmware as webOS gives them (or as an older build's browser named them, with the webOS year; '' none) */
 function device(): string {
     var shell = android();
     if (shell) {
         return shell.device ? shell.device() : 'Android';
+    }
+    // webOS's own word on it (a webOS app's: its model and firmware)
+    var palm = (window as unknown as { PalmSystem?: { deviceInfo?: string } }).PalmSystem;
+    try {
+        var info = JSON.parse(palm && palm.deviceInfo || 'null');
+        if (info && info.modelName) {
+            return 'LG ' + info.modelName + (info.platformVersion ? ', firmware ' + info.platformVersion : '');
+        }
+    } catch (e) {
+        // not JSON: from the browser's name below
     }
     var ua = navigator.userAgent;
     var model = /\(LG, ([^,)]+)/.exec(ua);
@@ -345,13 +497,37 @@ function step(i: number, count: number, code: number): number {
     return Math.max(0, Math.min(count - 1, i + (code === KEY.UP ? -1 : 1)));
 }
 
-/** Focus location: the list or the focused setting's choices (a confirmation question may cover them) */
-type Place = 'list' | 'choices';
+/** How a setting is set, for the line under its name: its set choices' names (a page's: its note; '' none) */
+function valueOf(s: Setting): string {
+    var c = s.choices;
+    return !c ? '' : s.open ? sentence(c.list()[0].note) : setNames(c);
+}
+
+/** Focus location: the categories, the focused category's settings, or the focused setting's choices (a confirmation
+ * question may cover them) */
+type Place = 'categories' | 'settings' | 'choices';
+
+/** A category as shown: its row on the left (with how many settings it has), its settings' list in the middle (each
+ * setting's row, with the line saying how it is set), the setting it is on (kept while the app runs), how far its list
+ * scrolled and for which setting (-1: none yet), the lines' drawing (the view's changes then) */
+interface Shown {
+    el: HTMLElement;
+    count: HTMLElement;
+    list: HTMLElement;
+    rows: { setting: Setting; el: HTMLElement; value: HTMLElement }[];
+    at: number;
+    scrolled: number;
+    centredAt: number;
+    drawnAt: number;
+}
 
 export class SettingsView implements View {
     el: HTMLElement;
     private menu: HTMLElement;
-    private list: HTMLElement;
+    private categoryList: HTMLElement;
+    private middle: HTMLElement;
+    private middleLine: HTMLElement;
+    private panel: HTMLElement;
     private body: HTMLElement;
     private picture: HTMLImageElement;
     private heading: HTMLElement;
@@ -359,31 +535,40 @@ export class SettingsView implements View {
     private steps: HTMLElement;
     private code: HTMLElement;
     private info: HTMLElement;
-    private phone: HTMLImageElement;
     private buttonsBox: HTMLElement;
     private note: HTMLElement;
-    /** Settings in list order with their elements; ownCount: how many precede the account's; About's (always last) */
-    private items: { setting: Setting; el: HTMLElement }[] = [];
-    private ownCount = 0;
-    private aboutItems: { setting: Setting; el: HTMLElement }[] = [];
-    private aboutHead: HTMLElement | null = null;
-    private at = 0;
-    private place: Place = 'list';
+    /** The categories in order, the focused one, the one whose list shows, Account & phone (the account's History & data
+     * join it) */
+    private categories: Shown[] = [];
+    private category = 0;
+    private showing: Shown | null = null;
+    private account: Shown;
+    private place: Place = 'categories';
     private focused = false;
     private shown = false;
-    /** Scroll offsets of the list and the right side */
+    /** Scroll offsets of the categories (whether they scroll at all: measured when shown) and the right side */
     private scrolled = 0;
+    private categoriesScroll = false;
     private panelScrolled = 0;
+    /** Changes that may set something anew (a choice, a page closed, the account, Settings shown again): the lines under
+     * the settings' names are drawn again once a category shows after one */
+    private changes = 0;
     /** The setting shown on the right, its choices, their buttons, the focused button */
     private drawn: Setting | null = null;
     private choices: Choice[] = [];
     private buttons: { el: HTMLElement; check: HTMLElement }[] = [];
     private button = 0;
+    /** The right side's drawing waiting for the next frame (a step through the categories: the left and the middle show
+     * first; on the TV that halved a step's time) */
+    private panelFrame = 0;
     /** Subtitles' "More languages" picker (built on first open); takes the keys while open */
     private languages: LanguagePicker | null = null;
-    /** The account's History & data group as shown, and its elements */
+    /** Live chat settings (built on first open); takes the keys while open */
+    private chat: ChatSettings | null = null;
+    /** Shortcuts (built on first open); takes the keys while open */
+    private keys: ShortcutsPage | null = null;
+    /** The account's History & data group as shown */
     private history: AccountGroup | null = null;
-    private historyEls: HTMLElement[] = [];
     /** The TV code ('' if none or expired), the text shown instead ('…' while requesting), the rest timer, the expiry
      * timer */
     private tvCode = '';
@@ -392,17 +577,19 @@ export class SettingsView implements View {
     private codeEnd = 0;
 
     /** link: requests a TV code from YouTube; pages: possible start pages; question: the app's confirmation dialog
-     * (gets keys first while shown); restart: starts the app again (a new language) */
-    constructor(private link: () => Promise<string>, pages: StartPage[], private question: Question, restart: () => void) {
-        this.el = h('div', 'by-settings');
+     * (gets keys first while shown); restart: starts the app again (a new language); host: what Shortcuts needs */
+    constructor(private link: () => Promise<string>, pages: StartPage[], private question: Question, restart: () => void, private host: ShortcutHost) {
+        this.el = h('div', 'by-settings by-settings--split');
         setShown(this.el, false);
         this.el.appendChild(h('div', 'by-settings-title', tr('Settings')));
         this.menu = h('div', 'by-settings-menu');
-        this.list = h('div', 'by-settings-list');
-        this.menu.appendChild(this.list);
+        this.categoryList = h('div', 'by-settings-list');
+        this.menu.appendChild(this.categoryList);
         this.el.appendChild(this.menu);
         this.el.appendChild(h('div', 'by-settings-line'));
-        var panel = h('div', 'by-settings-panel');
+        this.middle = this.el.appendChild(h('div', 'by-settings-middle')) as HTMLElement;
+        this.middleLine = this.el.appendChild(h('div', 'by-settings-line by-settings-line--middle')) as HTMLElement;
+        var panel = this.panel = h('div', 'by-settings-panel');
         this.body = h('div', 'by-settings-body');
         this.picture = this.body.appendChild(h('img', 'by-settings-picture')) as HTMLImageElement;
         this.heading = this.body.appendChild(h('div', 'by-settings-heading')) as HTMLElement;
@@ -411,35 +598,38 @@ export class SettingsView implements View {
         this.steps = linkBox.appendChild(h('ol', 'by-settings-steps')) as HTMLElement;
         this.code = linkBox.appendChild(h('div', 'by-settings-code')) as HTMLElement;
         this.info = this.body.appendChild(h('div', 'by-settings-info')) as HTMLElement;
-        this.phone = this.body.appendChild(h('img', 'by-settings-phone')) as HTMLImageElement;
         this.buttonsBox = this.body.appendChild(h('div', 'by-settings-buttons')) as HTMLElement;
         this.note = this.body.appendChild(h('div', 'by-settings-note')) as HTMLElement;
         panel.appendChild(this.body);
         this.el.appendChild(panel);
         var self = this;
-        bolli(pages, function () { self.moreLanguages(); }, restart).forEach(function (group) {
-            self.addGroup(group.title, group.settings);
+        bolli(pages, function () { self.moreLanguages(); }, function () { self.openChat(); }, function () { self.openKeys(); }, restart).forEach(function (c) {
+            self.addCategory(c);
         });
-        this.addGroup(tr('Link TV & phone'), LINK);
-        this.ownCount = this.items.length;
-        this.aboutHead = this.addGroup('Bolli YouTube', [about()])[0];
-        this.aboutItems = this.items.slice(this.ownCount);
+        this.account = this.addCategory({ title: tr('Account & phone'), settings: LINK });
+        this.addCategory({ title: tr('About'), settings: [about()] });
         this.drawFocus();
-        // A click on a setting focuses it (its choices show, as in YouTube's Settings); on a choice it sets it
+        // A click on a category or a setting focuses it (its settings or choices show, as in YouTube's Settings; a
+        // category of one page opens it, as OK); on a choice it sets it
         takesPointer(this.el, function (target) {
-            var i = holding(self.items, target);
-            var j = holding(self.buttons, target);
-            if (i >= 0) {
-                self.at = i;
-                self.place = 'list';
-            } else if (j >= 0) {
+            var shown = self.categories[self.category];
+            var c = holding(self.categories, target);
+            var r = holding(shown.rows, target);
+            var b = holding(self.buttons, target);
+            if (c >= 0) {
+                self.category = c;
+                self.place = 'categories';
+            } else if (r >= 0) {
+                shown.at = r;
+                self.place = 'settings';
+            } else if (b >= 0) {
                 self.place = 'choices';
-                self.button = j;
+                self.button = b;
             } else {
                 return null;
             }
             self.drawFocus();
-            return i >= 0 ? { key: 0 } : {};
+            return b >= 0 || c >= 0 && self.alone() && self.setting().open ? {} : { key: 0 };
         });
     }
 
@@ -447,9 +637,15 @@ export class SettingsView implements View {
         var self = this;
         this.shown = true;
         setShown(this.el, true);
+        // (measured here: a step reads no layout)
+        this.categoriesScroll = this.categoryList.offsetHeight > this.menu.offsetHeight;
+        // Set elsewhere meanwhile (the player's settings, a shortcut set from a page): the lines and the right side anew
+        this.drawn = null;
+        this.changes++;
         this.drawFocus();
+        this.drawValues();
         // Returning to "Link with TV code": request a code if there is none, as when focus rests on it
-        if (this.items[this.at].setting.code) {
+        if (this.setting().code) {
             this.askCode(false);
         }
         // On failure show none, rather than a previous account's
@@ -474,40 +670,104 @@ export class SettingsView implements View {
         this.drawFocus();
     }
 
-    /** The language picker while open (null: none; the pointer's layer: core/pointer.ts) */
+    /** Its pages made so far: the language picker, Live chat settings, Shortcuts */
+    private pages(): SubPage[] {
+        return [this.languages, this.chat, this.keys].filter(function (p) { return !!p; }) as SubPage[];
+    }
+
+    /** Its page shown over it (null: none) */
+    private openPage(): SubPage | null {
+        return this.languages && this.languages.shown ? this.languages : this.chat && this.chat.shown ? this.chat :
+            this.keys && this.keys.shown ? this.keys : null;
+    }
+
+    /** The page of its own while open (null: none; the pointer's layer: core/pointer.ts; it takes every key, the
+     * shortcuts' too: main.ts) */
     layer(): HTMLElement | null {
-        return this.languages ? this.languages.layer() : null;
+        var open = this.openPage();
+        return open ? open.layer() : null;
     }
 
     onKey(code: number): boolean {
-        if (this.languages && this.languages.shown) {
-            return this.languages.onKey(code);
+        var page = this.openPage();
+        if (page) {
+            page.onKey(code);
+            // Closed: the note and the line under its name say how it is set now
+            if (!page.shown) {
+                this.drawPanel();
+                this.changed();
+            }
+            return true;
+        }
+        // (any key but a step works on the right side as it is now)
+        if (code !== KEY.UP && code !== KEY.DOWN) {
+            this.panelNow();
         }
         if (this.place === 'choices') {
             this.choicesKey(code);
             return true;
         }
+        var shown = this.categories[this.category];
+        var inCategories = this.place === 'categories';
         switch (code) {
             case KEY.UP:
             case KEY.DOWN:
-                this.at = step(this.at, this.items.length, code);
+                if (inCategories) {
+                    this.category = step(this.category, this.categories.length, code);
+                } else {
+                    shown.at = step(shown.at, shown.rows.length, code);
+                }
                 this.drawFocus();
                 return true;
             case KEY.RIGHT:
             case KEY.OK:
-                if (this.buttons.length) {
-                    this.place = 'choices';
-                    this.button = this.setButton();
+                if (inCategories && !this.alone()) {
+                    this.place = 'settings';
                     this.drawFocus();
-                } else if (code === KEY.OK && this.items[this.at].setting.code) {
-                    this.askCode(true);
+                } else {
+                    this.enter(code);
                 }
+                return true;
+            case KEY.LEFT:
+            case KEY.BACK:
+                if (inCategories) {
+                    return false;
+                }
+                this.place = 'categories';
+                this.drawFocus();
                 return true;
         }
         return false;
     }
 
-    /** Keys in the choices: Up/Down move, OK sets, Left or Back return to the list */
+    /** The focused category's focused setting */
+    private setting(): Setting {
+        var shown = this.categories[this.category];
+        return shown.rows[shown.at].setting;
+    }
+
+    /** Whether the focused category has one setting (shown on the right at once, without the middle) */
+    private alone(): boolean {
+        return this.categories[this.category].rows.length === 1;
+    }
+
+    /** Right or OK on a setting: its page opens, or its choices take the focus (Link with TV code: OK asks for a code
+     * again after a failure) */
+    private enter(code: number): void {
+        var s = this.setting();
+        if (s.open) {
+            s.open();
+        } else if (this.buttons.length) {
+            this.place = 'choices';
+            this.button = this.setButton();
+            this.drawFocus();
+        } else if (code === KEY.OK && s.code) {
+            this.askCode(true);
+        }
+    }
+
+    /** Keys in the choices: Up/Down move, OK sets, Left or Back return to the settings (to the categories for one
+     * alone) */
     private choicesKey(code: number): void {
         switch (code) {
             case KEY.UP:
@@ -516,15 +776,29 @@ export class SettingsView implements View {
                 this.drawButtons();
                 break;
             case KEY.OK:
-                this.items[this.at].setting.choices!.choose(this.choices[this.button].value);
+                this.setting().choices!.choose(this.choices[this.button].value);
                 this.drawButtons();
+                this.changed();
                 break;
             case KEY.LEFT:
             case KEY.BACK:
-                this.place = 'list';
+                this.place = this.alone() ? 'categories' : 'settings';
                 this.drawFocus();
                 break;
         }
+    }
+
+    /** Live chat settings over an example (over the whole screen, the rail too; in this screen, so hidden with it when a
+     * video starts over it) */
+    private openChat(): void {
+        this.chat = this.chat || new ChatSettings(this.el);
+        this.chat.open();
+    }
+
+    /** Shortcuts over the whole screen (in this screen, so hidden with it when a video starts over it) */
+    private openKeys(): void {
+        this.keys = this.keys || new ShortcutsPage(this.el, this.host, this.question);
+        this.keys.open();
     }
 
     /** Subtitles' "More languages": the chosen language is set and added to the list */
@@ -538,40 +812,59 @@ export class SettingsView implements View {
             }
             setPref('captions', code);
             self.drawPanel();
+            self.changed();
         });
     }
 
-    /** Adds a group heading and its settings to the list (at its end, or before the element before); returns their
-     * elements */
-    private addGroup(title: string, settings: Setting[], before?: HTMLElement): HTMLElement[] {
-        var self = this;
-        var add = function (el: HTMLElement): HTMLElement {
-            return self.list.insertBefore(el, before || null) as HTMLElement;
-        };
-        var els = [add(h('div', 'by-settings-group', title))];
+    /** Adds a category: its row on the left, its settings' list in the middle (hidden until it shows) */
+    private addCategory(c: Category): Shown {
+        var el = this.categoryList.appendChild(h('div', 'by-settings-item')) as HTMLElement;
+        var count = el.appendChild(h('span', 'by-settings-count')) as HTMLElement;
+        el.appendChild(document.createTextNode(c.title));
+        var list = this.middle.appendChild(h('div', 'by-settings-list')) as HTMLElement;
+        setShown(list, false);
+        var shown: Shown = { el: el, count: count, list: list, rows: [], at: 0, scrolled: 0, centredAt: -1, drawnAt: -1 };
+        this.categories.push(shown);
+        this.fill(shown, c.settings);
+        return shown;
+    }
+
+    /** Puts a category's settings in its list (a text: a small heading); its row on the left says how many it has (one
+     * alone: a page's arrow, or nothing) */
+    private fill(shown: Shown, settings: (Setting | string)[]): void {
+        shown.list.innerHTML = '';
+        shown.rows = [];
+        shown.centredAt = shown.drawnAt = -1;
         settings.forEach(function (s) {
-            var el = add(h('div', 'by-settings-item', s.label));
-            self.items.push({ setting: s, el: el });
-            els.push(el);
+            if (typeof s === 'string') {
+                shown.list.appendChild(h('div', 'by-settings-group', s));
+                return;
+            }
+            var el = shown.list.appendChild(h('div', 'by-settings-item by-settings-item--two')) as HTMLElement;
+            el.appendChild(h('div', 'by-settings-name', s.label));
+            shown.rows.push({ setting: s, el: el, value: el.appendChild(h('div', 'by-settings-value')) as HTMLElement });
         });
-        return els;
+        var one = shown.rows.length === 1 ? shown.rows[0].setting : null;
+        setText(shown.count, one ? (one.open ? '›' : '') : String(shown.rows.length));
     }
 
-    /** Puts the account's History & data group before About, replacing the previous one (no-op for the same reply);
-     * the focus stays on its setting */
+    /** Puts the account's History & data settings in Account & phone after phone linking, under headings, replacing the
+     * previous ones (no-op for the same reply); the focus stays on its setting */
     private putHistory(group: AccountGroup | null): void {
         var self = this;
         if (group === this.history) {
             return;
         }
-        var focused = this.items[this.at].setting;
+        var shown = this.account;
+        var focused = shown.rows[shown.at].setting;
         this.history = group;
-        this.historyEls.forEach(function (el) { self.list.removeChild(el); });
-        this.items.length = this.ownCount;
-        this.historyEls = group ? this.addGroup(group.title, group.settings.map(function (a) { return self.accountSetting(a); }), this.aboutHead || undefined) : [];
-        this.items = this.items.concat(this.aboutItems);
-        var still = this.items.map(function (item) { return item.setting; }).indexOf(focused);
-        this.at = still >= 0 ? still : Math.min(this.at, this.items.length - 1);
+        this.fill(shown, group ? ([tr('Link TV & phone')] as (Setting | string)[]).concat(LINK, [group.title],
+            group.settings.map(function (a) { return self.accountSetting(a); })) : LINK);
+        var still = shown.rows.map(function (row) { return row.setting; }).indexOf(focused);
+        shown.at = still >= 0 ? still : Math.min(shown.at, shown.rows.length - 1);
+        if (shown === this.showing) {
+            this.drawValues();
+        }
         if (!this.question.shown) {
             this.drawFocus();
         }
@@ -591,36 +884,119 @@ export class SettingsView implements View {
                 if (self.drawn === setting) {
                     self.drawButtons();
                 }
+                self.changed();
             }, tr('YouTube did not take the change. Try again.'));
         });
         return setting;
     }
 
-    /** Marks the focused setting, scrolls it into view and shows it on the right */
+    /** Marks the focused category and setting (grey where the focus was: the keys in a column further, or the rail),
+     * shows the category's settings in the middle (one alone: none, the right side wide), scrolls both lists, and
+     * shows the setting on the right. The middle is hidden, not taken out (its lists stay laid out), and the right
+     * side's width is its own class, not Settings': a class on Settings restyled every list, hidden ones too (up to
+     * 15 ms a step on the TV) */
     private drawFocus(): void {
-        for (var i = 0; i < this.items.length; i++) {
-            toggleClass(this.items[i].el, 'by-settings-item--focused', i === this.at && this.focused && this.place === 'list');
-            toggleClass(this.items[i].el, 'by-settings-item--at', i === this.at && (!this.focused || this.place !== 'list'));
+        var self = this;
+        var shown = this.categories[this.category];
+        var keys = this.focused;
+        this.categories.forEach(function (c, i) {
+            var on = i === self.category;
+            toggleClass(c.el, 'by-settings-item--focused', on && keys && self.place === 'categories');
+            toggleClass(c.el, 'by-settings-item--at', on && !(keys && self.place === 'categories'));
+        });
+        // (its values as it shows: a step in its list changes none)
+        if (shown !== this.showing) {
+            if (this.showing) {
+                setShown(this.showing.list, false);
+            }
+            setShown(shown.list, true);
+            this.showing = shown;
+            this.drawValues();
         }
-        if (this.items[this.at].setting !== this.drawn) {
-            this.drawPanel();
-        } else {
+        var alone = this.alone();
+        setShown(this.middle, !alone);
+        setShown(this.middleLine, !alone);
+        shown.rows.forEach(function (row, i) {
+            var on = i === shown.at && self.place !== 'categories';
+            toggleClass(row.el, 'by-settings-item--focused', on && keys && self.place === 'settings');
+            toggleClass(row.el, 'by-settings-item--at', on && !(keys && self.place === 'settings'));
+        });
+        if (this.setting() === this.drawn) {
             this.drawButtons();
+        } else if (this.place === 'categories') {
+            this.panelSoon();
+        } else {
+            this.drawPanel();
         }
-        this.scrollList();
+        // (a list scrolls only once its focus moved, or it was filled anew: a category step reads no layout)
+        if (this.categoriesScroll) {
+            this.scrolled = keepCentred(this.categoryList, this.menu.offsetHeight, shown.el, this.scrolled);
+        }
+        if (shown.centredAt !== shown.at) {
+            var view = this.middle.offsetHeight;
+            shown.scrolled = keepCentred(shown.list, view, shown.rows[shown.at].el, shown.scrolled);
+            shown.centredAt = view ? shown.at : -1;
+        }
+    }
+
+    /** Something may be set anew: the lines say how */
+    private changed(): void {
+        this.changes++;
+        this.drawValues();
+    }
+
+    /** The line under each of the focused category's settings: how it is set (none: its name alone, in the middle of
+     * its row; one setting alone: not shown); drawn again only after a change */
+    private drawValues(): void {
+        var shown = this.categories[this.category];
+        if (!this.shown || this.alone() || shown.drawnAt === this.changes) {
+            return;
+        }
+        shown.drawnAt = this.changes;
+        shown.rows.forEach(function (row) {
+            var value = valueOf(row.setting);
+            setText(row.value, value);
+            toggleClass(row.el, 'by-settings-item--one', !value);
+        });
+    }
+
+    /** Draws the right side in the next frame, for the setting focused then */
+    private panelSoon(): void {
+        var self = this;
+        if (!this.panelFrame) {
+            this.panelFrame = requestAnimationFrame(function () {
+                self.panelFrame = 0;
+                if (self.setting() !== self.drawn) {
+                    self.drawPanel();
+                }
+            });
+        }
+    }
+
+    /** Draws the right side now if it waits for a frame */
+    private panelNow(): void {
+        if (this.panelFrame) {
+            cancelAnimationFrame(this.panelFrame);
+            this.panelFrame = 0;
+            if (this.setting() !== this.drawn) {
+                this.drawPanel();
+            }
+        }
     }
 
     /** Index of the set choice's button (first if several can be set, or none is) */
     private setButton(): number {
-        var c = this.items[this.at].setting.choices;
+        var c = this.setting().choices;
         return c && !c.many ? Math.max(0, this.choices.map(function (one) { return c!.isSet(one.value); }).indexOf(true)) : 0;
     }
 
     /** Draws the right side: picture, name, description, and choices (or steps, or code); the stylesheet shows the
-     * parts for its kind (by-settings-body--*) */
+     * parts for its kind (by-settings-body--*); narrower beside the middle (its width set with its content: laid out
+     * once) */
     private drawPanel(): void {
         var self = this;
-        var s = this.drawn = this.items[this.at].setting;
+        var s = this.drawn = this.setting();
+        toggleClass(this.panel, 'by-settings-panel--narrow', !this.alone());
         this.body.className = 'by-settings-body' + (s.picture ? ' by-settings-body--picture' : '') +
             (s.code ? ' by-settings-body--code' : s.steps ? ' by-settings-body--steps' : s.info ? ' by-settings-body--info' : '');
         if (s.picture) {
@@ -637,7 +1013,6 @@ export class SettingsView implements View {
             self.info.appendChild(h('div', 'by-settings-fact', line));
         });
         if (s.code) {
-            setSrc(this.phone, pic('link_with_tv_code_static_v2'));
             this.drawCode();
             clearTimeout(this.codeTimer);
             this.codeTimer = setTimeout(function () { self.askCode(false); }, CODE_REST_MS) as unknown as number;
@@ -652,16 +1027,17 @@ export class SettingsView implements View {
         this.drawButtons();
     }
 
-    /** Ticks the set choices, marks the focused one, shows its note (else the set one's) */
+    /** Ticks the set choices, marks the focused one, shows its note (else the set one's; a page's always) */
     private drawButtons(): void {
-        var c = this.items[this.at].setting.choices;
+        var s = this.setting();
+        var c = s.choices;
         var inChoices = this.place === 'choices';
         var noted = -1;
         for (var i = 0; i < this.buttons.length; i++) {
             var isSet = !!c && c.isSet(this.choices[i].value);
             setShown(this.buttons[i].check, isSet);
             toggleClass(this.buttons[i].el, 'by-settings-button--focused', inChoices && i === this.button);
-            if (inChoices ? i === this.button : isSet && noted < 0) {
+            if (inChoices || s.open ? i === this.button : isSet && noted < 0) {
                 noted = i;
             }
         }
@@ -679,7 +1055,7 @@ export class SettingsView implements View {
     private askCode(again: boolean): void {
         var self = this;
         // (in the background, none: renewIfOld asks once back)
-        if (!this.shown || document.hidden || !this.items[this.at].setting.code || this.tvCode || this.codeSaid === '…' || this.codeSaid && !again) {
+        if (!this.shown || document.hidden || !this.setting().code || this.tvCode || this.codeSaid === '…' || this.codeSaid && !again) {
             return;
         }
         this.codeSaid = '…';
@@ -704,42 +1080,26 @@ export class SettingsView implements View {
 
     /** Redraws the code if showing (requests a new one when the old one expired) */
     private redrawCode(): void {
-        if (this.items[this.at].setting.code) {
+        if (this.setting().code) {
             this.drawCode();
             this.askCode(false);
         }
     }
 
     /** Closes what this screen opened (the language picker; the question, if from a setting's button: others stay) and
-     * returns to the list */
+     * returns to the categories */
     private closeOwn(): void {
-        if (this.languages) {
-            this.languages.close();
-        }
+        this.pages().forEach(function (p) { p.close(); });
         if (this.place === 'choices') {
             this.question.close();
         }
-        this.place = 'list';
+        this.place = 'categories';
     }
 
     /** Shows YouTube's question; yes runs the action (and shows YouTube's reply); focus returns to the button after */
     private openAsk(ask: Ask): void {
         var self = this;
-        askToClear(this.question, ask, undefined, function () { self.drawButtons(); });
-    }
-
-    /** Scrolls the list to keep the focused setting centred (clamped at both ends) */
-    private scrollList(): void {
-        var view = this.menu.offsetHeight;
-        if (!view) {
-            return;
-        }
-        var el = this.items[this.at].el;
-        var to = Math.max(0, Math.min(this.list.offsetHeight - view, el.offsetTop + el.offsetHeight / 2 - view / 2));
-        if (to !== this.scrolled) {
-            this.scrolled = to;
-            translate(this.list, 0, -to);
-        }
+        askToClear(this.question, ask, undefined, function () { self.drawButtons(); self.changed(); });
     }
 
     /** When the right side is taller than the screen, scrolls it to keep the focused choice and its note in view
@@ -747,7 +1107,7 @@ export class SettingsView implements View {
     private scrollPanel(): void {
         var b = this.buttons[this.button];
         var to = 0;
-        if (this.place !== 'list' && b) {
+        if (this.place === 'choices' && b) {
             var view = (this.body.parentNode as HTMLElement).offsetHeight;
             if (this.body.offsetHeight > view) {
                 var bottom = this.note.textContent ? this.note.offsetTop + this.note.offsetHeight : b.el.offsetTop + b.el.offsetHeight;

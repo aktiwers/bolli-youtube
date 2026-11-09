@@ -12,7 +12,7 @@
 
 import { h, setClass, setShown, setText, toggleClass, translate } from '../core/dom.js';
 import { tr } from '../core/i18n.js';
-import { KEY } from '../core/keys.js';
+import { digit, KEY } from '../core/keys.js';
 import { takesPointer, toPart } from '../core/pointer.js';
 import { listen } from '../core/platform.js';
 import { View } from '../core/view.js';
@@ -198,6 +198,12 @@ export class SearchView implements View {
     /** The panel open over it (null: none; the pointer's layer: core/pointer.ts) */
     layer(): HTMLElement | null {
         return this.panel.layer();
+    }
+
+    /** The key is its own before any shortcut (main.ts; the language panel's are by its layer): the numbers while the
+     * keyboard can type them */
+    ownKeys(code: number): boolean {
+        return this.at !== 'rows' && digit(code) >= 0;
     }
 
     onKey(code: number): boolean {

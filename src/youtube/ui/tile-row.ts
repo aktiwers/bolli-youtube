@@ -42,6 +42,8 @@ export interface TileItem {
     wideImage?: string;
     /** An icon before the label, e.g. live, playlist, mix (drawn by the theme: bd-tile-label--<icon>) */
     labelIcon?: string;
+    /** Its place in a playlist, shown before it (bd-tile-rank; views/videos.ts: Settings › Rank numbers) */
+    rank?: string;
 }
 
 export interface TileShape {
@@ -581,6 +583,9 @@ function buildTile(item: TileItem, shape: TileShape, textH: number): Tile {
     } else {
         title.style.height = title.style.lineHeight = textH + 'px';
         el.appendChild(title);
+    }
+    if (item.rank) {
+        el.appendChild(h('div', 'bd-tile-rank', item.rank));
     }
     var tile: Tile = { el: el, under: under, frame: frame, img: img, hasImage: false, label: null, bar: null };
     sizeTile(tile, shape, !!item.round);

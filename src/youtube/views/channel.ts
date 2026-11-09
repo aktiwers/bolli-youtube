@@ -2,7 +2,8 @@
 // banner and search bar on top, avatar beside name, handle and subscribers,
 // three description lines with "...more" (opens About in a side panel).
 // Buttons: Play mix, Subscribe, then sub pages (Videos, Live, Playlists),
-// each opening as its own page over this one. Below, the shelves as rows
+// each opening as its own page over this one, and Shortcut (a button of the
+// remote for the channel: views/shortcuts.ts). Below, the shelves as rows
 // (FeedView). Down enters the rows and slides the header away; Up walks back
 // to the buttons, "...more" and the search bar. Positions come from
 // metrics.channel, the look from themes/<id>.css. Resting focus on a sub
@@ -69,9 +70,9 @@ export class ChannelView extends FeedHost implements View {
     private early = false;
 
     /** open: OK on a tile; openPage: opens a sub page over this one; search: OK on the search bar; known: name and
-     * avatar to show at once */
+     * avatar to show at once; shortcut: its Shortcut button (none: no button) */
     constructor(page: Page, texts: FeedTexts, private open: (video: Video) => void, private openPage: (page: Page) => void,
-        search: (voice: boolean) => void, known?: KnownChannel) {
+        search: (voice: boolean) => void, known?: KnownChannel, private shortcut?: (c: Channel) => void) {
         super();
         var self = this;
         this.el = h('div', 'by-channel');
@@ -288,6 +289,9 @@ export class ChannelView extends FeedHost implements View {
             self.pageAt[self.buttons.count] = p.page;
             add(p.title, function () { self.openPage(p.page); });
         });
+        if (this.shortcut) {
+            add(tr('Shortcut'), function () { self.shortcut!(c); });
+        }
         this.buttons.focus(0);
         this.drawSubscribe();
         this.setFocused(this.focused);

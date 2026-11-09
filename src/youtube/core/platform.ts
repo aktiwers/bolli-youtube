@@ -29,6 +29,12 @@ export interface AndroidShell {
     device?(): string;
 }
 
+/** webOS TV 1.x-2.x's old engine: promise.js stood in for its Promise and marked it (never where the engine names its
+ * Chrome: webOS 3 and later, Android; nor without a page: the tests) */
+export function oldEngine(): boolean {
+    return typeof window !== 'undefined' && !!(window as unknown as { bolliOldEngine?: boolean }).bolliOldEngine && !/Chrome\//.test(navigator.userAgent);
+}
+
 /** The Android app around the page, or null (webOS, a browser) */
 export function android(): AndroidShell | null {
     return (window as unknown as { BolliAndroid?: AndroidShell }).BolliAndroid || null;

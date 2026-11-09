@@ -2,8 +2,9 @@
 // gives the messages since the last answer, the token for the next ones and how long YouTube wants the app to wait
 // first (at least ASK_MIN_MS here: requests stay few, and each costs the TV a round of garbage collection when webOS
 // reports low memory, as it does every 5 s while a video plays). Messages are the chat's text messages and Super Chats
-// (with their amount), without the authors' pictures (a request each); emoji come as pictures, as YouTube's custom
-// ones have no character. A failed request is noted (api/failures.ts).
+// (with their amount), with when they were sent and their author's picture (its address: the chat loads it only when
+// Settings show the pictures, a request each); emoji come as pictures, as YouTube's custom ones have no character. A
+// failed request is noted (api/failures.ts).
 
 import { HttpError } from '../core/http.js';
 import { noteFailed } from './failures.js';
@@ -12,16 +13,19 @@ import { innertube } from './youtube.js';
 
 /** Messages are asked for again no sooner than this (ms) */
 var ASK_MIN_MS = 8000;
-/** An emoji's picture: the smallest this wide (px) */
+/** An emoji's and an author's picture: the smallest this wide (px) */
 var EMOJI_PX = 24;
+var AVATAR_PX = 32;
 
-/** A message: its author, its parts (text, or an emoji: its picture, and its name as the text), and a Super Chat's
- * amount ('' none) */
+/** A message: its author, its parts (text, or an emoji: its picture, and its name as the text), a Super Chat's amount
+ * ('' none), when it was sent (ms; 0 not known) and its author's picture ('' none) */
 export interface ChatMessage {
     id: string;
     author: string;
     parts: { text: string; emoji: string }[];
     amount: string;
+    at: number;
+    avatar: string;
 }
 
 export interface ChatAnswer {
@@ -49,7 +53,8 @@ export function chatOf(reply: any): ChatAnswer {
         var item = get(a, 'addChatItemAction', 'item') || {};
         var m = item.liveChatTextMessageRenderer || item.liveChatPaidMessageRenderer;
         if (m && m.id) {
-            messages.push({ id: m.id, author: text(m.authorName), parts: partsOf(m.message), amount: text(m.purchaseAmountText) });
+            messages.push({ id: m.id, author: text(m.authorName), parts: partsOf(m.message), amount: text(m.purchaseAmountText),
+                at: Math.round(+m.timestampUsec / 1000) || 0, avatar: picture(m.authorPhoto, 0, AVATAR_PX) });
         }
     });
     return { messages: messages, next: next.continuation || '', waitMs: Math.max(ASK_MIN_MS, +next.timeoutMs || 0) };

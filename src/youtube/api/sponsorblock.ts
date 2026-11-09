@@ -7,9 +7,14 @@
 
 import { getJson } from '../core/http.js';
 import { tr } from '../core/i18n.js';
+import { oldEngine } from '../core/platform.js';
 import { Keeper } from './kept-pages.js';
+import { digest } from './sha256.js';
 
 var API = 'https://sponsorblock.inf.re/api/skipSegments/';
+/** SponsorBlock's own server, for webOS TV 2.x's engine: the one above has a certificate from a root that TV does not
+ * know (the handshake fails) */
+var OWN_API = 'https://sponsor.ajay.app/api/skipSegments/';
 var TIMEOUT_MS = 8000;
 /** No skip in the last part of a segment (a seek to its very end may land back inside it) */
 var END_MARGIN_S = 0.5;
@@ -32,6 +37,7 @@ export var PARTS: PartKind[] = [
     { id: 'intro', name: tr('Intros'), note: tr('intro animations and pauses'), skipped: tr('Skipped the intro'), label: tr('Intro') },
     { id: 'outro', name: tr('End cards'), note: tr('credits and end screens'), skipped: tr('Skipped the end cards'), label: tr('End cards') },
     { id: 'preview', name: tr('Previews and recaps'), note: tr('what comes later, or what came before'), skipped: tr('Skipped the preview'), label: tr('Preview') },
+    { id: 'hook', name: tr('Hooks and greetings'), note: tr('teasers of what comes later in the video, greetings and goodbyes'), skipped: tr('Skipped a hook or greeting'), label: tr('Hook') },
     { id: 'filler', name: tr('Tangents'), note: tr('filler and jokes off the topic'), skipped: tr('Skipped a tangent'), label: tr('Tangent') },
     { id: 'music_offtopic', name: tr('Parts without music'), note: tr('in music videos'), skipped: tr('Skipped a part without music'), label: tr('No music') }
 ];
@@ -64,7 +70,7 @@ var asked = new Keeper<Segment[]>(10 * 60 * 1000, 6, false, false);
 function ask(id: string, kinds: string[]): Promise<Segment[]> {
     // Hash inside the chain: if WebCrypto throws, it counts as no reply instead of breaking playback start
     return Promise.resolve(id).then(sha256Hex).then(function (hex) {
-        return getJson<Reply[]>(API + hex.slice(0, 4) + '?categories=' + encodeURIComponent(JSON.stringify(kinds)), TIMEOUT_MS);
+        return getJson<Reply[]>((oldEngine() ? OWN_API : API) + hex.slice(0, 4) + '?categories=' + encodeURIComponent(JSON.stringify(kinds)), TIMEOUT_MS);
     }).then(function (videos) {
         return segmentsOf(videos, id);
     });
@@ -117,9 +123,7 @@ function sha256Hex(text: string): Promise<string> {
     for (var i = 0; i < text.length; i++) {
         bytes[i] = text.charCodeAt(i) & 0xff;
     }
-    // Chrome 38 takes the algorithm only as an object
-    return Promise.resolve(crypto.subtle.digest({ name: 'SHA-256' }, bytes)).then(function (digest) {
-        var b = new Uint8Array(digest as ArrayBuffer);
+    return digest(bytes).then(function (b) {
         var hex = '';
         for (var k = 0; k < b.length; k++) {
             hex += (b[k] < 16 ? '0' : '') + b[k].toString(16);

@@ -13,11 +13,14 @@
 // app ~1 s every 5 s, garbage collection), opening, playing (shown, keys go to YouTube).
 // Each waiting phase has a deadline. Videos open with _yttv's resolveCommand (as YouTube
 // AdFree and TizenTube do); "Who's watching?" is skipped as YouTube AdFree's auto account
-// select does; SponsorBlock segments (api/sponsorblock.ts) are skipped with a toast.
+// select does; SponsorBlock segments (api/sponsorblock.ts) are skipped with a toast. Never on webOS TV 2.x's engine
+// (runs): YouTube's code needs a newer one (the page fails and the web process crashes); films and fallbacks say so
+// (main.ts, own-player.ts).
 
 import { h, setShown } from '../core/dom.js';
 import { tr } from '../core/i18n.js';
 import { mark, noteZap } from '../core/perf.js';
+import { oldEngine } from '../core/platform.js';
 import { FillLoader, LOGO } from '../ui/fill-loader.js';
 import { note } from './play-log.js';
 import { PROBLEM, skipEdge, toast } from '../ui/toast.js';
@@ -156,10 +159,15 @@ export class TvApp {
         return this.phase === 'idle' || this.phase === 'opening' || this.phase === 'playing';
     }
 
+    /** Whether YouTube's TV app can run here: not on webOS TV 2.x's engine */
+    get runs(): boolean {
+        return !oldEngine();
+    }
+
     /** Starts YouTube's TV app (once; again after a failure; ahead: only to have it ready, not within FAILED_REST_MS of
      * a failure) */
     start(ahead?: boolean): void {
-        if (this.phase !== 'off' || ahead && Date.now() - this.failedAt < FAILED_REST_MS) {
+        if (this.phase !== 'off' || ahead && Date.now() - this.failedAt < FAILED_REST_MS || !this.runs) {
             return;
         }
         this.phase = 'loading';
@@ -181,9 +189,10 @@ export class TvApp {
         });
     }
 
-    /** Plays the video full screen once the player is ready (t: start, s; film: Want.film); false: not a video id */
+    /** Plays the video full screen once the player is ready (t: start, s; film: Want.film); false: not a video id, or
+     * it cannot run here */
     play(id: string, back: () => void, t?: number, film?: boolean): boolean {
-        if (!VIDEO_ID.test(id)) {
+        if (!VIDEO_ID.test(id) || !this.runs) {
             return false;
         }
         this.want = { id: id, t: t || 0, back: back, film: film };

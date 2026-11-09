@@ -6,9 +6,10 @@
 // server, renewed within 6 hours), the server from Google's redirector (kept SERVER_MS); both are dropped when a request
 // through them fails. The inner request carries the sign-in as its Authorization header and a user agent of its own
 // (api/streams.ts: a request from the page cannot set one). AES-128-CTR in plain JS (api/aes.ts: this TV's Web Crypto
-// has none), HMAC-SHA256 by Web Crypto.
+// has none), HMAC-SHA256 by Web Crypto (in plain JS on webOS TV 2.x's engine, which has none: api/sha256.ts).
 
 import { aesCtr } from './aes.js';
+import { hmacSigner } from './sha256.js';
 import { base64Bytes, bytes, fields, num, umpParts, Writer } from './sabr.js';
 import { answer, Via, youtubePage } from './youtube.js';
 
@@ -29,8 +30,8 @@ var PLAYER_RESPONSE = 0;
 
 interface HotConfig {
     aesKey: Uint8Array;
-    /** The HMAC key, imported once */
-    hmacKey: Promise<CryptoKey>;
+    /** Signs with the HMAC key */
+    sign: (data: Uint8Array) => Promise<Uint8Array>;
     encryptedKey: Uint8Array;
     ustreamer: Uint8Array;
     baseUrl: string;
@@ -78,10 +79,9 @@ function hotConfig(): Promise<HotConfig> {
             }
             var life = (+h.keyExpiresInSeconds || 21600) * 1000;
             hotUntil = Date.now() + life - Math.min(KEY_MARGIN_MS, life / 2);
-            var subtle = crypto.subtle || (crypto as unknown as { webkitSubtle: SubtleCrypto }).webkitSubtle;
             return {
                 aesKey: key.subarray(0, 16),
-                hmacKey: Promise.resolve(subtle.importKey('raw', key.subarray(16, 32), { name: 'HMAC', hash: { name: 'SHA-256' } } as any, false, ['sign'])),
+                sign: hmacSigner(key.subarray(16, 32)),
                 encryptedKey: base64Bytes(h.encryptedClientKey),
                 ustreamer: base64Bytes(h.onesieUstreamerConfig || ''),
                 baseUrl: h.baseUrl
@@ -161,13 +161,10 @@ function ask(w: Window, json: string, headers: { [name: string]: string }, as: {
             var signed = new Uint8Array(sealed.length + 16);
             signed.set(sealed, 0);
             signed.set(iv, sealed.length);
-            var subtle = crypto.subtle || (crypto as unknown as { webkitSubtle: SubtleCrypto }).webkitSubtle;
-            return h.hmacKey.then(function (k) {
-                return subtle.sign({ name: 'HMAC' } as any, k, signed);
-            }).then(function (mac) {
+            return h.sign(signed).then(function (mac) {
                 var info = new Writer().string(12, as.deviceMake || '').string(13, as.deviceModel || '').varint(16, 7).string(17, as.clientVersion || '')
                     .string(18, as.osName || '').string(19, as.osVersion || '');
-                var innertube = new Writer().data(2, sealed).data(5, h.encryptedKey).data(6, iv).data(7, new Uint8Array(mac)).varint(10, 1).varint(13, 1).varint(17, 1);
+                var innertube = new Writer().data(2, sealed).data(5, h.encryptedKey).data(6, iv).data(7, mac).varint(10, 1).varint(13, 1).varint(17, 1);
                 var request = new Writer().message(2, new Writer().varint(28, 0)).message(3, innertube).data(4, h.ustreamer)
                     .message(10, new Writer().message(1, info));
                 var url = base + '&id=' + hex(base64Bytes(String(body.videoId)).subarray(0, 8)) + '&cpn=' + encodeURIComponent(String(body.cpn || '')) + '&opr=1&por=1&rn=1';

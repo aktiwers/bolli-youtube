@@ -8,9 +8,11 @@
 // place. Look and pace: themes/<id>.css (by-loader, --round for a circle).
 
 import { h, toggleClass } from '../core/dom.js';
+import { oldEngine } from '../core/platform.js';
 
-/** The app logo: shown while a screen loads or YouTube's player starts */
-export var LOGO = 'logo.webp';
+/** The app logo: shown while a screen loads or YouTube's player starts (a PNG copy on webOS TV 2.x's engine, which
+ * decodes no WebP; promise.js marked it before this runs) */
+export var LOGO = oldEngine() ? 'logo.png' : 'logo.webp';
 
 export class FillLoader {
     private el: HTMLElement;

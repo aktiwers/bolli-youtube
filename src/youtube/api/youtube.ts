@@ -7,8 +7,10 @@
 // renewed and stored the way that app does. A brand account is named in each
 // request (X-Goog-PageId, onBehalfOfUser), else YouTube answers as its owner.
 
+import { HttpError, parse, postJson, postText } from '../core/http.js';
 import { language } from '../core/i18n.js';
 import { mark } from '../core/perf.js';
+import { oldEngine } from '../core/platform.js';
 import { load, save } from '../core/store.js';
 
 /** A small youtube.com page that may be framed (/tv may not) */
@@ -985,6 +987,38 @@ export function answer(w: Window, method: string, url: string, body: string | Ui
 /** A GET from the youtube.com page: the reply text (non-2xx: rejects) */
 export function get(w: Window, url: string): Promise<string> {
     return send(w, 'GET', url, null, {});
+}
+
+/** A JSON POST to YouTube's API, its reply's text: core/http.ts's postText, but on webOS TV 2.x's engine from the
+ * youtube.com page (fromPage) */
+export function postYouTubeText(url: string, body: unknown, headers: { [name: string]: string }): Promise<string> {
+    return oldEngine() ? fromPage(url, body, headers, false) : postText(url, body, headers);
+}
+
+/** A JSON POST to YouTube's API, its reply read: core/http.ts's postJson, but on webOS TV 2.x's engine from the
+ * youtube.com page (fromPage) */
+export function postYouTubeJson<T>(url: string, body: unknown, headers: { [name: string]: string }): Promise<T> {
+    return oldEngine() ? fromPage(url, body, headers, true).then(function (text) { return parse<T>(text, url); }) : postJson<T>(url, body, headers);
+}
+
+/** A JSON POST as core/http.ts makes it (json: a JSON reply asked), but from the youtube.com page: webOS TV 2.x's
+ * engine names the app's origin file:// (Chrome's: null), which YouTube refuses (the page: its origin, its cookies with
+ * it). Its failures as http.ts's (HttpErrors; no answer: a network error) */
+function fromPage(url: string, body: unknown, headers: { [name: string]: string }, json: boolean): Promise<string> {
+    var all: { [name: string]: string } = json ? { 'Content-Type': 'application/json', Accept: 'application/json' } : { 'Content-Type': 'application/json' };
+    for (var name in headers) {
+        all[name] = headers[name];
+    }
+    return youtubePage().then(function (w) {
+        return answer(w, 'POST', url, JSON.stringify(body), all);
+    }).then(function (r) {
+        if (r.status < 200 || r.status >= 300) {
+            throw { status: r.status, url: url, message: 'HTTP ' + r.status, body: r.text } as HttpError;
+        }
+        return r.text;
+    }, function () {
+        throw { status: 0, url: url, message: 'network error', body: '' } as HttpError;
+    });
 }
 
 /** A request from the youtube.com page: the reply text (non-2xx: rejects with an Error that has the status) */

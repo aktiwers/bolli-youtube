@@ -30,6 +30,8 @@ export class PlayerOsd {
     private filled = '';
     /** The description was requested for this showing of the bar */
     private withText = false;
+    /** Where its content starts while shown (top(); 0: to be measured again, as what it shows changed) */
+    private topAt = 0;
     /** Whether the description element is shown (as last set) */
     private textShown = true;
     /** Whether the line under the title is shown (as last set) */
@@ -100,6 +102,15 @@ export class PlayerOsd {
         this.timer = setTimeout(later, SHOW_MS) as unknown as number;
     }
 
+    /** Where its content starts while shown, under the shade above it (layout units from the top; 0: hidden): what
+     * shows over the picture keeps above it (the live chat); measured once while it shows the same lines */
+    top(): number {
+        if (this.shown && !this.topAt) {
+            this.topAt = this.el.getBoundingClientRect().top + (parseFloat(getComputedStyle(this.el).paddingTop) || 0);
+        }
+        return this.shown ? this.topAt : 0;
+    }
+
     /** Shown: stays SHOW_MS more (the pointer moved, as YouTube's controls stay while it does) */
     keep(): void {
         if (this.shown) {
@@ -110,6 +121,7 @@ export class PlayerOsd {
     hide(): void {
         clearTimeout(this.timer);
         this.withText = false;
+        this.topAt = 0;
         if (this.shown) {
             this.el.style.display = 'none';
             if (this.onHide) {
@@ -161,12 +173,14 @@ export class PlayerOsd {
         var text = this.withText && !!this.text.textContent;
         if (text !== this.textShown) {
             this.textShown = text;
+            this.topAt = 0;
             // '' keeps the theme's own display (a box clipped after four lines)
             this.text.style.display = text ? '' : 'none';
         }
         var meta = this.withText && !!this.meta.textContent;
         if (meta !== this.metaShown) {
             this.metaShown = meta;
+            this.topAt = 0;
             this.meta.style.display = meta ? '' : 'none';
             this.head.style.display = meta ? 'none' : '';
         }
@@ -185,5 +199,6 @@ export class PlayerOsd {
 
     setMessage(text: string): void {
         setText(this.message, text);
+        this.topAt = 0;
     }
 }

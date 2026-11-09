@@ -1,7 +1,7 @@
 // A video's dislikes as Return YouTube Dislike (returnyoutubedislike.com) estimates them: YouTube no longer shows the
 // count, so the extension's users and the counts archived before then stand in for it. Asked for when the watch page
 // shows a video (the API asks clients for no more than 100 requests a minute), kept a while; a failed request is noted
-// (api/failures.ts).
+// (api/failures.ts). Its reply also has the likes (a playlist's frame shows them from it: views/list-stage.ts).
 
 import { getJson, HttpError } from '../core/http.js';
 import { language } from '../core/i18n.js';
@@ -10,18 +10,34 @@ import { Keeper } from './kept-pages.js';
 
 var VOTES = 'https://returnyoutubedislikeapi.com/votes?videoId=';
 
-var kept = new Keeper<number | null>(30 * 60 * 1000, 20, false, false);
+/** A video's likes and dislikes (null: not known) */
+export interface Votes {
+    likes: number | null;
+    dislikes: number | null;
+}
 
-/** The video's dislikes (null: none known) */
-export function dislikes(id: string): Promise<number | null> {
+var kept = new Keeper<Votes>(30 * 60 * 1000, 20, false, false);
+
+/** A count from the reply (null: none) */
+function count(n: number | undefined): number | null {
+    return typeof n === 'number' && n >= 0 ? n : null;
+}
+
+/** The video's likes and dislikes */
+export function votes(id: string): Promise<Votes> {
     return kept.get(id, function () {
-        return getJson<{ dislikes?: number }>(VOTES + encodeURIComponent(id)).then(function (r) {
-            return r && typeof r.dislikes === 'number' && r.dislikes >= 0 ? r.dislikes : null;
+        return getJson<{ likes?: number; dislikes?: number }>(VOTES + encodeURIComponent(id)).then(function (r) {
+            return { likes: count(r && r.likes), dislikes: count(r && r.dislikes) };
         }, function (e: HttpError) {
             noteFailed('dislikes', e);
             throw e;
         });
     });
+}
+
+/** The video's dislikes (null: none known) */
+export function dislikes(id: string): Promise<number | null> {
+    return votes(id).then(function (v) { return v.dislikes; });
 }
 
 /** How YouTube writes a short count (a like count, a view count) in each of the app's languages, as it answers when

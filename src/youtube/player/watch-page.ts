@@ -1,7 +1,9 @@
 // Watch page over the player (own-player.ts), modelled on YouTube's TV watch page: title and metadata at the top;
 // at the bottom the time, the progress bar (with SponsorBlock segments and chapters) and a row of buttons
 // (channel, description, subscribe, previous / play-pause / next, like, dislike, comments, save, subtitles,
-// settings); below them the related videos (api/watch.ts), three per row, entered with Down. Related tiles are
+// settings); below them the related videos (api/watch.ts), three per row, entered with Down, after the playlist the
+// video plays from as a row of its own, at the video playing (Settings › Playlist in the player: the watch page's
+// first row; or a Playlist button beside Next opens it at the side: player/list-panel.ts). Related tiles are
 // built as soon as the details arrive and kept while hidden, so Down shows them at once. Lists open in the side
 // panel (ui/side-panel.ts), the comments over the video as YouTube's (comments-view.ts). Up from the buttons
 // focuses the bar (Left/Right jump); the page hides after HIDE_MS
@@ -12,23 +14,24 @@
 
 import { h, setShown, setSrc, setText, toggleClass, translate } from '../core/dom.js';
 import { tr } from '../core/i18n.js';
-import { KEY } from '../core/keys.js';
+import { KEY, KEYS_GAP } from '../core/keys.js';
 import { takesPointer, toPart } from '../core/pointer.js';
 import { clock } from '../core/time.js';
 import { RowStack } from '../ui/row-stack.js';
 import { rowHeight, TileRow } from '../ui/tile-row.js';
 import { dearrowTitle } from '../api/dearrow.js';
 import { dislikes, shortCount } from '../api/dislikes.js';
-import { dots, Page, Video, videoOf } from '../api/feed.js';
+import { dots, Page, placeIn, PlaylistInfo, Video, videoOf } from '../api/feed.js';
 import { prefs } from '../api/prefs.js';
 import { Segment } from '../api/sponsorblock.js';
 import { Comments, comments, WatchInfo } from '../api/watch.js';
 import { apply, openSaveTo, pressSubscribe, subscribed } from '../ui/account.js';
 import { icon, setIcon } from '../ui/icons.js';
 import { Pills } from '../ui/pills.js';
+import { toast } from '../ui/toast.js';
 import { PanelLine, paragraphs, SidePanel } from '../ui/side-panel.js';
 import { metrics, themed } from '../ui/theme.js';
-import { gridLines, VideoTiles } from '../views/tiles.js';
+import { copied, gridLines, VideoTiles } from '../views/tiles.js';
 import { bufferedEnd } from './engine.js';
 import { liveShare, LiveSpan, liveTime } from './live-engine.js';
 import { BarMarks } from './bar-marks.js';
@@ -41,6 +44,8 @@ var HIDE_MS = 8000;
 var REST_MS = 1500;
 var CHANNEL_REST_MS = 500;
 var JUMP_S = 10;
+/** Room for the playlist's row's heading over its tiles (the related lines have none) */
+var LIST_HEAD = 40;
 
 /** What the page's buttons do in the player */
 export interface WatchActions {
@@ -51,6 +56,10 @@ export interface WatchActions {
     /** The video Next plays (the queue's next, else YouTube's; null: none) */
     nextVideo(): Video | null;
     play(video: Video): void;
+    /** Plays video, one of the playlist's (its row): the queue goes on from it */
+    fromList(video: Video): void;
+    /** Opens the playlist at the side (its button) */
+    playlist(): void;
     channel(page: Page): void;
     subtitles(): void;
     settings(): void;
@@ -116,6 +125,11 @@ export class WatchPage {
     private zone: Zone = 'buttons';
     /** Column kept by Up/Down in the related videos */
     private col = 0;
+    /** The playlist the video plays from (null: none), and where the video is in its row (-1: no row) */
+    private playlist: PlaylistInfo | null = null;
+    private listAt = -1;
+    /** Settings › Playlist in the player as the rows were built (changed in the player's settings: built again) */
+    private rowsFor = '';
     private id = '';
     private info: WatchInfo | null = null;
     /** The description (from the video's streams) */
@@ -203,6 +217,9 @@ export class WatchPage {
         this.playAt = this.buttons.count;
         add(center, this.playButton, function () { self.actions.toggle(); });
         add(center, icon('next', 'by-watch-button by-watch-icon'), function () { self.actions.next(); }, function () { return !!self.actions.nextVideo(); });
+        add(center, icon('playlist', 'by-watch-button by-watch-icon'), function () { self.actions.playlist(); }, function () {
+            return !!self.playlist && prefs().listDown === 'button';
+        });
         add(group, this.likeButton, function () { self.like('LIKE'); }, has('like'));
         add(group, this.dislikeButton, function () { self.like('DISLIKE'); }, has('like'));
         this.commentsAt = this.buttons.count;
@@ -267,6 +284,12 @@ export class WatchPage {
         this.place();
     }
 
+    /** The playlist the video plays from (null: none): its row first, or its button (set before setVideo, which draws
+     * the buttons) */
+    setPlaylist(list: PlaylistInfo | null): void {
+        this.playlist = list;
+    }
+
     /** The player released the video: drops its details, the related tiles and the pictures */
     clear(): void {
         this.hide();
@@ -324,17 +347,50 @@ export class WatchPage {
         this.drawMeta();
         this.askDislikes();
         setSrc(this.avatar, info.avatar);
+        this.drawRows();
+        this.buttons.draw();
+        this.drawAccount();
+    }
+
+    /** The related videos, three a line (they arrive during a start, the page hidden: tiles built once drawn), after the
+     * playlist's row */
+    private drawRows(): void {
         var m = metrics().watch;
         this.tiles = new VideoTiles();
         var self = this;
         this.tiles.shown = function () { return self.stack.rows; };
-        // Three a line (they arrive during a start, the page hidden: tiles built once drawn)
-        var lines = gridLines(this.tiles.items(info.related), 3, m.tile, m.rows);
-        this.stack.setRows(lines);
+        var lines = gridLines(this.tiles.items((this.info as WatchInfo).related), 3, m.tile, m.rows);
+        var row = this.listRow();
+        this.rowsFor = prefs().listDown;
+        this.stack.setRows(row ? [row].concat(lines) : lines);
         this.stack.setFocused(this.zone === 'related');
         this.setStatus(lines.length ? '' : tr('No related videos.'));
-        this.buttons.draw();
-        this.drawAccount();
+    }
+
+    /** The playlist's row (Settings › Playlist in the player: the watch page's first row): its name and where the video
+     * is in it, the video marked as playing (null: none) */
+    private listRow(): TileRow | null {
+        var list = this.playlist;
+        var id = this.id;
+        this.listAt = -1;
+        if (!list || prefs().listDown !== 'row' || !list.videos.length) {
+            return null;
+        }
+        var m = metrics().watch;
+        var at = -1;
+        var items = this.tiles.items(list.videos).map(function (item, i) {
+            if (item.id !== id) {
+                return item;
+            }
+            at = i;
+            return copied(item, { label: tr('Playing') });
+        });
+        if (at < 0) {
+            return null;
+        }
+        this.listAt = at;
+        return new TileRow({ title: list.title + KEYS_GAP + placeIn(list, id), shape: m.tile, layout: copied(m.rows, { head: LIST_HEAD }), extraHeight: LIST_HEAD,
+            items: items, noWrap: true, lazy: true });
     }
 
     /** The video YouTube would play next: its related tile, else the first related (null: unknown) */
@@ -363,6 +419,11 @@ export class WatchPage {
     /** Shows the page with the focus on play-pause (related: on the related videos, as at the end of a video) */
     show(related?: boolean): void {
         this.zone = 'buttons';
+        // (the playlist's row, as Settings › Playlist in the player says now)
+        if (this.info && this.rowsFor !== prefs().listDown) {
+            this.drawRows();
+            this.buttons.draw();
+        }
         this.buttons.focus(this.playAt);
         this.shown = true;
         setShown(this.el, true);
@@ -449,8 +510,8 @@ export class WatchPage {
             }
             var row = self.stack.row;
             var buttons = self.zone === 'buttons';
-            var video = self.zone === 'related' && row ? self.tiles.video(row.focused) :
-                buttons && self.buttons.at === self.playAt + 1 ? self.actions.nextVideo() : null;
+            var focused = self.zone === 'related' && row ? self.tiles.video(row.focused) : null;
+            var video = focused && focused.id !== self.id ? focused : buttons && self.buttons.at === self.playAt + 1 ? self.actions.nextVideo() : null;
             var page = video ? video.page : buttons && self.buttons.at === self.channelAt && self.info ? self.info.channelPage : null;
             var token = buttons && self.buttons.at === self.commentsAt && self.info ? self.info.comments : '';
             if (page) {
@@ -517,10 +578,12 @@ export class WatchPage {
         }
     }
 
+    /** Into the rows: the playlist's at the video playing, else the first related video */
     private enterRelated(): void {
         this.zone = 'related';
         this.stack.focusRow(0);
-        (this.stack.row as TileRow).focusAt(this.col = 0);
+        this.col = 0;
+        (this.stack.row as TileRow).focusAt(Math.max(0, this.listAt));
     }
 
     private relatedKey(code: number): void {
@@ -528,7 +591,8 @@ export class WatchPage {
         switch (code) {
             case KEY.LEFT:
             case KEY.RIGHT:
-                if (row.move(code === KEY.LEFT ? -1 : 1)) {
+                // (the column kept among the related videos, not the playlist's row)
+                if (row.move(code === KEY.LEFT ? -1 : 1) && !this.onList()) {
                     this.col = row.index;
                 }
                 break;
@@ -536,14 +600,21 @@ export class WatchPage {
             case KEY.DOWN:
                 if (code === KEY.UP && this.stack.index === 0) {
                     this.zone = 'buttons';
-                } else if (this.stack.move(code === KEY.UP ? -1 : 1)) {
+                } else if (this.stack.move(code === KEY.UP ? -1 : 1) && !this.onList()) {
                     (this.stack.row as TileRow).focusAt(this.col);
                 }
                 this.place();
                 break;
             case KEY.OK:
                 var video = this.tiles.video(row.focused);
-                if (video) {
+                if (video && this.onList()) {
+                    // (the video playing: back to it)
+                    if (video.id === this.id) {
+                        this.hide();
+                    } else {
+                        this.actions.fromList(video);
+                    }
+                } else if (video) {
                     this.actions.play(video);
                 }
                 break;
@@ -552,6 +623,11 @@ export class WatchPage {
                 this.place();
                 break;
         }
+    }
+
+    /** The focus is on the playlist's row */
+    private onList(): boolean {
+        return this.listAt >= 0 && this.stack.index === 0;
     }
 
     // ---- account buttons
@@ -566,6 +642,21 @@ export class WatchPage {
                 self.panel.refresh();
             });
         }
+    }
+
+    /** A shortcut's Like (again: no longer); false: the details are not known yet, or the video cannot be liked */
+    likeNow(): boolean {
+        var like = this.info && this.info.like;
+        if (like) {
+            this.like('LIKE');
+            toast(like.status === 'LIKE' ? tr('Liked') : tr('Like removed'), 'liked');
+        }
+        return !!like;
+    }
+
+    /** The comments over the video are open */
+    get commentsOpen(): boolean {
+        return this.comments.shown;
     }
 
     /** Likes or dislikes; pressing the active one again clears it */
@@ -606,8 +697,8 @@ export class WatchPage {
     }
 
     /** Opens the comments over the video (the watch page's own content hidden, as YouTube's), with the first part if
-     * prefetched */
-    private openComments(): void {
+     * prefetched (a shortcut: the page shown first, own-player.ts) */
+    openComments(): void {
         var info = this.info as WatchInfo;
         var ahead = this.commentsAhead && this.commentsAhead.token === info.comments ? this.commentsAhead.part : undefined;
         this.commentsAhead = null;

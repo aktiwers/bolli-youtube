@@ -19,7 +19,7 @@ html, body { background: #0f0f0f; }
 /* Settings › Background: pure black (OLED: those pixels off) wherever the screens' own grey shows (ui/theme.ts
    applyBlack: by-black on <html>), and the rings that cut a gap to it around focused things */
 .by-black, .by-black body, .by-black .by-rail--open .by-rail-shade, .by-black .by-search-top, .by-black .by-langs,
-.by-black .by-feed-top, .by-black .by-question, .by-black .by-channel-top { background-color: #000; }
+.by-black .by-feed-top, .by-black .by-question, .by-black .by-channel-top, .by-black .by-shortcuts { background-color: #000; }
 .by-black .by-subs-dot { box-shadow: 0 0 0 3px #000; }
 .by-black .by-subs-pill--focused { box-shadow: 0 0 0 2px #000, 0 0 0 5px #f1f1f1; }
 .by-black .by-library-card--focused { box-shadow: 0 0 0 4px #000, 0 0 0 7px #f1f1f1; }
@@ -166,7 +166,7 @@ html, body { background: #0f0f0f; }
 .by-page-button-icon { width: 24px; height: 24px; margin: -3px 10px 0 -4px; }
 /* A playlist's page (bd-page--list) as YouTube's (its Watch later): its name, line and round buttons
    in a column at the left, its videos one to a line at the right, each one's words beside its picture */
-.bd-page--list .by-heading { padding-left: 96px; font-size: 32px; line-height: 44px; }
+.bd-page--list .by-heading { padding-left: 96px; font-size: 32px; line-height: 44px; overflow: hidden; text-overflow: ellipsis; }
 .by-page-byline { left: 96px; top: 150px; font-size: 15px; line-height: 22px; color: #aaa; }
 .by-page-byline-icon { width: 16px; height: 16px; margin: -3px 6px 0 0; }
 .bd-page--list .by-page-buttons { left: 79px; right: auto; top: 192px; }
@@ -174,10 +174,89 @@ html, body { background: #0f0f0f; }
 .bd-page--list .by-page-button span { display: none; }
 .bd-page--list .by-page-button-icon { margin: 12px; }
 .bd-page--list .bd-tile { width: 560px !important; }
+/* (a row clips nothing here, one video to a line: the focused one's ring shows whole, over the rows next to it) */
+.bd-page--list .bd-row { overflow: visible; }
+.bd-page--list .bd-row--active { z-index: 1; }
 .bd-page--list .bd-tile-frame { float: left; margin-right: 16px; }
 .bd-page--list .bd-tile-title { margin-top: 0; font-size: 22px; line-height: 30px; max-height: 60px; color: #f1f1f1; }
 .bd-page--list .by-page-back { display: none; }
 .bd-page--list .bd-tile-line { font-size: 15px; line-height: 22px; }
+/* Its frame (views/list-stage.ts), as YouTube's: its name, line and buttons above the focused video's frame at the left,
+   the video's place, title and line under it. The buttons round but Play all (with its name), the focused one's name
+   under it, the Repeat switch's dot while on. The numbers before the videos big on a chart. */
+.bd-page--stage .by-heading { top: -56px; width: 460px; font-size: 28px; line-height: 38px; }
+.bd-page--stage .by-page-byline { top: 82px; }
+.bd-page--stage .by-page-buttons { top: 118px; }
+.by-list-frame { left: 96px; top: 206px; width: 460px; height: 259px; border-radius: 12px; background: #272727; }
+.by-list-info { left: 96px; top: 481px; width: 460px; }
+.by-list-title { max-height: 60px; font-size: 22px; line-height: 30px; font-weight: 500; color: #f1f1f1; }
+.by-list-line { margin-top: 4px; font-size: 15px; line-height: 22px; color: #aaa; }
+.by-list-votes { margin-top: 8px; font-size: 15px; line-height: 22px; color: #f1f1f1; }
+.by-list-vote { margin-right: 22px; }
+.by-list-vote-icon { width: 18px; height: 18px; margin: -3px 7px 0 0; }
+.by-list-about { margin-top: 8px; max-height: 66px; font-size: 15px; line-height: 22px; color: #aaa; }
+.by-peek-ring.by-peek-ring--stage { box-shadow: 0 0 0 6px #0f0f0f; }
+.by-black .by-peek-ring.by-peek-ring--stage { box-shadow: 0 0 0 6px #000; }
+.bd-page--list .by-page-button--wide { width: auto; padding-right: 22px; }
+.bd-page--list .by-page-button--wide .by-page-button-icon { margin: 12px 8px 12px 14px; }
+.bd-page--list .by-page-button--wide span { display: inline-block; vertical-align: middle; font-size: 17px; }
+.bd-page--list .by-page-button--focused:not(.by-page-button--wide) span { display: block; position: absolute; left: 50%; top: 56px;
+    -webkit-transform: translateX(-50%); transform: translateX(-50%); font-size: 14px; line-height: 20px; color: #f1f1f1; white-space: nowrap; }
+.by-page-button--on:after { content: ''; position: absolute; left: 21px; bottom: 5px; width: 6px; height: 6px; border-radius: 3px; background: #3ea6ff; }
+.bd-tile-rank { left: -64px; top: 0; width: 52px; height: 110px; line-height: 110px; text-align: right; font-size: 18px; color: #8a8a8a; }
+.bd-page--chart .bd-tile-rank { font-size: 26px; font-weight: 700; color: #b8b8b8; }
+.bd-tile--focused .bd-tile-rank { color: #fff; }
+/* The playlist over the player (player/list-panel.ts): the strip across the bottom on a shade, its tiles as the rows'
+   (the focused one ringed, the one playing marked); the list at the side on a dark panel (solid beside the picture),
+   numbered, the focused line lit */
+.by-list-panel--strip { left: 0; top: 458px; width: 1280px; height: 262px; background: linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, .86) 34%); }
+.by-list-panel--strip .by-list-panel-head { left: 48px; right: 48px; top: 36px; font-size: 20px; line-height: 28px; color: #f1f1f1; }
+.by-list-panel-name { font-weight: 500; }
+.by-list-panel-place { margin-left: 14px; color: #aaa; }
+.by-list-panel--strip .by-list-panel-hint { position: absolute; right: 0; top: 0; color: #ccc; font-size: 17px; }
+.by-list-panel--strip .by-list-panel-items { left: 48px; top: 80px; }
+.by-list-panel--strip .by-list-item { top: 0; width: 236px; }
+.by-list-panel--strip .by-list-item-pic { width: 236px; height: 133px; border-radius: 10px; background: #272727; }
+.by-list-panel--strip .by-list-item-number { left: 8px; top: 6px; z-index: 1; font-size: 18px; font-weight: 700; color: #fff; text-shadow: 0 1px 3px #000; }
+.by-list-panel--strip .by-list-item-text { left: 0; right: 0; top: 141px; }
+.by-list-item-title { font-size: 17px; line-height: 22px; }
+.by-list-panel--strip .by-list-item-title { color: #ddd; }
+.by-list-panel--strip .by-list-item--focused .by-list-item-title { color: #fff; font-weight: 500; }
+.by-list-item--focused .by-list-item-pic { box-shadow: 0 0 0 3px #0f0f0f, 0 0 0 7px #f1f1f1; }
+.by-list-item-label { right: 6px; bottom: 6px; padding: 1px 5px; border-radius: 4px; background: rgba(0, 0, 0, .78); font-size: 13px; font-weight: 500; color: #fff; }
+.by-list-panel--side { right: 0; top: 0; width: 420px; height: 720px; background: rgba(15, 15, 15, .86); }
+.by-list-panel--beside { background: #0f0f0f; }
+.by-black .by-list-panel--beside { background: #000; }
+.by-list-panel--side .by-list-panel-head { left: 28px; right: 24px; top: 34px; font-size: 15px; line-height: 22px; color: #aaa; }
+.by-list-panel--side .by-list-panel-name { display: block; overflow: hidden; text-overflow: ellipsis; font-size: 22px; line-height: 30px; color: #f1f1f1; }
+.by-list-panel--side .by-list-panel-place { margin: 0 12px 0 0; }
+.by-list-panel--side .by-list-panel-items { left: 0; right: 0; top: 112px; }
+.by-list-panel--side .by-list-item { left: 0; width: 420px; height: 92px; }
+.by-list-panel--side .by-list-item-number { left: 8px; top: 0; width: 30px; height: 92px; line-height: 92px; text-align: right; font-size: 17px; color: #8a8a8a; }
+.by-list-panel--side .by-list-item--playing .by-list-item-number { color: #ff4e45; }
+.by-list-panel--side .by-list-item-pic { position: absolute; left: 50px; top: 10px; width: 128px; height: 72px; border-radius: 8px; background: #272727; }
+.by-list-panel--side .by-list-item-text { left: 192px; right: 20px; top: 12px; }
+.by-list-panel--side .by-list-item-title { max-height: 44px; font-weight: 500; color: #f1f1f1; }
+.by-list-panel--side .by-list-item-line { font-size: 14px; line-height: 20px; color: #aaa; }
+.by-list-panel--side .by-list-item--focused { background: rgba(241, 241, 241, .14); }
+.by-list-panel--side .by-list-item--focused .by-list-item-pic { box-shadow: 0 0 0 2px #0f0f0f, 0 0 0 5px #f1f1f1; }
+/* Backdrop: the focused video behind the page, shaded at the top, the bottom and the left, a dark band behind the list;
+   the name, line and buttons higher, the video's details big at the bottom left */
+.bd-page--backdrop .by-heading { top: -36px; width: 440px; text-shadow: 0 1px 4px rgba(0, 0, 0, .6); }
+.bd-page--backdrop .by-page-byline { top: 110px; color: #ddd; text-shadow: 0 1px 3px rgba(0, 0, 0, .6); }
+.bd-page--backdrop .by-page-buttons { top: 148px; }
+.bd-page--backdrop .by-page-button { background: rgba(48, 48, 48, .85); }
+.bd-page--backdrop .by-page-button--focused { background: #f1f1f1; }
+.bd-page--backdrop .by-list-frame { left: 0; top: 0; width: 1280px; height: 720px; border-radius: 0; background: #0f0f0f; }
+.by-list-shade { left: 0; top: 0; width: 1280px; height: 720px; background: linear-gradient(to bottom, rgba(0, 0, 0, .7), rgba(0, 0, 0, 0) 34%),
+    linear-gradient(to top, rgba(0, 0, 0, .85), rgba(0, 0, 0, 0) 46%), linear-gradient(to right, rgba(0, 0, 0, .6), rgba(0, 0, 0, .15) 50%); }
+.by-list-band { left: 560px; top: 0; width: 720px; height: 720px; background: linear-gradient(to right, rgba(15, 15, 15, 0), rgba(15, 15, 15, .82) 64px, rgba(15, 15, 15, .9)); }
+.by-black .by-list-band { background: linear-gradient(to right, rgba(0, 0, 0, 0), rgba(0, 0, 0, .82) 64px, rgba(0, 0, 0, .9)); }
+.bd-page--backdrop .by-list-info { top: 392px; width: 440px; text-shadow: 0 1px 3px rgba(0, 0, 0, .6); }
+.bd-page--backdrop .by-list-votes { font-size: 18px; line-height: 26px; }
+.bd-page--backdrop .by-list-about { max-height: 72px; font-size: 16px; line-height: 24px; color: #d0d0d0; }
+.bd-page--backdrop .by-list-title { max-height: 76px; font-size: 30px; line-height: 38px; font-weight: 700; text-shadow: 0 2px 6px rgba(0, 0, 0, .6); }
+.bd-page--backdrop .by-list-line { font-size: 18px; line-height: 26px; color: #d0d0d0; }
 .by-page-back, .by-search-back { left: 28px; top: 336px; width: 24px; height: 24px; padding: 12px; border-radius: 24px; background: #303030; color: #f1f1f1; }
 .by-page-back--focused, .by-search-back--focused { background: #f1f1f1; color: #0f0f0f; }
 
@@ -234,8 +313,7 @@ html, body { background: #0f0f0f; }
 /* Settings, as YouTube's: the title by the logo; the list (a white box on the focused
    setting, a grey one on it while the focus is elsewhere; the groups' names small, grey, in capitals); a thin line;
    on the right the focused setting's picture, name, what it does, its choices (round grey buttons, the focused one
-   white, a tick on the one set) and a grey note; linking a phone: the steps (and the code, blue, by YouTube's
-   picture of a phone) */
+   white, a tick on the one set) and a grey note; linking a phone: the steps (and the code, blue) */
 .by-settings-title { left: 115px; top: 46px; font-size: 32px; line-height: 42px; font-weight: 700; color: #f1f1f1; }
 .by-settings-menu { left: 98px; top: 128px; width: 282px; }
 .by-settings-list { -webkit-transition: -webkit-transform .2s ease; }
@@ -261,18 +339,58 @@ html, body { background: #0f0f0f; }
 .by-settings-info { margin: 40px auto 0; max-width: 620px; font-size: 20px; line-height: 28px; color: #aaa; }
 .by-settings-fact { margin-bottom: 14px; }
 .by-settings-fact:first-child { font-size: 24px; color: #f1f1f1; }
-.by-settings-body--steps, .by-settings-body--code { padding-top: 126px; }
-.by-settings-link { width: 400px; margin-top: 22px; }
-.by-settings-steps { margin: 0; padding-left: 32px; font-size: 20px; line-height: 28px; color: #aaa; }
+.by-settings-link { width: 380px; margin-top: 22px; }
+.by-settings-steps { margin: 0; padding-left: 32px; font-size: 18px; line-height: 26px; color: #aaa; }
 .by-settings-step { margin-bottom: 8px; padding-left: 6px; }
 .by-settings-code { margin-top: 24px; font-size: 32px; line-height: 40px; font-weight: 500; letter-spacing: 1px; color: #3ea6ff;
                     white-space: nowrap; }
 .by-settings-code--said { font-size: 18px; line-height: 26px; letter-spacing: 0; color: #aaa; white-space: normal; }
-/* The TV code's side: the steps and the code, a line, the phone (YouTube's two columns) */
-.by-settings-body--code { width: auto; }
-.by-settings-body--code .by-settings-link { width: 330px; margin-top: 76px; }
-.by-settings-phone { width: 350px; height: 444px; margin: 46px 0 0 50px; padding-left: 50px; border-left: 1px solid #303030; }
+/* Settings' three columns: the categories, each with how many settings it has (grey, on the right; a page's arrow);
+   the middle's settings two lines high, how each is set grey under its name, small grey headings in capitals among
+   them; the setting on the right smaller there (its picture, name and buttons). A category of one setting: the right
+   side as wide as the list's was */
+.by-settings--split > .by-settings-menu { width: 300px; }
+.by-settings--split > .by-settings-line { left: 410px; }
+.by-settings--split > .by-settings-panel { left: 411px; }
+.by-settings-count { margin-left: 12px; font-size: 16px; color: #8e8e8e; }
+.by-settings-item--focused .by-settings-count, .by-settings-item--focused .by-settings-value { color: #606060; }
+.by-settings-middle { left: 426px; top: 128px; width: 380px; }
+.by-settings--split > .by-settings-line--middle { left: 818px; }
+/* (beside the middle the right side starts at the columns' top too, so its scrolled choices stop there) */
+.by-settings--split > .by-settings-panel--narrow { left: 819px; top: 128px; height: 592px; }
+.by-settings-item--two { height: 64px; padding-top: 9px; box-sizing: border-box; line-height: normal; }
+.by-settings-name { font-size: 20px; line-height: 26px; }
+.by-settings-value { font-size: 15px; line-height: 20px; color: #aaa; }
+/* (its name alone, set nowhere: in the middle of its row) */
+.by-settings-item--one { padding-top: 19px; }
+.by-settings-middle .by-settings-group { height: 32px; padding: 10px 12px 0; box-sizing: border-box; font-size: 14px; line-height: 22px;
+                                        letter-spacing: .04em; color: #8a8a8a; }
+.by-settings-panel--narrow .by-settings-body { width: 420px; padding-top: 0; }
+.by-settings-panel--narrow .by-settings-picture { width: 120px; height: 120px; margin-bottom: 14px; }
+.by-settings-panel--narrow .by-settings-heading { font-size: 32px; line-height: 40px; }
+.by-settings-panel--narrow .by-settings-summary { font-size: 18px; line-height: 26px; }
+.by-settings-panel--narrow .by-settings-buttons { margin-top: 36px; }
+.by-settings-panel--narrow .by-settings-button { width: 380px; height: 58px; padding: 0 60px 0 34px; border-radius: 29px;
+                                                line-height: 58px; font-size: 19px; }
+.by-settings-panel--narrow .by-settings-button .by-check { right: 24px; }
+.by-settings-panel--narrow .by-settings-note { margin-top: 22px; font-size: 16px; line-height: 22px; }
 .by-question { padding-top: 122px; box-sizing: border-box; background: #0f0f0f; }
+/* Settings › Shortcuts: Settings' look, its list wider for each entry's button (on the right, small and grey, a colour
+   button's dot before it), "Now:" in white under what it does, every button's two places as lines; setting one: as
+   the app's questions, a warning note in yellow */
+.by-shortcuts { background: #0f0f0f; }
+.by-shortcuts .by-settings-menu { width: 400px; }
+.by-shortcuts .by-settings-line { left: 511px; }
+.by-shortcuts .by-settings-panel { left: 512px; }
+.by-shortcuts .by-settings-body { width: 680px; }
+.by-shortcut-key { margin-left: 12px; font-size: 16px; color: #aaa; }
+.by-settings-item--focused .by-shortcut-key { color: #606060; }
+.by-shortcut-dot { width: 12px; height: 12px; margin-right: 8px; border-radius: 6px; }
+.by-shortcut-now { margin-top: 20px; font-size: 20px; line-height: 28px; color: #f1f1f1; }
+.by-shortcut-overview { margin: 32px auto 0; max-width: 600px; font-size: 19px; line-height: 27px; color: #ccc; }
+.by-shortcut-line { margin-bottom: 8px; }
+.by-shortcut-prompt .by-settings-picture { width: 120px; height: 120px; }
+.by-shortcut-warn { color: #ffcf6b; }
 
 /* "Who's watching?", as YouTube's: a big plain title, large round pictures, the
    focused one ringed in white and a little larger, its name white; Add account a grey circle with a plus (white when
@@ -339,16 +457,103 @@ html, body { background: #0f0f0f; }
 .by-comment-button--focused { background: #f1f1f1; color: #0f0f0f; }
 .by-comments-note { padding: 16px; font-size: 17px; color: #aaa; }
 
-/* A live stream's chat beside the picture (player/chat-view.ts; placed in app.css); the subtitles make room */
-.by-chat { top: 120px; right: 40px; bottom: 170px; width: 420px; }
-.by-chat-line { margin-top: 8px; padding: 8px 14px; border-radius: 12px; background: rgba(15, 15, 15, .72); color: #fff;
-                font-size: 20px; line-height: 28px; word-wrap: break-word; }
+/* A live stream's chat beside the picture (player/chat-view.ts; placed in app.css). Where, how big and its background
+   as Live chat settings say (by-chat--*): at the right, between the top and the controls by default (tall); the app
+   places a box of the viewer's own (custom), moves it up above the player's controls while they show, and moves the
+   subtitles (and, beside the picture, the video) out of its way. Its size sets its text's, which its lines take */
+.by-chat { top: 120px; right: 40px; bottom: 170px; width: 420px; color: #fff; font-size: 20px; line-height: 28px;
+           -webkit-transition: -webkit-transform .2s ease; }
+.by-chat--left { right: auto; left: 40px; }
+.by-chat--full { top: 40px; bottom: 40px; }
+.by-chat--half { top: 360px; }
+.by-chat--custom { right: auto; bottom: auto; }
+/* Beside the picture: a column of its own */
+.by-chat--beside { top: 40px; right: 20px; bottom: 40px; }
+.by-chat--beside.by-chat--left { right: auto; left: 20px; }
+.by-chat--arranging { outline: 3px dashed #fff; outline-offset: 5px; }
+.by-chat--tiny { width: 280px; font-size: 14px; line-height: 20px; }
+.by-chat--small { width: 340px; font-size: 17px; line-height: 24px; }
+.by-chat--large { width: 500px; font-size: 24px; line-height: 34px; }
+/* Along the bottom: a strip (a ticker, or one at a time) or a band of three lines, as tall as its text makes them */
+.by-chat--bottom { top: auto; left: 40px; right: 40px; bottom: 28px; width: auto; height: 44px; }
+.by-chat--bottom.by-chat--tiny { height: 36px; }
+.by-chat--bottom.by-chat--small { height: 40px; }
+.by-chat--bottom.by-chat--large { height: 50px; }
+.by-chat--band { height: 160px; }
+.by-chat--band.by-chat--tiny { height: 100px; }
+.by-chat--band.by-chat--small { height: 130px; }
+.by-chat--band.by-chat--large { height: 196px; }
+.by-chat--band .by-chat-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Beside the picture at the top: the strip or band there */
+.by-chat--top { top: 28px; bottom: auto; }
+.by-chat--ticker, .by-chat--one { border-radius: 12px; background: rgba(15, 15, 15, .72); }
+.by-chat--ticker.by-chat--none, .by-chat--one.by-chat--none { background: none; }
+.by-chat-ticker, .by-chat-one { top: 8px; }
+.by-chat-ticker { left: 0; }
+.by-chat-tick { padding-right: 64px; }
+.by-chat-one { left: 18px; right: 18px; }
+.by-chat-one-line { -webkit-animation: by-chat-in .3s ease both; }
+@-webkit-keyframes by-chat-in { from { opacity: 0; -webkit-transform: translate3d(0, 12px, 0); } to { opacity: 1; -webkit-transform: none; } }
+.by-chat-tick--paid .by-chat-amount, .by-chat-one-line--paid .by-chat-amount { padding: 0 8px; border-radius: 6px; background: rgba(255, 78, 69, .95); }
+.by-chat-line { margin-top: 8px; padding: 8px 14px; border-radius: 12px; background: rgba(15, 15, 15, .72); word-wrap: break-word; }
+.by-chat--tiny .by-chat-line { margin-top: 4px; padding: 4px 10px; }
+.by-chat--small .by-chat-line { margin-top: 6px; padding: 6px 12px; }
+.by-chat--large .by-chat-line { margin-top: 10px; padding: 10px 16px; }
 .by-chat-line--paid { background: rgba(255, 78, 69, .85); }
 .by-chat-author { margin-right: 10px; font-weight: 500; color: #aaa; }
 .by-chat-line--paid .by-chat-author { color: #fff; }
 .by-chat-amount { margin-right: 10px; font-weight: 700; }
 .by-chat-emoji { width: 24px; height: 24px; margin: 0 2px; vertical-align: -5px; }
-.by-player--chat .vod-subtitles { right: 520px; }
+.by-chat--tiny .by-chat-emoji { width: 17px; height: 17px; vertical-align: -3px; }
+.by-chat--small .by-chat-emoji { width: 20px; height: 20px; vertical-align: -4px; }
+.by-chat--large .by-chat-emoji { width: 30px; height: 30px; vertical-align: -6px; }
+/* Each message's time and its author's picture (made only when Settings show them) */
+.by-chat-time { margin-right: 8px; font-size: .85em; color: #aaa; }
+.by-chat-line--paid .by-chat-time, .by-chat-tick--paid .by-chat-time, .by-chat-one-line--paid .by-chat-time { color: rgba(255, 255, 255, .85); }
+.by-chat-avatar { display: inline-block; width: 26px; height: 26px; margin-right: 8px; border-radius: 50%; vertical-align: -7px; }
+.by-chat--tiny .by-chat-avatar { width: 18px; height: 18px; margin-right: 6px; vertical-align: -4px; }
+.by-chat--small .by-chat-avatar { width: 22px; height: 22px; vertical-align: -6px; }
+.by-chat--large .by-chat-avatar { width: 32px; height: 32px; vertical-align: -8px; }
+/* One panel behind them all (as tall as they are), or none: the text outlined (a Super Chat keeps its colour instead) */
+.by-chat--panel .by-chat-list { padding: 4px 14px 12px; border-radius: 16px; background: rgba(15, 15, 15, .72); }
+.by-chat--panel .by-chat-list:empty { padding: 0; }
+.by-chat--panel .by-chat-line, .by-chat--none .by-chat-line { padding: 0; border-radius: 0; background: none; }
+.by-chat--none { text-shadow: 0 0 3px #000, 0 1px 2px #000; }
+.by-chat--none .by-chat-author, .by-chat--none .by-chat-time { color: #ddd; }
+.by-chat--panel .by-chat-line--paid, .by-chat--none .by-chat-line--paid { padding: 6px 12px; border-radius: 10px; background: rgba(255, 78, 69, .85);
+                                                                          text-shadow: none; }
+/* Faded: a message, or one at a time the whole strip */
+.by-chat-line--gone, .by-chat--faded { opacity: 0; -webkit-transition: opacity .6s ease; }
+
+/* Live chat settings (player/chat-settings.ts): see-through, on the side away from the chat; over Settings an example
+   picture behind it (a night sky over snow: the chat's text over dark and bright) */
+.by-chatset-panel { left: 40px; top: 60px; width: 520px; padding: 18px 0 14px; border-radius: 16px; background: rgba(15, 15, 15, .6);
+                    color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, .8); }
+.by-chatset--right .by-chatset-panel { left: auto; right: 40px; }
+.by-chatset--low .by-chatset-panel { top: auto; bottom: 16px; }
+.by-chatset-title { padding: 0 24px 10px; font-size: 24px; font-weight: 500; }
+.by-chatset-row { height: 44px; padding: 0 24px; font-size: 20px; line-height: 44px; }
+.by-chatset-value { top: 0; right: 14px; color: #e0e0e0; }
+.by-chatset-arrow { display: inline-block; width: 24px; text-align: center; font-size: 26px; opacity: 0; }
+.by-chatset-row--focused { background: #f1f1f1; color: #0f0f0f; text-shadow: none; }
+.by-chatset-row--focused .by-chatset-value { color: #0f0f0f; }
+.by-chatset-row--focused .by-chatset-arrow { opacity: 1; }
+.by-chatset-row--focused .by-chatset-arrow--end { opacity: .25; }
+.by-chatset-row--focused.by-chatset-row--action .by-chatset-arrow { opacity: 0; }
+/* Move and resize as Custom is chosen: a soft warm glint sweeping across it twice */
+.by-chatset-row--shine { overflow: hidden; }
+.by-chatset-row--shine::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 45%;
+                                background: linear-gradient(90deg, rgba(255, 196, 64, 0), rgba(255, 196, 64, .55) 50%, rgba(255, 196, 64, 0));
+                                -webkit-animation: by-chatset-shine 1.1s ease-in-out 2; }
+@-webkit-keyframes by-chatset-shine { from { -webkit-transform: translate3d(-110%, 0, 0); } to { -webkit-transform: translate3d(230%, 0, 0); } }
+.by-chatset-keys { padding: 12px 24px 0; font-size: 16px; line-height: 22px; color: #c8c8c8; }
+.by-chatset-scene { background: #000; }
+.by-chatset-picture { background: radial-gradient(ellipse 50% 28% at 42% 30%, rgba(90, 255, 170, .5), rgba(90, 255, 170, 0) 70%),
+                                  radial-gradient(ellipse 34% 18% at 72% 20%, rgba(170, 120, 255, .35), rgba(170, 120, 255, 0) 70%),
+                                  linear-gradient(#030712 0%, #0a2235 52%, #12364a 66%, #cfdde5 67%, #f4f8fa 100%); }
+.by-chatset-note { left: 0; right: 0; top: 24px; text-align: center; font-size: 18px; color: rgba(255, 255, 255, .75); }
+.by-chatset-hint { left: 40px; right: 40px; top: 24px; }
+.by-chatset-hint-text { padding: 10px 22px; border-radius: 10px; background: rgba(15, 15, 15, .9); color: #fff; font-size: 20px; line-height: 28px; }
 
 /* The phone's volume while casting, as Apple TV shows a volume: a dark capsule top right, a speaker and a level bar */
 .by-volume { top: 32px; right: 40px; height: 44px; padding: 0 20px 0 16px; border-radius: 22px; background: rgba(44, 44, 46, .92);
@@ -371,6 +576,7 @@ html, body { background: #0f0f0f; }
 .by-toast--sb-intro { border-left-color: #00ffff; }
 .by-toast--sb-outro { border-left-color: #0202ed; }
 .by-toast--sb-preview { border-left-color: #008fd6; }
+.by-toast--sb-hook { border-left-color: #395699; }
 .by-toast--sb-filler { border-left-color: #7300ff; }
 .by-toast--sb-music_offtopic { border-left-color: #ff9900; }
 
@@ -419,6 +625,8 @@ html, body { background: #0f0f0f; }
 .by-watch-top, .by-watch-controls { -webkit-transition: opacity .3s ease; }
 .by-watch--related .by-watch-top, .by-watch--related .by-watch-controls { opacity: 0; pointer-events: none; }
 .by-watch-related .bd-row { -webkit-transition: opacity .3s ease; }
+/* (the playlist's row: its name at the rows' margin) */
+.by-watch-related .bd-row-title { top: 4px; padding-left: 64px; }
 .by-watch-above { opacity: 0; pointer-events: none; }
 .by-watch-top { left: 64px; top: 56px; width: 780px; }
 .by-watch-title { font-size: 28px; font-weight: 700; line-height: 38px; color: #f1f1f1; overflow: hidden; max-height: 76px;
@@ -483,6 +691,7 @@ html, body { background: #0f0f0f; }
 .by-sb--outro { background: #0202ed; }
 .by-sb--music_offtopic { background: #ff9900; }
 .by-sb--preview { background: #008fd6; }
+.by-sb--hook { background: #395699; }
 .by-sb--filler { background: #7300ff; }
 .by-player .osd-bar .by-bar-marks { border-radius: 3px; overflow: hidden; }
 /* The bar cut into its chapters (YouTube's: a small gap where each begins) */

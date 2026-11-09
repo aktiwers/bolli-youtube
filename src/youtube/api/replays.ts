@@ -5,11 +5,11 @@
 // website's come. Videos with few views have none. A failed request is noted (api/failures.ts): YouTube refusing the
 // mobile site's client, whose version is fixed here, would otherwise only show as graphs gone missing.
 
-import { HttpError, postText } from '../core/http.js';
+import { HttpError } from '../core/http.js';
 import { noteFailed } from './failures.js';
 import { get, text } from './feed.js';
 import { Keeper } from './kept-pages.js';
-import { objectAt, youtubeLanguage } from './youtube.js';
+import { objectAt, postYouTubeText, youtubeLanguage } from './youtube.js';
 
 var NEXT = 'https://www.youtube.com/youtubei/v1/next?prettyPrint=false';
 /** The mobile site, as it names itself (its label is shown as it comes: asked in the app's language) */
@@ -31,7 +31,7 @@ var kept = new Keeper<Replays | null>(30 * 60 * 1000, 3, false, false);
 export function replays(id: string): Promise<Replays | null> {
     return kept.get(id, function () {
         var client = { clientName: CLIENT.clientName, clientVersion: CLIENT.clientVersion, hl: youtubeLanguage() };
-        return postText(NEXT, { context: { client: client }, videoId: id },
+        return postYouTubeText(NEXT, { context: { client: client }, videoId: id },
             { 'X-YouTube-Client-Name': CLIENT_NAME, 'X-YouTube-Client-Version': CLIENT.clientVersion }).then(replaysOf, function (e: HttpError) {
             noteFailed('replays', e);
             throw e;

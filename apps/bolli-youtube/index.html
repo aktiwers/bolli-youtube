@@ -15,6 +15,9 @@
 <div id="app"></div>
 <!-- A youtube.com page that API requests are sent from (src/youtube/api/youtube.ts); it loads alongside the app's script -->
 <iframe id="youtube" class="by-hidden" sandbox="allow-scripts allow-same-origin" src="https://www.youtube.com/robots.txt" onload="this.setAttribute('data-loaded', '1')"></iframe>
+<!-- webOS TV 1.x-2.x's old engine (WebKit: webOS 3 and later name their Chrome) with its early Promise: promise.js
+     stands in for it there, and never anywhere else -->
+<script>if (!/Chrome\//.test(navigator.userAgent) && !(window.Promise && Promise.all && Promise.race)) { document.write('<script src="promise.js"><\/script>'); }</script>
 <script src="app.js"></script>
 </body>
 </html>

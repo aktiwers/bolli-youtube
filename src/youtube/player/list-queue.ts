@@ -1,11 +1,20 @@
-// The videos the player plays in order (a mix, a phone's list): Next, Previous and what comes at the end.
+// The videos the player plays in order (a mix, a phone's list, a playlist's page): Next, Previous and what comes at
+// the end. A playlist's queue knows the playlist (its name and videos, for the player to show) and asks for more of it
+// as it nears its end.
 
-import { Video, videoOf } from '../api/feed.js';
+import { PlaylistInfo, Video, videoOf } from '../api/feed.js';
+
+/** A playlist's queue asks for more this many videos before its end */
+var NEAR = 3;
 
 /** Videos played in order (a mix, a phone's list) for Next, Previous and the end; at: the index playing (-1: before
  * the first) */
 export class ListQueue {
     at: number;
+    /** The playlist it plays (null: a mix, a phone's list) */
+    playlist: PlaylistInfo | null = null;
+    /** Called as it nears its end (a playlist's page loads more: add) */
+    onNear: (() => void) | null = null;
 
     /** ids in order, starting at id (if absent: before the first); wrap: back to the first after the last */
     constructor(public ids: string[], id: string, private wrap?: boolean) {
@@ -31,12 +40,32 @@ export class ListQueue {
         return this.to(this.at - 1);
     }
 
+    /** Plays on from video id where it is in the queue (false: not in it) */
+    goTo(id: string): boolean {
+        return !!this.to(this.ids.indexOf(id));
+    }
+
+    /** More videos at the end (a playlist's next part; those queued already are left out) */
+    add(ids: string[]): void {
+        var have: { [id: string]: boolean } = {};
+        this.ids.forEach(function (id) { have[id] = true; });
+        this.ids = this.ids.concat(ids.filter(function (id) { return !have[id]; }));
+    }
+
+    /** Near its end: asks for more */
+    ask(): void {
+        if (this.onNear && this.ids.length - 1 - this.at < NEAR) {
+            this.onNear();
+        }
+    }
+
     /** Move to index i and return its video (null: out of range) */
     private to(i: number): Video | null {
         if (i < 0 || i >= this.ids.length) {
             return null;
         }
         this.at = i;
+        this.ask();
         return videoOf(this.ids[i]);
     }
 }

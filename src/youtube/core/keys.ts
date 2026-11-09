@@ -4,6 +4,9 @@
 
 import { noteKey } from './perf.js';
 
+/** Between the parts of a line saying what the keys do (the player's, Live chat settings') */
+export var KEYS_GAP = '  ·  ';
+
 export var KEY = {
     LEFT: 37,
     UP: 38,
@@ -23,6 +26,8 @@ export var KEY = {
     LIST: 1056,
     /** GUIDE (VK_GUIDE on LG remotes) */
     GUIDE: 458,
+    /** Screen remote, the other side of 0 on LG's Magic Remote (a small remote's picture: LG's on-screen remote) */
+    SCREEN_REMOTE: 1062,
     /** OK held down (no remote sends it: see setHoldOk) */
     HOLD: 10013,
     /** A remote's search key (sent by the Android app; Google TV keeps its

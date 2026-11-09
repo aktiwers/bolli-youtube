@@ -10,7 +10,7 @@ import { clock } from '../core/time.js';
 import { RowStack } from '../ui/row-stack.js';
 import { rowHeight, TileItem, TileLayout, TileRow, TileShape } from '../ui/tile-row.js';
 import { dearrowFetch, dearrowListen, dearrowOn, dearrowPicture, dearrowSettings, dearrowTitle, dearrowWait } from '../api/dearrow.js';
-import { more, Rows, Shelf, thumbnail, thumbnailFallback, Video } from '../api/feed.js';
+import { more, pagePicture, Rows, Shelf, thumbnail, thumbnailFallback, Video } from '../api/feed.js';
 import { NoStreams, streams } from '../api/streams.js';
 import { metrics, RowSpacing, themed, word } from '../ui/theme.js';
 
@@ -145,6 +145,16 @@ export class Paging {
         var shelf = across && !this.lines ? this.shelves[stack.index] : null;
         var token = shelf ? (row && row.index >= row.count - 1 - TILES_AHEAD && shelf.next) || '' :
             stack.index >= stack.rows.length - 1 - (this.lines ? LINES_AHEAD : ROWS_AHEAD) ? this.next : '';
+        this.fetch(stack, token, shelf, row);
+    }
+
+    /** Fetches a grid's next part now, wherever the focus is (a playlist's queue nears its end) */
+    fetchNext(stack: RowStack): void {
+        this.fetch(stack, this.lines ? this.next : '', null, stack.row);
+    }
+
+    /** Fetches the part token gives (shelf: a row's next tiles, row its tiles; else the next shelves, or a grid's lines) */
+    private fetch(stack: RowStack, token: string, shelf: Shelf | null, row: TileRow | null): void {
         if (!token || this.fetching) {
             return;
         }
@@ -334,12 +344,13 @@ export class VideoTiles {
             if (!seen[v.id]) {
                 seen[v.id] = true;
                 self.videos[v.id] = v;
-                var image = v.page ? v.image || '' : ownImage(v);
+                var page = v.page ? pagePicture(v) : null;
+                var image = page ? page.image : ownImage(v);
                 var branded = v.page || v.poster ? image : dearrowPicture(v.id, image);
                 // A page without an image: its name on the tile, like a "See all" tile
                 items.push(v.page && !v.image ? { id: v.id, title: v.title, image: '', more: '' } : {
                     id: v.id, title: v.page ? v.title : dearrowTitle(v.id, v.title), image: branded,
-                    fallback: v.page ? '' : thumbnailFallback(v.id) || (branded !== image ? image : ''),
+                    fallback: page ? page.fallback : thumbnailFallback(v.id) || (branded !== image ? image : ''),
                     wideImage: v.poster ? v.wide || thumbnail(v.id) : undefined,
                     label: labelOf(v), labelIcon: v.labelIcon, stack: v.stack,
                     lines: [v.channel, themed(v.info)], progress: watched[v.id] ? watched[v.id].progress : v.progress, round: v.round,

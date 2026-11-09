@@ -46,6 +46,8 @@
 .by-page-back { position: absolute; line-height: 0; }
 .by-rail-shade { position: absolute; left: 0; top: 0; height: 720px; }
 .by-rail-logo { position: absolute; background: url(logo.webp) center / contain no-repeat; }
+/* webOS TV 2.x's engine decodes no WebP (promise.js) */
+.by-old-engine .by-rail-logo { background-image: url(logo.png); }
 .by-rail-item { position: absolute; overflow: hidden; }
 .by-rail-icon { position: absolute; }
 .by-rail-icon svg { display: block; }
@@ -59,25 +61,66 @@
 .by-heading { position: absolute; left: 0; top: 0; }
 
 /* Settings (views/settings.ts), as YouTube's: the list on the left (it scrolls), a line, the focused setting on the
-   right (its column moves up when taller than the screen), YouTube's confirmation over everything (the rail too) */
+   right (its column moves up when taller than the screen), YouTube's confirmation over everything (the rail too).
+   Settings itself (by-settings--split; its pages over it, as Shortcuts, have the list alone): the categories on the
+   left, a line, the focused category's settings in the middle (each category's list in the same place, one shown), a
+   second line, the setting on the right; the middle and its line shown only while the category has more than one
+   setting, the right side narrower then (by-settings-panel--narrow) */
 .by-settings { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; }
 .by-settings-title, .by-settings-line { position: absolute; }
 .by-settings-menu { position: absolute; bottom: 0; overflow: hidden; }
 .by-settings-list { position: relative; }
 .by-settings-panel { position: absolute; top: 0; right: 0; height: 720px; overflow: hidden; }
+.by-settings-middle { position: absolute; bottom: 0; overflow: hidden; }
+.by-settings-middle > .by-settings-list { position: absolute; left: 0; right: 0; top: 0; }
+.by-settings-count { float: right; }
+.by-settings-name, .by-settings-value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.by-settings-value:empty { display: none; }
 .by-settings-body { position: relative; text-align: center; }
-/* The right side shows the parts of the focused setting's kind: a picture, the steps to link a phone and the TV code
-   beside YouTube's picture of a phone; empty texts take no room */
-.by-settings-picture, .by-settings-link, .by-settings-code, .by-settings-phone, .by-settings-info,
+/* The right side shows the parts of the focused setting's kind: a picture, the steps to link a phone and the TV code;
+   empty texts take no room */
+.by-settings-picture, .by-settings-link, .by-settings-code, .by-settings-info,
 .by-settings-summary:empty, .by-settings-note:empty { display: none; }
 .by-settings-body--info .by-settings-info { display: block; }
 .by-settings-body--picture .by-settings-picture, .by-question .by-settings-picture { display: block; }
-.by-settings-body--steps .by-settings-link, .by-settings-body--code .by-settings-link,
-.by-settings-body--code .by-settings-phone { display: inline-block; vertical-align: top; }
+.by-settings-body--steps .by-settings-link, .by-settings-body--code .by-settings-link { display: inline-block; vertical-align: top; }
 .by-settings-body--code .by-settings-code { display: block; }
 .by-settings-link, .by-settings-button { text-align: left; }
 .by-settings-button { position: relative; }
 .by-question { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; z-index: 20; text-align: center; }
+/* Screen off: over everything, the player, YouTube's and the toasts too (ui/screen-off.ts); its effects' looks */
+.by-screen-off { position: fixed; left: 0; top: 0; width: 1280px; height: 720px; z-index: 70; overflow: hidden; }
+.by-screen-off > * { position: absolute; left: 0; width: 1280px; }
+/* Each moving part a layer of its own once shown (a frame before it moves), not made one as it starts to move: that
+   first frame took the TV up to 80 ms */
+.by-screen-off-top, .by-screen-off-bottom, .by-screen-off-line, .by-screen-off-dot, .by-screen-off-curtain, .by-screen-off-blind,
+.by-screen-off-sweep { will-change: transform, opacity; }
+.by-screen-off-wash, .by-screen-off-black { will-change: opacity; }
+.by-screen-off-wash, .by-screen-off-black, .by-screen-off-canvas { top: 0; height: 720px; }
+.by-screen-off-wash { background: #f4f8ff; }
+.by-screen-off-top, .by-screen-off-bottom, .by-screen-off-black { background: #000; }
+/* Old TV: black closes in from the top and bottom, meeting under a 6 high line in the middle (it pulls in to the dot
+   over black, nothing of the page beside it) */
+.by-screen-off-top { top: 0; height: 360px; }
+.by-screen-off-bottom { top: 360px; height: 360px; }
+.by-screen-off-line { top: 357px; height: 6px; background: #fff; border-radius: 3px; box-shadow: 0 0 10px 3px rgba(190, 220, 255, .9), 0 0 34px 8px rgba(120, 170, 255, .55); }
+.by-screen-off-dot { left: 622px; top: 342px; width: 36px; height: 36px; border-radius: 50%;
+    background: radial-gradient(circle, #fff 0, #fff 18%, rgba(170, 205, 255, .85) 38%, rgba(90, 140, 255, 0) 70%); }
+/* Theatre curtain: red velvet folds (one 120 wide fold, tiled), darker towards the floor, the two overlapping in the
+   middle; no blurred shadows (the TV draws those for most of a second) */
+.by-screen-off .by-screen-off-curtain { top: 0; width: 680px; height: 720px;
+    background-image: linear-gradient(180deg, rgba(0, 0, 0, 0) 45%, rgba(0, 0, 0, .55)), linear-gradient(90deg, #5e0b17 0, #330610 40%, #16020a 58%, #5e0b17 100%);
+    background-size: 100% 100%, 120px 100%; }
+.by-screen-off .by-screen-off-curtain--right { left: 600px; }
+/* Blinds: strips growing down from their tops; Sweep: black with a soft leading edge 200 wide */
+.by-screen-off-blind { background: #000; -webkit-transform-origin: 50% 0; transform-origin: 50% 0; }
+.by-screen-off .by-screen-off-sweep { top: 0; width: 1480px; height: 720px; background: linear-gradient(90deg, rgba(0, 0, 0, 0) 0, #000 200px); }
+/* Setting a shortcut: over the app's question too (views/shortcuts.ts) */
+.by-shortcut-prompt { z-index: 21; }
+.by-shortcut-key { float: right; }
+.by-shortcut-name { display: block; overflow: hidden; text-overflow: ellipsis; }
+.by-shortcut-dot { display: inline-block; }
+.by-shortcut-overview { text-align: left; }
 
 /* "Who's watching?" (views/accounts.ts): its title, and the accounts in a row that moves along; a picture in each
    circle (or its name's first letter), the handle only under the focused one */
@@ -131,6 +174,23 @@
 .by-player--chat .by-chat { display: block; }
 .by-player--watch .by-chat { display: none; }
 .by-chat-list { position: absolute; left: 0; right: 0; bottom: 0; }
+/* Beside the picture as a strip, the picture zoomed: the black band over what it covers beside the strip */
+.by-chat-matte { position: absolute; left: 0; right: 0; display: none; background: #000; }
+/* Along the bottom as a ticker or one at a time: one strip */
+.by-chat-ticker, .by-chat-one { position: absolute; display: none; white-space: nowrap; }
+.by-chat--ticker .by-chat-ticker, .by-chat--one .by-chat-one { display: block; }
+.by-chat-tick { display: inline-block; }
+.by-chat-one-line { overflow: hidden; text-overflow: ellipsis; }
+/* Live chat settings (player/chat-settings.ts): over the player, or over everything with its example behind it */
+.by-chatset { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; z-index: 12; }
+.by-chatset-scene, .by-chatset-picture { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+.by-chatset-note, .by-chatset-panel, .by-chatset-value { position: absolute; }
+.by-chatset-row { position: relative; white-space: nowrap; }
+.by-chatset-row--hidden { display: none; }
+.by-chatset-hint { position: absolute; display: none; text-align: center; }
+.by-chatset-hint-text { display: inline-block; }
+.by-chatset--arranging .by-chatset-panel, .by-chatset--arranging .by-chatset-note, .by-chatset--low .by-chatset-note { display: none; }
+.by-chatset--arranging .by-chatset-hint { display: block; }
 .by-watch-buttons { position: relative; }
 .by-watch-left, .by-watch-right { position: absolute; top: 0; white-space: nowrap; }
 .by-watch-left { left: 0; }
@@ -233,6 +293,32 @@
 .by-suggestion-icon, .by-suggestion-picture { position: absolute; line-height: 0; }
 .by-search--rows .bd-keyboard, .by-search--rows .by-suggestions { visibility: hidden; }
 .by-search-bar, .by-search-mic { position: absolute; }
+/* A playlist's page (views/list-stage.ts): the focused video's frame under the list, over it with Backdrop the shade and
+   the dark band behind the list, the video's details; while its preview fills the screen the page lies over the
+   player's video (bd-page--previewing) */
+.by-list-back, .by-list-frame, .by-list-shade, .by-list-band, .by-list-info, .bd-tile-rank { position: absolute; }
+.by-list-back { left: 0; top: 0; width: 1280px; height: 720px; }
+.by-list-frame { overflow: hidden; }
+.by-list-back, .by-list-info, .by-list-shade, .by-list-band { display: none; }
+.bd-page--list .by-list-back, .bd-page--list .by-list-info, .bd-page--backdrop .by-list-shade, .bd-page--backdrop .by-list-band { display: block; }
+.by-list-title, .by-list-about, .by-list-panel--side .by-list-item-title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.by-list-about { -webkit-line-clamp: 3; }
+.by-list-line, .by-list-votes { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.by-list-vote-icon { display: inline-block; vertical-align: middle; line-height: 0; }
+.by-list-vote-icon svg { display: block; }
+.bd-page--previewing .by-list-shade, .bd-page--previewing .by-list-band, .bd-page--previewing .bd-page-content, .bd-page--previewing .by-heading,
+.bd-page--previewing .by-page-byline, .bd-page--previewing .by-page-buttons, .bd-page--previewing .by-list-info, .by-app--behind .by-rail { z-index: 45; }
+/* The playlist over the player (player/list-panel.ts): a strip across the bottom or a list at the side, over the
+   picture's layers (under the watch page), only the videos near the focus drawn */
+.by-list-panel, .by-list-panel-head, .by-list-panel-items, .by-list-item, .by-list-item-number, .by-list-item-label,
+.by-list-item-text { position: absolute; }
+.by-list-panel { z-index: 4; overflow: hidden; }
+.by-list-panel-items { -webkit-transition: -webkit-transform .2s ease-out; }
+.by-list-panel-head { white-space: nowrap; }
+.by-list-item-pic { position: relative; overflow: hidden; }
+.by-list-picture, .by-list-item-img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.by-list-item-title, .by-list-item-line { overflow: hidden; text-overflow: ellipsis; }
+.by-list-panel--strip .by-list-item-title, .by-list-item-line { white-space: nowrap; }
 /* Play mix's preview plays in a channel's banner: its shade, name, buttons and search bar over the player's video */
 .by-channel--preview .by-channel-shade, .by-channel--preview .by-channel-head, .by-channel--preview .by-search-bar,
 .by-channel--preview .by-search-mic { z-index: 45; }

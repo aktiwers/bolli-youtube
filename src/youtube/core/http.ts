@@ -64,7 +64,8 @@ export function errorBody<T>(e: HttpError): T | null {
     }
 }
 
-function parse<T>(text: string, url: string): T {
+/** A reply's JSON (empty: null; not JSON: an HttpError) */
+export function parse<T>(text: string, url: string): T {
     if (!text) {
         return null as unknown as T;
     }

@@ -17,19 +17,22 @@ import { initPerf, mark, noteKey } from './core/perf.js';
 import { android, exitApp, ignorePointer } from './core/platform.js';
 import { initPointer, Layer, takesPointer } from './core/pointer.js';
 import { initScreenSaver } from './core/screensaver.js';
+import { load, save } from './core/store.js';
 import { localClock } from './core/time.js';
 import { View } from './core/view.js';
 import { PROBLEM, toast } from './ui/toast.js';
+import { screenIsOff, screenKey, screenLayer, screenOff, screenWake } from './ui/screen-off.js';
 import { googleOf, keptProfiles, ownChannel, Profile, profiles, signOut } from './api/accounts.js';
 import { saveAvatars } from './api/avatars.js';
-import { channelAhead, isChannel } from './api/channel.js';
+import { Channel, channelAhead, isChannel, keptChannel } from './api/channel.js';
 import { dearrowFetch, dearrowOn, saveDearrow, Wanted } from './api/dearrow.js';
-import { first, get, home, keptPage, page, Page, pageAhead as fetchPageAhead, PageButton, Rows, searchAhead as fetchSearchAhead, sized, SubChannel, subscriptions, tapAhead, text, toastOf, Video } from './api/feed.js';
+import { first, get, home, keptPage, page, Page, pageAhead as fetchPageAhead, PageButton, PlaylistInfo, Rows, searchAhead as fetchSearchAhead, sized, SubChannel, subscriptions, tapAhead, text, toastOf, Video } from './api/feed.js';
 import { freshGuideNames, guideNames } from './api/guide.js';
 import { forgetKept, pruneKept } from './api/kept-pages.js';
 import { prepareNames } from './api/languages.js';
-import { prefs } from './api/prefs.js';
-import { forgetSaves, run } from './api/watch.js';
+import { prefs, Shortcut, ShortcutTarget } from './api/prefs.js';
+import { keyName, PLAYER, SCREENS, shortcutAt } from './api/shortcuts.js';
+import { forgetSaves, run, Subscribe, watchInfo } from './api/watch.js';
 import { forgetRows, keepRows, keptFor, keptRows } from './api/kept-rows.js';
 import { account, guestChosen, Identity, isBrand, lastAccount, NO_TOKEN, onAccountChange, useGuest, useIdentity } from './api/youtube.js';
 import { forgetHistorySettings } from './api/account-settings.js';
@@ -39,7 +42,7 @@ import { forgetPages, openPages } from './api/page-store.js';
 import { cancelPreload, firstStreams, mayAskAhead, preloadVideo, startSoon } from './player/preload.js';
 import { TilePreview } from './player/preview.js';
 import { TvApp } from './player/tv-app.js';
-import { apply, askToClear } from './ui/account.js';
+import { apply, askToClear, flipSubscription } from './ui/account.js';
 import { Question } from './ui/question.js';
 import { SidePanel } from './ui/side-panel.js';
 import { applyBlack, applyTheme, metrics } from './ui/theme.js';
@@ -52,10 +55,12 @@ import { Cast, launchParams } from './cast.js';
 import { SearchView } from './views/search.js';
 import { debugHooks } from './debug.js';
 import { ChannelView, KnownChannel } from './views/channel.js';
-import { SettingsView } from './views/settings.js';
+import { playerPlaylists, SettingsView } from './views/settings.js';
 import { FeedOptions, FeedTexts, FeedView, KeptFeed } from './views/videos.js';
+import { shuffle } from './views/list-stage.js';
 import { noteWatched, startPicture, watchedAt } from './views/tiles.js';
 import { SubscriptionsView } from './views/subscriptions.js';
+import { ShortcutPrompt, wayLines } from './views/shortcuts.js';
 import { LibraryView } from './views/library.js';
 
 // The build version (filled in by tools/build_app.mjs), exposed on the page
@@ -117,6 +122,14 @@ mark('player');
 var tileMenu = new SidePanel(document.body);
 /** Confirmation dialog over the app (e.g. Sign out) */
 var question = new Question(root);
+/** The rail's screens but Settings: the screens the app can start on, and that shortcuts go to */
+var SCREENS_RAIL = RAIL.filter(function (r) { return !r.bottom; });
+/** Sets a shortcut (Settings › Shortcuts, a channel's or a playlist's Shortcut button), made on first use: it gets keys
+ * first while shown */
+var promptMade: ShortcutPrompt | null = null;
+function shortcutPrompt(): ShortcutPrompt {
+    return promptMade || (promptMade = new ShortcutPrompt(root, SCREENS_RAIL));
+}
 /** Video preview in the focused tile */
 var preview = new TilePreview(own);
 
@@ -180,6 +193,8 @@ interface Screen extends View {
     retry?(quiet?: boolean): boolean;
     /** The panel or picker open over it (null: none; core/pointer.ts) */
     layer?: () => HTMLElement | null;
+    /** It keeps code before any shortcut (Search's keyboard the numbers; what is open over it keeps every key: layer) */
+    ownKeys?: (code: number) => boolean;
 }
 
 /** A screen of the account's rows (load), stored across starts; name: used in the load-failure message */
@@ -193,7 +208,7 @@ function feedTexts(name: string, empty: string): FeedTexts {
 
 /** Page options: full screen with a back arrow when the theme wants it, page buttons, fade-in as rows arrive */
 function pageOptions(): FeedOptions {
-    return { page: metrics().ways.pagesOverAll ? { back: closePage } : undefined, onButton: pressPageButton, fade: true };
+    return { page: metrics().ways.pagesOverAll ? { back: closePage } : undefined, onButton: pressPageButton, fade: true, onList: preloadFocused };
 }
 
 /** The screen the app starts on (Settings: Start page, read at each use: it may change meanwhile); Back in the rail
@@ -216,14 +231,44 @@ function openSubChannel(c: SubChannel): void {
         openPage(c.channel, { title: c.title, picture: c.picture, fresh: c.fresh });
         return;
     }
+    openVideos(c.title, c.page);
+}
+
+/** A channel's latest videos (its page in Subscriptions, or its Videos page) as a grid */
+function openVideos(title: string, p: Page): void {
     pushPage(new FeedView(function () {
-        return keptPage(c.page).then(function (rows) {
-            var videos: Video[] = [];
-            rows.shelves.forEach(function (s) { videos = videos.concat(s.videos); });
+        return keptPage(p).then(function (rows) {
             var next = rows.shelves.length ? rows.shelves[rows.shelves.length - 1].next : '';
-            return { title: c.title, next: '', shelves: [{ title: '', videos: videos, grid: true, next: next }] };
+            return { title: title, next: '', shelves: [{ title: '', videos: allVideos(rows), grid: true, next: next }] };
         });
-    }, feedTexts(c.title, tr('No videos from {1} yet.', c.title)), openTile, pageOptions()));
+    }, feedTexts(title, tr('No videos from {1} yet.', title)), openTile, pageOptions()));
+}
+
+/** Every video of rows, shelf after shelf */
+function allVideos(rows: Rows): Video[] {
+    var videos: Video[] = [];
+    rows.shelves.forEach(function (s) { videos = videos.concat(s.videos); });
+    return videos;
+}
+
+/** Your subscriptions, A-Z (Settings › Shortcuts' "A channel…") */
+function subscribedChannels(): Promise<SubChannel[]> {
+    return subscriptions().then(function (rows) {
+        return (rows.channels || []).filter(function (c) { return !c.recent; });
+    });
+}
+
+/** Your Library's playlists, Watch later and Liked videos among them (Settings › Shortcuts' "A playlist…") */
+function libraryPlaylists(): Promise<Video[]> {
+    return keptPage({ browseId: BROWSE.library.browseId }).then(function (rows) {
+        var seen: { [id: string]: boolean } = {};
+        return allVideos(rows).filter(function (v) {
+            var id = v.page && /^VL/.test(v.page.browseId) ? v.page.browseId : '';
+            var first = !!id && !seen[id];
+            seen[id] = true;
+            return first;
+        });
+    });
 }
 
 /** All subscribed channels, A-Z, as round tiles (Subscriptions' All); OK opens one */
@@ -244,7 +289,8 @@ function section(id: string): Screen {
     if (!sections[id]) {
         var browse = BROWSE[id];
         sections[id] = id === 'search' ? new SearchView(openTile, leaveSearch, searchAhead) :
-            id === 'settings' ? new SettingsView(function () { return cast.linkCode(); }, RAIL.filter(function (r) { return !r.bottom; }), question, restartApp) :
+            id === 'settings' ? new SettingsView(function () { return cast.linkCode(); }, SCREENS_RAIL, question, restartApp,
+                { prompt: shortcutPrompt, panel: tileMenu, channels: subscribedChannels, playlists: libraryPlaylists }) :
             id === 'home' ? feedSection(id, home, tr('Home'), tr('Nothing on Home yet.'), {
                 // As YouTube: a search bar (OK goes to Search) and big tiles in the focused row
                 onSearch: openSearch,
@@ -386,13 +432,15 @@ function openPage(p: Page, known?: KnownChannel): void {
         noAccount: NO_ACCOUNT,
         failed: tr('Could not load this page. Press OK to try again.')
     };
-    pushPage(isChannel(p) ? new ChannelView(p, texts, openTile, openPage, openSearch, known) :
-        new FeedView(function () { return keptPage(p); }, texts, openTile, pageOptions()));
+    pushPage(isChannel(p) ? new ChannelView(p, texts, openTile, openPage, openSearch, known, function (c: Channel) {
+        // Its videos: its uploads, newest first (YouTube's playlist UU… of channel UC…), whatever its tabs are
+        askShortcut('channel', p.browseId, { title: c.title, channel: p, videos: { browseId: 'VLUU' + p.browseId.slice(2) } });
+    }) : new FeedView(function () { return keptPage(p); }, texts, openTile, pageOptions()));
 }
 
 /** A page button (e.g. History's): a filter's choices in the panel (a choice reloads the page filtered), an on/off
- * toggle applied at once (reverted if YouTube rejects it), YouTube's question first (yes: done, page reloaded), or
- * a playlist's Repeat/Shuffle */
+ * toggle applied at once (reverted if YouTube rejects it), YouTube's question first (yes: done, page reloaded), a
+ * playlist's Play all, Shuffle or Repeat, its Repeat switch, or its Shortcut */
 function pressPageButton(b: PageButton, view: FeedView): void {
     var choices = b.choices;
     var toggle = b.toggle;
@@ -405,25 +453,34 @@ function pressPageButton(b: PageButton, view: FeedView): void {
             } };
         }), -1);
     } else if (toggle) {
-        apply(toggle, 'on', !toggle.on, toggle.commands[toggle.on ? 1 : 0], function () { view.drawButtons(); }, tr('YouTube did not take the change. Try again.'));
+        // (done: YouTube's own message with it, e.g. Saved to library)
+        var command = toggle.commands[toggle.on ? 1 : 0];
+        apply(toggle, 'on', !toggle.on, command, function () { view.drawButtons(); }, tr('YouTube did not take the change. Try again.'), toastOf(command) || undefined);
     } else if (ask) {
         askToClear(question, ask, function () { view.reload(); });
+    } else if (b.shortcut) {
+        // (its preview stops: the panel and the prompt show under the player's layer)
+        preview.stop();
+        askShortcut('playlist', b.shortcut, { title: view.playlistInfo().title });
+    } else if (b.turn) {
+        var on = view.turn(b.turn);
+        toast(b.turn === 'repeat' ? (on ? tr('Repeat on') : tr('Repeat off')) : on ? tr('Shuffle on') : tr('Shuffle off'), b.turn === 'repeat' ? 'loop' : 'shuffle');
     } else if (b.play) {
-        // Repeat or Shuffle: play the page's videos from the first (Repeat loops at the end)
-        var videos = view.videos().filter(function (v) { return !v.movie; });
-        if (b.play.shuffle) {
-            for (var i = videos.length - 1; i > 0; i--) {
-                var k = Math.floor(Math.random() * (i + 1));
-                var swap = videos[i];
-                videos[i] = videos[k];
-                videos[k] = swap;
-            }
-        }
-        var start = videos[0];
-        if (start) {
-            play({ id: start.id, title: start.title, channel: start.channel, length: '', info: '', start: 0, repeat: b.play.loop,
-                list: videos.map(function (v) { return v.id; }) });
-        }
+        // A playlist's Play all: its videos in its order or Shuffle's (Repeat on: they loop at the end); YouTube's own
+        // Repeat or Shuffle elsewhere: the page's videos from the first, looping or shuffled
+        var playlist = !!view.frame;
+        var videos = view.playable();
+        var ids = playlist ? view.order(undefined, videos) : (b.play.shuffle ? shuffle(videos) : videos).map(function (v) { return v.id; });
+        playList(videos, ids, b.play.loop || playlist && view.repeating, playlist ? view.playlistInfo(videos) : undefined);
+    }
+}
+
+/** Plays the first of ids (one of videos) with the rest after it (repeat: again from the first at the end), the
+ * playlist they are from (if one) shown in the player */
+function playList(videos: Video[], ids: string[], repeat: boolean, playlist?: PlaylistInfo): void {
+    var start = videos.filter(function (v) { return v.id === ids[0]; })[0];
+    if (start) {
+        play({ id: start.id, title: start.title, channel: start.channel, length: '', info: '', start: 0, repeat: repeat, list: ids, playlist: playlist });
     }
 }
 
@@ -846,19 +903,30 @@ function play(video: Video): void {
     if (bolli) {
         tv.shutDown();
     }
-    // The player takes over this video's playing preview; any other preview stops (its position is kept)
-    if (!bolli || !preview.playing(video.id)) {
+    // The player takes over this video's playing preview (not from a playlist with Settings › Starting from a playlist:
+    // From the start); any other preview stops (its position is kept)
+    var fromStart = !!video.playlist && !prefs().listCarryOn;
+    if (!bolli || !preview.playing(video.id) || fromStart) {
         preview.stop();
     }
     var t = startTime(video);
     if (bolli) {
-        // A video closed a moment ago (e.g. Back by mistake) resumes as it was, with its play list if any
+        // A video closed a moment ago (e.g. Back by mistake) resumes as it was, with its play list if any (not from the
+        // start)
         var queue = video.list ? new ListQueue(video.list, video.id, video.repeat) : null;
-        if (!own.comeBack(video.id, queue || undefined)) {
+        if (queue && video.playlist) {
+            followList(queue, video.playlist);
+        }
+        if (fromStart || !own.comeBack(video.id, queue || undefined)) {
             own.play(video.id, video.title, video.channel, t, queue, startPicture(video));
         }
         // A taken-over preview now belongs to the player
         preview.stop();
+        return;
+    }
+    // (webOS TV 2.x's engine: YouTube's player does not run there)
+    if (!tv.runs) {
+        toast(tr('Movies play only in YouTube\'s player, which does not run on this TV.'), undefined, PROBLEM);
         return;
     }
     var ready = tv.ready;
@@ -871,10 +939,84 @@ function play(video: Video): void {
 }
 
 /** Where OK on the video's tile starts it: where it stopped here, else YouTube's resume point (or the preview's
- * position) */
+ * position). From a playlist's page: at its start (Settings › Starting from a playlist), or on from its preview
+ * playing in the frame (0: the preview taken over where it plays) */
 function startTime(video: Video): number {
+    if (video.playlist && (!prefs().listCarryOn || preview.playing(video.id))) {
+        return 0;
+    }
     var here = watchedAt(video.id);
     return Math.max(here >= 0 ? here : video.start || 0, preview.from(video.id));
+}
+
+/** The screen when it is a playlist's page (with its frame: views/list-stage.ts), else null */
+function listScreen(): FeedView | null {
+    var view = screen();
+    return view instanceof FeedView && view.frame ? view : null;
+}
+
+/** Where the focused video would start, for loading it ahead: on a playlist's page with Settings › Starting from a
+ * playlist: From the start, at its start */
+function aheadAt(video: Video): number {
+    return !prefs().listCarryOn && listScreen() ? 0 : startTime(video);
+}
+
+/** A playlist's queue (the screen is its page) knows the playlist and grows with it: as it nears its end the page,
+ * while it still shows under the player, fetches its next part, which joins the queue in the order it plays and the
+ * playlist the player shows (the page is not kept by the queue: it may close) */
+function followList(queue: ListQueue, playlist: PlaylistInfo): void {
+    queue.playlist = playlist;
+    var list = listScreen();
+    // (only its own page: a playlist played by a shortcut over another one's does not grow with that one)
+    if (!list || list.playlistInfo([]).id !== playlist.id) {
+        return;
+    }
+    var added = list.added = function (ids: string[], videos: Video[]): void {
+        queue.add(ids);
+        var have: { [id: string]: boolean } = {};
+        playlist.videos.forEach(function (v) { have[v.id] = true; });
+        playlist.videos = playlist.videos.concat(videos.filter(function (v) { return !have[v.id]; }));
+    };
+    queue.onNear = function () {
+        var now = listScreen();
+        if (now && now.added === added) {
+            now.loadMore();
+        }
+    };
+    queue.ask();
+}
+
+/** Plays video id in a playlist's frame as its settings say (nothing with Playlist preview: Its picture only): the
+ * whole video with Autoplay on the playlist page (the next one after it), the closed video kept going on where it was
+ * (resume); filling the screen (Backdrop), the page and the rail's clock over it while it plays */
+function showOnStage(list: FeedView, id: string, resume?: boolean): void {
+    var frame = list.frame;
+    var stage = frame && frame.shown === id ? frame.preview() : null;
+    if (!frame || !stage) {
+        return;
+    }
+    frame.details();
+    var behind = function (on: boolean): void {
+        list.previewing(on);
+        toggleClass(root, 'by-app--behind', on);
+    };
+    // Release YouTube's app kept for films: the preview needs the decoder
+    tv.shutDown();
+    preview.show(id, stage.frame, stage.sound, { square: stage.backdrop, stage: !stage.backdrop, whole: prefs().listAutoplay, resume: resume,
+        done: function () { behind(false); }, ended: function () { stageEnded(list, id); } });
+    // (after show: it stops the preview before, whose done takes the classes off)
+    behind(stage.backdrop);
+}
+
+/** A playlist's frame played video id to its end: with Settings › Autoplay on the playlist page the next one (in its
+ * order or Shuffle's, again from the first with Repeat on) plays there, the list's focus moving to it (not from the
+ * buttons) */
+function stageEnded(list: FeedView, id: string): void {
+    var next = prefs().listAutoplay && listScreen() === list && !own.busy && !tv.busy ? list.nextAfter(id) : '';
+    if (next) {
+        list.focusOn(next, true);
+        showOnStage(list, next);
+    }
 }
 
 /** Preloads the focused tile's video for a faster start, and shows its preview */
@@ -901,7 +1043,7 @@ function preloadFocused(): void {
                     }
                     tv.shutDown();
                     channel.previewing(true);
-                    preview.show(wanted.id, wanted.frame, p.previews === 'sound' && wanted.sound, true, function () { channel.previewing(false); });
+                    preview.show(wanted.id, wanted.frame, p.previews === 'sound' && wanted.sound, { square: true, done: function () { channel.previewing(false); } });
                 }, Math.max(0, wanted.delay - PRELOAD_REST_MS)) as unknown as number;
             }
             return;
@@ -914,8 +1056,16 @@ function preloadFocused(): void {
             pageAhead(sub);
             return;
         }
-        // Not while the screen's pictures are still loading
-        var video = tv.warming || !p.preload && p.previews === 'off' || picturesWaiting() ? null : tile;
+        // A playlist's preview plays in its frame as its own setting says (not in the tile), its details asked for (not
+        // while the screen's pictures are still loading)
+        var list = listScreen();
+        var frame = list && list.frame;
+        var previews = frame ? !!frame.preview() : p.previews !== 'off';
+        var waiting = tv.warming || picturesWaiting();
+        if (frame && !waiting) {
+            frame.details();
+        }
+        var video = waiting || !p.preload && !previews ? null : tile;
         if (!video || video.page || video.movie) {
             if (video && video.page) {
                 pageAhead(video.page);
@@ -925,15 +1075,17 @@ function preloadFocused(): void {
         if (p.preload) {
             readyFocused(true);
             if (!own.readyFor(video.id)) {
-                preloadVideo(video.id, startTime(video), video.channel);
+                preloadVideo(video.id, aheadAt(video), video.channel);
             }
         }
-        // A preview, not of the video just closed (OK resumes it)
-        var frame = focusedFrame();
-        if (p.previews !== 'off' && frame && own.leftId !== video.id) {
+        // A preview, not of the video just closed (OK resumes it), nor of the one a playlist's frame plays on
+        var box = focusedFrame();
+        if (list && own.leftId !== video.id && !preview.playing(video.id)) {
+            showOnStage(list, video.id);
+        } else if (!list && previews && box && own.leftId !== video.id) {
             // Release YouTube's app kept for films: the preview needs the decoder
             tv.shutDown();
-            preview.show(video.id, frame, p.previews === 'sound');
+            preview.show(video.id, box, p.previews === 'sound');
         }
     }, PRELOAD_REST_MS) as unknown as number;
 }
@@ -951,7 +1103,7 @@ function readyFocused(late: boolean): void {
         return;
     }
     var id = video.id;
-    own.ready(id, startTime(video), function () { return firstStreams(id); }, function () {
+    own.ready(id, aheadAt(video), function () { return firstStreams(id); }, function () {
         var now = focusedTile();
         return !!now && now.id === id;
     });
@@ -992,6 +1144,9 @@ function focusedTile(): Video | null {
 
 /** The video tile in focus where holding OK means something (its menu), or null */
 function holdTile(): Video | null {
+    if (question.shown || promptMade && promptMade.shown) {
+        return null;
+    }
     var video = focusedTile();
     return video && !video.page ? video : null;
 }
@@ -1024,6 +1179,10 @@ function route(code: number): boolean {
     if (question.onKey(code === KEY.HOLD ? KEY.OK : code)) {
         return true;
     }
+    // Setting a shortcut takes every key, the remote's spare ones too
+    if (promptMade && promptMade.onKey(code)) {
+        return true;
+    }
     // OK held on a video tile opens its menu; elsewhere it acts as OK
     if (code === KEY.HOLD) {
         var video = holdTile();
@@ -1046,6 +1205,10 @@ function route(code: number): boolean {
     }
     if (tileMenu.shown) {
         tileMenu.onKey(code);
+        return true;
+    }
+    // A shortcut where it works (Settings › Shortcuts): in the app's player, else on the screens (none in YouTube's)
+    if (!tv.busy && runShortcut(code)) {
         return true;
     }
     // While a video shows, its player gets the keys; while YouTube's player is still starting, Back cancels it
@@ -1114,6 +1277,169 @@ function route(code: number): boolean {
         return true;
     }
     return false;
+}
+
+/** The shortcut on code where it works now (api/shortcuts.ts): in the app's player, else on the screens; none while
+ * something is open over them (it keeps every key: a panel, Live chat settings, a page of Settings' own) or the screen
+ * keeps the key (Search's keyboard its numbers); false: none */
+function runShortcut(code: number): boolean {
+    var inPlayer = own.busy;
+    var view = screen();
+    var taken = inPlayer ? !!own.layer() : !!(view.layer && view.layer()) || !!view.ownKeys && view.ownKeys(code);
+    var s = keyName(code) && !taken ? shortcutAt(code, inPlayer ? PLAYER : SCREENS) : null;
+    if (!s) {
+        return false;
+    }
+    if (!inPlayer || !own.act(s.action)) {
+        goTo(s);
+    }
+    return true;
+}
+
+/** History, Watch later and Liked videos: their pages */
+var YOUR_PAGES: { [action: string]: string } = { history: 'FEhistory', watchLater: 'VLWL', liked: 'VLLL' };
+
+/** A go-to shortcut: Screen off and Subscribe (in the player too, the video playing on), a video played (the last one,
+ * a channel's newest, a playlist), or a screen of the rail, a page (History, Watch later, Liked videos, a channel's, a
+ * playlist's, a channel's videos), "Who's watching?": from the player the video closes first, as with Back */
+function goTo(s: Shortcut): void {
+    var parts = s.action.split(':');
+    var way = parts[1];
+    var t = s.target;
+    var page = YOUR_PAGES[s.action];
+    var videos = t ? t.videos || t.channel : null;
+    if (s.action === 'screenOff') {
+        screenOff();
+    } else if (s.action === 'subscribe') {
+        subscribeShortcut();
+    } else if (s.action === 'resume') {
+        playLast();
+    } else if (page) {
+        leaveFor(function () { openPage({ browseId: page }); }, s.action);
+    } else if (parts[0] === 'section') {
+        leaveFor(function () { switchSection(way); }, '');
+    } else if (s.action === 'accounts') {
+        leaveFor(openAccounts, '');
+    } else if (parts[0] === 'playlist') {
+        if (way === 'open') {
+            leaveFor(function () { openPage({ browseId: 'VL' + parts[2] }); }, s.action);
+        } else {
+            playPlaylist(parts[2], way === 'shuffle');
+        }
+    } else if (t && videos) {
+        if (way === 'page' && t.channel) {
+            leaveFor(function () { openPage(t!.channel as Page); }, s.action);
+        } else if (way === 'newest') {
+            playNewest(videos);
+        } else {
+            leaveFor(function () { openVideos(t!.title, videos as Page); }, s.action);
+        }
+    }
+}
+
+/** Closes the video playing as Back does (kept to resume; not handed to a playlist's frame, the page goes over it),
+ * then open() a screen or page with the focus on it. A page (page: its key) opened from the video brings it back on
+ * Back; one already on top is not opened again */
+var leaving = false;
+var shortcutPage: { view: Screen; key: string } | null = null;
+function leaveFor(open: () => void, page: string): void {
+    var from = '';
+    if (own.busy) {
+        leaving = true;
+        own.leave();
+        leaving = false;
+        from = own.leftId;
+    }
+    leaveMenu();
+    var top = pages[pages.length - 1];
+    if (!page || !shortcutPage || shortcutPage.view !== top || shortcutPage.key !== page) {
+        open();
+    }
+    if (page) {
+        shortcutPage = { view: pages[pages.length - 1], key: page };
+        if (from) {
+            fromPlayer = { view: shortcutPage.view, id: from };
+        }
+    }
+    updateMenu();
+}
+
+/** A request for a page failed: said in a toast */
+function loadFailed(): void {
+    toast(tr('Could not load this page. Try again.'), undefined, PROBLEM);
+}
+
+/** The Subscribe shortcut: in the player the video's channel (its details, asked for if not known yet), on the screens
+ * the focused video's channel (its details: one request, none if known) or the focused channel */
+function subscribeShortcut(): void {
+    var flip = function (info: { subscribe: Subscribe | null }, channel: string): void {
+        if (info.subscribe) {
+            flipSubscription(info.subscribe, channel);
+        } else {
+            toast(tr('Not possible on this video'), 'info');
+        }
+    };
+    if (own.busy) {
+        var details = own.details();
+        if (details) {
+            flip(details, details.channel);
+        } else {
+            toast(tr('One moment: the video\'s details are on their way'), 'info');
+        }
+        return;
+    }
+    var view = screen();
+    var tile = !menuFocused && view.focusedVideo ? view.focusedVideo() : null;
+    if (tile && tile.page && isChannel(tile.page)) {
+        keptChannel(tile.page).then(function (c) { flip(c, c.title); }, loadFailed);
+    } else if (tile && !tile.page) {
+        watchInfo(tile.id).then(function (info) { flip(info, info.channel); }, loadFailed);
+    } else {
+        toast(tr('Rest on a video or a channel first'), 'info');
+    }
+}
+
+/** The video closed last, where it stopped (kept across starts by own.onClosed; as it was if closed a moment ago) */
+var LAST_KEY = 'youtube.lastVideo';
+function playLast(): void {
+    var video = load<Video>(LAST_KEY);
+    var now = own.now;
+    if (!video) {
+        toast(tr('No video to continue yet'), 'info');
+    } else if (!now || now.id !== video.id) {
+        play(video);
+    }
+}
+
+/** The newest video on a channel's page of videos (asked anew) */
+function playNewest(p: Page): void {
+    page(p).then(function (rows) {
+        var video = allVideos(rows).filter(function (v) { return !v.page; })[0];
+        if (video) {
+            play(video);
+        } else {
+            toast(tr('No videos from {1} yet.', rows.title), 'info');
+        }
+    }, loadFailed);
+}
+
+/** Plays playlist id from its first video, or shuffled: its first part's videos, as its page's Play all would */
+function playPlaylist(id: string, shuffled: boolean): void {
+    keptPage({ browseId: 'VL' + id }).then(function (rows) {
+        var videos = allVideos(rows).filter(function (v) { return !v.page && !v.movie; });
+        if (!videos.length) {
+            toast(tr('Nothing here yet.'), 'info');
+            return;
+        }
+        playList(videos, (shuffled ? shuffle(videos) : videos).map(function (v) { return v.id; }), false,
+            { title: rows.title, count: rows.side && rows.side.count || 0, videos: videos, id: rows.playlistId || id });
+    }, loadFailed);
+}
+
+/** A channel's or a playlist's Shortcut button: what its button does (the button each has already under it), then
+ * the button (views/shortcuts.ts) */
+function askShortcut(kind: string, id: string, target: ShortcutTarget): void {
+    tileMenu.open(tr('Shortcut'), wayLines(kind, id, target, shortcutPrompt()), -1);
 }
 
 /** A visible screen that failed to load retries by itself, as YouTube's app does: periodically (one request each
@@ -1224,6 +1550,13 @@ function unpressTile(): void {
     }
 }
 
+/** The video whose preview plays in a playlist's frame ('' none) */
+function stagePlaying(): string {
+    var list = own.busy ? null : listScreen();
+    var id = list && list.frame ? list.frame.shown : '';
+    return id && preview.playing(id) ? id : '';
+}
+
 /** The focused tile's picture box (null: none) */
 function focusedFrame(): HTMLElement | null {
     return screen().el.querySelector('.bd-tile--focused .bd-tile-frame') as HTMLElement | null;
@@ -1233,8 +1566,15 @@ function focusedFrame(): HTMLElement | null {
  * menu, the open rail (a click on the screen beside it closes it, into the screen, as YouTube's guide); the pointer's
  * clicks go to it alone (null: nothing open) */
 function pointerLayer(): Layer | null {
+    var black = screenLayer();
+    if (black) {
+        return { el: black };
+    }
     if (question.shown) {
         return { el: question.el };
+    }
+    if (promptMade && promptMade.shown) {
+        return { el: promptMade.el };
     }
     var view = screen();
     var el = tileMenu.layer() || (own.busy ? own.layer() : view.layer && view.layer() || menu.openMenu);
@@ -1245,23 +1585,40 @@ function pointerLayer(): Layer | null {
 }
 
 /** Handles a key (remote, or a casting phone's arrows). Stops the preview; for OK only after it acted, so OK on the
- * previewed tile takes the preview over */
+ * previewed tile takes the preview over. A playlist's preview plays on while the arrows go to its buttons and back
+ * (Settings › Preview on the buttons) */
 function pressKey(code: number): boolean {
     lastKeyAt = Date.now();
+    // The screen off: a key wakes it (any, or only Screen off's button) and does nothing else (a playlist's stage plays on)
+    if (screenKey(code)) {
+        return true;
+    }
+    // A shortcut acting where it is (Screen off, Subscribe): the screen left as it is, a tile's preview playing on (no
+    // preview stopped, no video made ready: it took the preview's place, starting it over)
+    if (staysPut(code)) {
+        return route(code);
+    }
     unpressTile();
-    if (code !== KEY.OK) {
+    var kept = stagePlaying();
+    if (code !== KEY.OK && !kept) {
         preview.stop();
     }
     cancelPreload();
     var was = focusedTile();
     var handled = route(code);
+    // (a playlist's preview plays on for the arrows to its buttons and back, and OK on a button that played nothing:
+    // Repeat, Shuffle, Save; Settings › Preview on the buttons)
+    var keep = !!kept && (screenIsOff() || prefs().listKeep && stagePlaying() === kept && (code === KEY.OK || code >= KEY.LEFT && code <= KEY.DOWN));
+    if (kept && code !== KEY.OK && !keep) {
+        preview.stop();
+    }
     // A video loaded ahead goes once its tile has lost the focus (a key that moved nothing keeps it, as does its tile
     // drawn again)
     var now = focusedTile();
     if (code !== KEY.OK && (now ? now.id : '') !== (was ? was.id : '')) {
         own.unready();
     }
-    if (code === KEY.OK) {
+    if (code === KEY.OK && !keep) {
         preview.stop();
     }
     updateMenu();
@@ -1269,6 +1626,12 @@ function pressKey(code: number): boolean {
     return handled;
 }
 setActive({ onKey: pressKey });
+
+/** The key is a shortcut that acts where it is (Screen off, Subscribe / unsubscribe) */
+function staysPut(code: number): boolean {
+    var s = shortcutAt(code, own.busy ? PLAYER : SCREENS);
+    return !!s && (s.action === 'screenOff' || s.action === 'subscribe');
+}
 
 // OK where holding it means nothing (all but a video tile's menu) acts as it goes down, not at its release: decided by
 // what has the focus then (ahead of keys.ts, which keeps the hold's press), the press's repeats and release dropped
@@ -1350,6 +1713,14 @@ function castPlay(id: string, t: number, queue: ListQueue): void {
     tileMenu.close();
     // An open question would take the player's keys unseen
     question.close();
+    if (promptMade) {
+        promptMade.close();
+    }
+    // The screen off: it stays so (music from a phone), or wakes for the video, as Settings › Casting with the screen
+    // off says
+    if (prefs().castWakes) {
+        screenWake();
+    }
     preview.stop();
     // Also when idle, so it forgets a video it would resume
     tv.stop();
@@ -1359,9 +1730,10 @@ cast.launched(launchParams(null));
 document.addEventListener('webOSRelaunch', function (e) {
     cast.launched(launchParams((e as CustomEvent).detail));
 });
-// Keep LG's screensaver away while a video plays
+// Keep LG's screensaver away while a video plays, and while the screen is off (Screen off: the sound plays on, or the
+// black is wanted as it is)
 initScreenSaver(function () {
-    return tv.busy || own.busy;
+    return tv.busy || own.busy || screenIsOff();
 });
 // While a player covers the app, the app is hidden and its pictures released after a while.
 // With the app's player, YouTube's app shuts down again after playing what the app's player
@@ -1382,7 +1754,24 @@ own.onShown = function (shown) {
         tv.shutDown();
     }
 };
-own.onClosed = updateMenu;
+own.playlistSettings = playerPlaylists;
+own.onClosed = function () {
+    // Kept for the shortcut that continues it (also after a restart; one that ended: none), stored once the screen is
+    // back
+    var last = own.lastLeft;
+    setTimeout(function () { save(LAST_KEY, last); }, 0);
+    // Back on a playlist's page: its focus on the video closed (the list may have played on), which plays on in the frame
+    // at once from where it was (the closed video kept loaded)
+    var list = listScreen();
+    var left = own.leftId;
+    if (list && left && !leaving) {
+        list.focusOn(left);
+        if (own.kept(left)) {
+            showOnStage(list, left, true);
+        }
+    }
+    updateMenu();
+};
 // Progress in the app's player shows on the video's tiles on every screen at once (YouTube's rows update only on
 // refresh); only when YouTube records it (History on)
 own.onWatched = function (id, progress, t) {
@@ -1412,6 +1801,9 @@ own.onPageAhead = pageAhead;
 // A video's comments shown: offered to a phone signed in to the same account, as YouTube's TV app does
 own.onComments = function (id) { cast.commentsHandoff(id); };
 own.onFallback = function (id, t) {
+    if (!tv.runs) {
+        return false;
+    }
     handedOver = id;
     tv.play(id, function () {
         handedOver = '';
@@ -1419,13 +1811,12 @@ own.onFallback = function (id, t) {
         tv.shutDown();
         updateMenu();
     }, t);
+    return true;
 };
 // A channel page opened from the watch page, over the screen the video was picked on (Back resumes the video)
 var fromPlayer: { view: View; id: string } | null = null;
 own.onPage = function (page) {
-    var id = own.leftId;
-    openPage(page);
-    fromPlayer = id ? { view: pages[pages.length - 1], id: id } : null;
+    leaveFor(function () { openPage(page); }, page.browseId + (page.params || ''));
 };
 function shownOver(shown: boolean): void {
     clearTimeout(releaseTimer);

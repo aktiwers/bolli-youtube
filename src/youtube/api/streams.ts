@@ -13,7 +13,7 @@
 // (sabrStreams: the signed-in TV client, formats via SABR only:
 // player/sabr-engine.ts); playableStreams tries that first if Settings say so.
 
-import { getText, HttpError, postJson } from '../core/http.js';
+import { getText, HttpError } from '../core/http.js';
 import { language, tr } from '../core/i18n.js';
 import { android } from '../core/platform.js';
 import { load, save } from '../core/store.js';
@@ -22,7 +22,7 @@ import { languageOrder, subtitleLanguages, trackName } from './languages.js';
 import { forgetScript, playerScript } from './player-script.js';
 import { SabrClient } from './sabr.js';
 import { forgetOnesie, onesie, prepareOnesie } from './onesie.js';
-import { freshSignIn, innertubeVia, lastAccount, newCpn, noAnswer, restartPage, tvClient, youtubeLanguage } from './youtube.js';
+import { freshSignIn, innertubeVia, lastAccount, newCpn, noAnswer, postYouTubeJson, restartPage, tvClient, youtubeLanguage } from './youtube.js';
 
 var PLAYER = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
 var VISITOR = 'https://www.youtube.com/sw.js_data';
@@ -614,7 +614,7 @@ function askPlayer(id: string, visitorId: string, hl: string): Promise<any> {
         client[name] = (CLIENT as { [name: string]: unknown })[name];
     }
     client.hl = hl;
-    return postJson<any>(PLAYER, {
+    return postYouTubeJson<any>(PLAYER, {
         context: { client: client },
         videoId: id,
         playbackContext: { contentPlaybackContext: { html5Preference: 'HTML5_PREF_WANTS' } },

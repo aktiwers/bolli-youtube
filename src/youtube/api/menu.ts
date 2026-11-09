@@ -13,6 +13,11 @@ import { innertube } from './youtube.js';
 /** Fetched menus, cached for a while */
 var menus = new Keeper<MenuItem[]>(5 * 60 * 1000, 8, true, true);
 
+/** YouTube's command adding video id to Watch later */
+export function watchLaterAdd(id: string): any {
+    return { playlistEditEndpoint: { playlistId: 'WL', actions: [{ addedVideoId: id, action: 'ACTION_ADD_VIDEO' }] } };
+}
+
 /** A video tile's menu (from its long-press command; without one: Play and the saves) */
 export function tileMenu(video: Video): Promise<MenuItem[]> {
     // Its items as parsed (feed.ts menuOf; rows kept from before carry YouTube's whole command)
@@ -31,7 +36,7 @@ export function tileMenu(video: Video): Promise<MenuItem[]> {
     }
     return Promise.resolve([
         { title: tr('Play'), command: { watchEndpoint: { videoId: video.id } } },
-        { title: tr('Save to Watch later'), command: { playlistEditEndpoint: { playlistId: 'WL', actions: [{ addedVideoId: video.id, action: 'ACTION_ADD_VIDEO' }] } } },
+        { title: tr('Save to Watch later'), command: watchLaterAdd(video.id) },
         { title: tr('Save to playlist'), command: { addToPlaylistEndpoint: { videoId: video.id } } }
     ]);
 }

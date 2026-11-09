@@ -22,6 +22,7 @@
 // worker.
 
 import { getText } from '../core/http.js';
+import { oldEngine } from '../core/platform.js';
 import { load, save } from '../core/store.js';
 import { answer, forgetTvPage, tvPage, youtubePage } from './youtube.js';
 
@@ -259,7 +260,9 @@ function solved(file: string): Promise<string> {
  * change an n) */
 export function startTransform(parts: string[]): Promise<(v: string) => Promise<string>> {
     removeWorker();
-    var url = URL.createObjectURL(new Blob([STUB].concat(parts, [TAIL]), { type: 'text/javascript' }));
+    // (webOS TV 2.x's engine: promise.js first, as in the app, its own Promise too early for YouTube's code)
+    var first = oldEngine() ? [(window as unknown as { bolliPromise: string }).bolliPromise] : [];
+    var url = URL.createObjectURL(new Blob(first.concat([STUB], parts, [TAIL]), { type: 'text/javascript' }));
     var w = worker = new Worker(url);
     var asked: { [id: number]: (reply: { v?: string; error?: string }) => void } = {};
     var asks = 0;
