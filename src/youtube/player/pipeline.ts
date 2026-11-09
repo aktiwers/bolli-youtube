@@ -5,9 +5,10 @@
 // fresh one opens and replaces it. A pipeline that has played cannot take another video codec
 // (the TV's Media Source allows one video buffer: "reached the limit of SourceBuffer objects"),
 // so the player prefers the kept codec (api/streams.ts pickFormat). Not kept after a decoder
-// failure; released when another player needs the TV's decoder or the app goes to the
-// background (releasePipeline). One player video, so one pipeline.
+// failure, nor on webOS TV 2.x (keepPipeline); released when another player needs the TV's decoder or the app goes
+// to the background (releasePipeline). One player video, so one pipeline.
 
+import { oldEngine } from '../core/platform.js';
 import { unloadVideo } from './video.js';
 import { kindOf } from '../api/streams.js';
 import { note, ranges } from './play-log.js';
@@ -191,6 +192,12 @@ export function keepPipeline(video: HTMLVideoElement, pipe: Pipeline | null): vo
     }
     // Not one replaced since, or no longer usable
     if (pipe !== current || !usable(pipe)) {
+        return;
+    }
+    // webOS TV 2.x's media pipeline, kept, played a few videos, then the next ones without picture or sound (their
+    // time running on): each gets a fresh one there
+    if (oldEngine()) {
+        releasePipeline(video);
         return;
     }
     video.pause();
