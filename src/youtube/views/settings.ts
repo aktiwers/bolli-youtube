@@ -1293,6 +1293,10 @@ export class SettingsView implements View {
         (s.info ? s.info() : []).forEach(function (line) {
             self.info.appendChild(h('div', 'by-settings-fact', line));
         });
+        // (lines to read beside the middle column that still do not fit under their picture: without it)
+        if (s.info && !this.alone() && this.body.offsetHeight > this.panel.offsetHeight) {
+            this.body.className += ' by-settings-body--tight';
+        }
         if (s.code) {
             this.drawCode();
             clearTimeout(this.codeTimer);

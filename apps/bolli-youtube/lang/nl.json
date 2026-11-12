@@ -727,5 +727,6 @@
   "Version {1} is out": "Versie {1} is uit",
   "Update it in the Homebrew Channel": "Werk de app bij in Homebrew Channel",
   "Download it from GitHub": "Download de app van GitHub",
-  "Bolli YouTube {1} is out. See Settings › About.": "Bolli YouTube {1} is uit. Zie Instellingen › Over."
+  "Bolli YouTube {1} is out. Update it in the Homebrew Channel.": "Bolli YouTube {1} is uit. Werk de app bij in Homebrew Channel.",
+  "Bolli YouTube {1} is out. Download it from GitHub.": "Bolli YouTube {1} is uit. Download de app van GitHub."
 }

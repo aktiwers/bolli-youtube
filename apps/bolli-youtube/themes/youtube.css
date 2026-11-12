@@ -385,6 +385,13 @@ html, body { background: #0f0f0f; }
                                                 line-height: 58px; font-size: 19px; }
 .by-settings-panel--narrow .by-settings-button .by-check { right: 24px; }
 .by-settings-panel--narrow .by-settings-note { margin-top: 22px; font-size: 16px; line-height: 22px; }
+/* Lines to read (About) beside the middle column: closer set under a smaller picture, so that a newer version's two
+   lines more fit too; where they still do not (a language of longer words), without the picture */
+.by-settings-panel--narrow .by-settings-body--info .by-settings-picture { width: 96px; height: 96px; margin-bottom: 12px; }
+.by-settings-panel--narrow .by-settings-info { margin-top: 24px; font-size: 18px; line-height: 24px; }
+.by-settings-panel--narrow .by-settings-fact { margin-bottom: 10px; }
+.by-settings-panel--narrow .by-settings-fact:first-child { font-size: 22px; }
+.by-settings-panel--narrow .by-settings-body--tight .by-settings-picture { display: none; }
 /* A Branding setting (its choices a grid of tiles): its top, the name and the description, is half a setting's usual,
    so the tiles have the room. Tile colour has a picture there: the chosen logo on the colour focused, as the home
    screen's tile would show it */

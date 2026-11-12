@@ -727,5 +727,6 @@
   "Version {1} is out": "Version {1} er udkommet",
   "Update it in the Homebrew Channel": "Opdater den i Homebrew Channel",
   "Download it from GitHub": "Hent den fra GitHub",
-  "Bolli YouTube {1} is out. See Settings › About.": "Bolli YouTube {1} er udkommet. Se Indstillinger › Om."
+  "Bolli YouTube {1} is out. Update it in the Homebrew Channel.": "Bolli YouTube {1} er udkommet. Opdater den i Homebrew Channel.",
+  "Bolli YouTube {1} is out. Download it from GitHub.": "Bolli YouTube {1} er udkommet. Hent den fra GitHub."
 }

@@ -727,5 +727,6 @@
   "Version {1} is out": "새 버전이 나왔습니다: {1}",
   "Update it in the Homebrew Channel": "Homebrew Channel에서 업데이트하세요",
   "Download it from GitHub": "GitHub에서 다운로드하세요",
-  "Bolli YouTube {1} is out. See Settings › About.": "Bolli YouTube 새 버전이 나왔습니다: {1}. 설정 › 정보를 확인하세요."
+  "Bolli YouTube {1} is out. Update it in the Homebrew Channel.": "Bolli YouTube 새 버전이 나왔습니다: {1}. Homebrew Channel에서 업데이트하세요.",
+  "Bolli YouTube {1} is out. Download it from GitHub.": "Bolli YouTube 새 버전이 나왔습니다: {1}. GitHub에서 다운로드하세요."
 }

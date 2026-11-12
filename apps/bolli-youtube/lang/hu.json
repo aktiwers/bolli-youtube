@@ -727,5 +727,6 @@
   "Version {1} is out": "Megjelent az új verzió: {1}",
   "Update it in the Homebrew Channel": "Frissítsd a Homebrew Channelben",
   "Download it from GitHub": "Töltsd le a GitHubról",
-  "Bolli YouTube {1} is out. See Settings › About.": "Megjelent a Bolli YouTube új verziója: {1}. Lásd: Beállítások › Névjegy."
+  "Bolli YouTube {1} is out. Update it in the Homebrew Channel.": "Megjelent a Bolli YouTube új verziója: {1}. Frissítsd a Homebrew Channelben.",
+  "Bolli YouTube {1} is out. Download it from GitHub.": "Megjelent a Bolli YouTube új verziója: {1}. Töltsd le a GitHubról."
 }

@@ -727,5 +727,6 @@
   "Version {1} is out": "Вышла версия {1}",
   "Update it in the Homebrew Channel": "Обновите его в Homebrew Channel",
   "Download it from GitHub": "Скачайте его с GitHub",
-  "Bolli YouTube {1} is out. See Settings › About.": "Вышла версия Bolli YouTube {1}. См. Настройки › Информация."
+  "Bolli YouTube {1} is out. Update it in the Homebrew Channel.": "Вышла версия Bolli YouTube {1}. Обновите приложение в Homebrew Channel.",
+  "Bolli YouTube {1} is out. Download it from GitHub.": "Вышла версия Bolli YouTube {1}. Скачайте приложение с GitHub."
 }

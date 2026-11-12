@@ -2221,11 +2221,13 @@ whenScreenRests(function () {
         }
     }, function () { return undefined; });
     // Whether a newer version is out: asked once a day, half a minute from here, and told at most once a week by a
-    // toast the viewer can see (not under a video, behind another app or on a screen that is off)
+    // toast the viewer can see (not under a video, behind another app or on a screen that is off), which says where
+    // to get it
     checkVersion(function () {
         return own.busy || tv.busy || document.hidden || screenIsOff();
     }, function (version) {
-        toast(tr('Bolli YouTube {1} is out. See Settings › About.', version), 'info');
+        toast(android() ? tr('Bolli YouTube {1} is out. Download it from GitHub.', version) :
+            tr('Bolli YouTube {1} is out. Update it in the Homebrew Channel.', version), 'info');
     });
     // (and again each time the app comes back on screen: a TV that keeps the app for days starts it only once)
     document.addEventListener('visibilitychange', function () {

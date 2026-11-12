@@ -727,5 +727,6 @@
   "Version {1} is out": "バージョン {1} が公開されました",
   "Update it in the Homebrew Channel": "Homebrew Channel で更新できます",
   "Download it from GitHub": "GitHub からダウンロードできます",
-  "Bolli YouTube {1} is out. See Settings › About.": "Bolli YouTube {1} が公開されました。設定 › 概要 をご覧ください。"
+  "Bolli YouTube {1} is out. Update it in the Homebrew Channel.": "Bolli YouTube {1} が公開されました。Homebrew Channel で更新できます。",
+  "Bolli YouTube {1} is out. Download it from GitHub.": "Bolli YouTube {1} が公開されました。GitHub からダウンロードできます。"
 }
