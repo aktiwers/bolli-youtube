@@ -5,7 +5,7 @@
 // The theme sets where the rows start (metrics.libraryTop) and the look
 // (by-library in themes/<id>.css).
 
-import { h, setShown, setText, toggleClass, translate } from '../core/dom.js';
+import { h, setShown, setText, standsBy, toggleClass, translate } from '../core/dom.js';
 import { KEY } from '../core/keys.js';
 import { takesPointer, toPart } from '../core/pointer.js';
 import { View } from '../core/view.js';
@@ -57,13 +57,23 @@ export class LibraryView extends FeedHost implements View {
     }
 
     show(rest?: boolean): void {
+        standsBy(this.el, false);
         setShown(this.el, true);
         this.feed.show(rest);
     }
 
     hide(): void {
+        standsBy(this.el, false);
         setShown(this.el, false);
         this.feed.hide();
+    }
+
+    /** Out of sight but kept drawn (false: no rows yet, hidden) */
+    standBy(): boolean {
+        var kept = this.feed.keep();
+        setShown(this.el, kept);
+        standsBy(this.el, kept);
+        return kept;
     }
 
     setFocused(focused: boolean): void {

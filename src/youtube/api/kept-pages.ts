@@ -45,6 +45,17 @@ export class Keeper<T> {
         this.kept = [];
     }
 
+    /** Whether key's reply is kept (or on its way): a get or a prefetch of it now makes no request */
+    has(key: string): boolean {
+        return !!this.find(key);
+    }
+
+    /** key's entry among those not expired (undefined: none) */
+    private find(key: string): { key: string; at: number; value: Promise<unknown> } | undefined {
+        this.prune();
+        return this.kept.filter(function (e) { return e.key === key; })[0];
+    }
+
     /** Drops key's reply so the next get fetches it again */
     drop(key: string): void {
         this.kept = this.kept.filter(function (e) { return e.key !== key; });
@@ -62,8 +73,7 @@ export class Keeper<T> {
 
     private entry(key: string, ask: () => Promise<unknown>): Promise<unknown> {
         var self = this;
-        this.prune();
-        var had = this.kept.filter(function (e) { return e.key === key; })[0];
+        var had = this.find(key);
         if (had) {
             this.kept.splice(this.kept.indexOf(had), 1);
             this.kept.push(had);

@@ -1,18 +1,16 @@
 // Loading sign: a dimmed picture (the app logo
 // while a screen loads, the channel avatar while a video starts) with a
-// bright copy over it that fills in from the left as steps complete. It
-// hides at once (no fade), or once full (finish). A new picture keeps it
+// bright copy over it that fills in from the left: as steps complete, or in
+// one slide of a given length (the TV's browser draws next to no frame of the
+// page while a video starts: a slide given whole is drawn without the page). It
+// hides at once (no fade), or once full (finish: at a pace of its own). A new picture keeps it
 // hidden until that picture is in. Chrome 38 has no clip-path, so the
 // fill uses two opposite slides: the copy's box slides in from the left
 // with overflow hidden while the copy inside slides back, keeping it in
-// place. Look and pace: themes/<id>.css (by-loader, --round for a circle).
+// place. Look and pace: themes/<id>.css (by-loader, --round for a circle, --account for the account's picture as the
+// logo).
 
 import { h, toggleClass } from '../core/dom.js';
-import { oldEngine } from '../core/platform.js';
-
-/** The app logo: shown while a screen loads or YouTube's player starts (a PNG copy on webOS TV 2.x's engine, which
- * decodes no WebP; promise.js marked it before this runs) */
-export var LOGO = oldEngine() ? 'logo.png' : 'logo.webp';
 
 export class FillLoader {
     private el: HTMLElement;
@@ -45,10 +43,13 @@ export class FillLoader {
         return this.el.style.display === 'block';
     }
 
-    /** Shows the sign empty, then fills towards the first step */
-    show(image: string, first: number): void {
+    /** Shows the sign empty, then fills towards the first step (account: the picture is the account's, drawn as a
+     * circle in the logo's box: by-loader--account) */
+    show(image: string, first: number, account?: boolean): void {
         clearTimeout(this.finishing);
+        toggleClass(this.el, 'by-loader--account', !!account);
         this.setImage(image);
+        this.pace();
         // Reset without a slide back: transitions off, force a style read, transitions on
         toggleClass(this.el, 'by-loader--snap', true);
         this.slide(0);
@@ -87,24 +88,33 @@ export class FillLoader {
         });
     }
 
-    /** Fills towards fill (0-1); never goes back */
-    step(fill: number): void {
+    /** Fills towards fill (0-1), over ms if given, eased as given (else at the themes' pace); never goes back */
+    step(fill: number, ms?: number, ease?: string): void {
         if (fill > this.fill && this.shown) {
             this.fill = fill;
+            this.pace(ms, ease);
             this.slide(fill);
         }
     }
 
-    /** Done: fills up, then hides once full (ms: the fill's pace, themes); at once if full already or not seen */
-    finish(ms: number): void {
+    /** Done: fills up over ms, then hides once it has been full for hold ms; at once if full already or not seen */
+    finish(ms: number, hold: number): void {
         clearTimeout(this.finishing);
         if (!this.shown || this.fill >= 1 || this.el.style.visibility === 'hidden') {
             this.hide();
             return;
         }
-        this.step(1);
+        this.step(1, ms);
         var self = this;
-        this.finishing = setTimeout(function () { self.hide(); }, ms) as unknown as number;
+        this.finishing = setTimeout(function () { self.hide(); }, ms + hold) as unknown as number;
+    }
+
+    /** The fill's slide takes ms, eased as given (none: the themes' pace again) */
+    private pace(ms?: number, ease?: string): void {
+        for (var i = 0; i < this.parts.length; i++) {
+            this.parts[i].style.webkitTransitionDuration = ms ? ms + 'ms' : '';
+            this.parts[i].style.webkitTransitionTimingFunction = ms && ease || '';
+        }
     }
 
     /** Hides at once */

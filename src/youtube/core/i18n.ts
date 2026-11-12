@@ -19,7 +19,8 @@ export var LANGUAGES: { code: string; name: string }[] = [
     { code: 'pl', name: 'Polski' },
     { code: 'pt', name: 'Português' },
     { code: 'ru', name: 'Русский' },
-    { code: 'ja', name: '日本語' }
+    { code: 'ja', name: '日本語' },
+    { code: 'ko', name: '한국어' }
 ];
 
 var LANGUAGE_KEY = 'youtube.language';

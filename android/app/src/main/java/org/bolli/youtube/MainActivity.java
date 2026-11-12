@@ -3,7 +3,9 @@
 // runs a packaged app. The page talks to the device through
 // window.BolliAndroid (src/core/platform.ts); the remote's keys, which the web
 // view never sees, are handed to it as the LG remote's codes
-// (src/core/keys.ts).
+// (src/core/keys.ts). An app with an entry on the home screen for each of its
+// logos (a flavour's manifest) shows the one the page asks for, switched once
+// the app is off the screen.
 
 package org.bolli.youtube;
 
@@ -11,7 +13,9 @@ import android.annotation.TargetApi;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.ComponentName;
+import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
 import android.graphics.Point;
@@ -43,7 +47,14 @@ public class MainActivity extends Activity {
     private static final int LISTEN = 1;
     /** Google TV's own voice input (else Android asks which app listens) */
     private static final String TV_VOICE = "com.google.android.katniss";
+    /** The app's entries on the home screen, one for each logo, are named this and the logo's id (activity aliases
+     * in a flavour's manifest; a flavour without them has the one entry of this activity) */
+    private static final String LOGO = "org.bolli.logo.";
     private WebView web;
+    /** The logo the page asked for on the home screen (null: none asked) */
+    private volatile String wantedLogo;
+    /** Speech recognition is up over the app: the app is not left */
+    private boolean listening;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -102,7 +113,19 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        // (back from whatever was over the app, speech recognition too)
+        listening = false;
         web.onResume();
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        // Off the screen (Home, out of the app, another app): the home screen's entry is switched now. Switched while
+        // the app shows, Android would end the task started from the entry that goes off, and close the app
+        if (!listening) {
+            showHomeLogo();
+        }
     }
 
     @Override
@@ -116,6 +139,9 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
+        if (request == LISTEN) {
+            listening = false;
+        }
         if (request != LISTEN || result != RESULT_OK || data == null) {
             return;
         }
@@ -150,6 +176,63 @@ public class MainActivity extends Activity {
             intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, BuildConfig.SPEECH_LANGUAGE);
         }
         return intent;
+    }
+
+    /** The app's entries on the home screen that stand for a logo (none in a flavour without them) */
+    private List<ActivityInfo> logoEntries() {
+        List<ActivityInfo> entries = new ArrayList<>();
+        try {
+            ActivityInfo[] all = getPackageManager().getPackageInfo(getPackageName(),
+                    PackageManager.GET_ACTIVITIES | PackageManager.MATCH_DISABLED_COMPONENTS).activities;
+            if (all != null) {
+                for (ActivityInfo a : all) {
+                    if (a.name.startsWith(LOGO)) {
+                        entries.add(a);
+                    }
+                }
+            }
+        } catch (PackageManager.NameNotFoundException e) {
+            // (the app's own package: always there)
+        }
+        return entries;
+    }
+
+    /** Whether an entry is on: as it was switched, else as the manifest has it */
+    private boolean isOn(ActivityInfo entry) {
+        int state = getPackageManager().getComponentEnabledSetting(new ComponentName(this, entry.name));
+        return state == PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+                || state == PackageManager.COMPONENT_ENABLED_STATE_DEFAULT && entry.enabled;
+    }
+
+    /** Shows the logo the page asked for on the home screen: its entry on, then the others off (so there is never
+     * none); nothing where it is on already, or there is no entry of it. The app keeps running. */
+    private void showHomeLogo() {
+        String wanted = wantedLogo;
+        if (wanted == null) {
+            return;
+        }
+        wantedLogo = null;
+        List<ActivityInfo> entries = logoEntries();
+        ActivityInfo chosen = null;
+        for (ActivityInfo a : entries) {
+            if (a.name.equals(LOGO + wanted)) {
+                chosen = a;
+            }
+        }
+        if (chosen == null) {
+            return;
+        }
+        PackageManager pm = getPackageManager();
+        if (!isOn(chosen)) {
+            pm.setComponentEnabledSetting(new ComponentName(this, chosen.name), PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                    PackageManager.DONT_KILL_APP);
+        }
+        for (ActivityInfo a : entries) {
+            if (a != chosen && isOn(a)) {
+                pm.setComponentEnabledSetting(new ComponentName(this, a.name), PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                        PackageManager.DONT_KILL_APP);
+            }
+        }
     }
 
     /** The display's mode at its current resolution with this refresh rate, 0: none */
@@ -226,7 +309,10 @@ public class MainActivity extends Activity {
                 }
             }
             intent.setComponent(new ComponentName(chosen.activityInfo.packageName, chosen.activityInfo.name));
-            runOnUiThread(() -> startActivityForResult(intent, LISTEN));
+            runOnUiThread(() -> {
+                listening = true;
+                startActivityForResult(intent, LISTEN);
+            });
             return true;
         }
 
@@ -301,6 +387,29 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public String device() {
             return Build.MANUFACTURER + " " + Build.MODEL + ", Android " + Build.VERSION.RELEASE;
+        }
+
+        /** The logos the home screen can show the app with: their ids, commas between ("": this app has one entry) */
+        @JavascriptInterface
+        public String homeLogos() {
+            StringBuilder ids = new StringBuilder();
+            for (ActivityInfo a : logoEntries()) {
+                ids.append(ids.length() > 0 ? "," : "").append(a.name.substring(LOGO.length()));
+            }
+            return ids.toString();
+        }
+
+        /** The page asks for this logo on the home screen: shown once the app is off the screen (onStop). False:
+         * there is no entry of it */
+        @JavascriptInterface
+        public boolean setHomeLogo(String id) {
+            for (ActivityInfo a : logoEntries()) {
+                if (a.name.equals(LOGO + id)) {
+                    wantedLogo = id;
+                    return true;
+                }
+            }
+            return false;
         }
 
         @JavascriptInterface

@@ -331,10 +331,14 @@ export class SabrReader {
         segments: [], ends: {}, backoffMs: 0, cookie: null, protection: 0, retries: 0, redirect: '', error: '', reload: false, reloadToken: '',
         contexts: [], start: [], stop: [], discard: []
     };
-    /** Bytes received but not yet read (an incomplete part), and their count */
+    /** Bytes received but not yet read (an incomplete part), and their count; all received */
     private chunks: Uint8Array[] = [];
     private size = 0;
-    private open: { [id: number]: { segment: SabrSegment; pieces: Uint8Array[]; size: number } } = {};
+    private received = 0;
+    /** Segments coming in, by header id: their pieces so far, and their media's length as the header tells (0: not told);
+     * the one whose header or media came last (-1: none) */
+    private open: { [id: number]: { segment: SabrSegment; pieces: Uint8Array[]; size: number; length: number } } = {};
+    private current = -1;
 
     constructor(private onSegment?: (s: SabrSegment) => void, private onHeader?: (s: SabrSegment) => void) {}
 
@@ -343,6 +347,7 @@ export class SabrReader {
         if (b.length) {
             this.chunks.push(b);
             this.size += b.length;
+            this.received += b.length;
         }
         for (;;) {
             var head = this.peek(10);
@@ -361,6 +366,31 @@ export class SabrReader {
             this.take(at.i);
             this.part(type, this.take(length));
         }
+    }
+
+    /** Where in the reply (bytes from its start) the segment coming in is whole, with room for how its media parts are
+     * framed (at most ~1 %: parts of 700 bytes or more): the one whose header or media came last (a start's first answer
+     * opens an audio segment, then sends a whole video segment before the audio's rest), else the first to end of those
+     * open; -1: none open, or its length not told */
+    segmentEnd(): number {
+        var self = this;
+        var end = function (id: number): number {
+            var o = self.open[id];
+            var left = o.length - o.size;
+            return o.length && left >= 0 ? self.received - self.size + left + Math.ceil(left / 100) + 64 : -1;
+        };
+        if (this.open[this.current]) {
+            return end(this.current);
+        }
+        var first = -1;
+        for (var id in this.open) {
+            var at = end(+id);
+            if (at < 0) {
+                return -1;
+            }
+            first = first < 0 ? at : Math.min(first, at);
+        }
+        return first;
     }
 
     /** The first n bytes (fewer if fewer arrived), without consuming them */
@@ -410,13 +440,15 @@ export class SabrReader {
             case MEDIA_HEADER:
                 f = fields(data);
                 var header = { itag: num(f, 3), init: !!num(f, 8), num: num(f, 9), startMs: num(f, 11), durationMs: num(f, 12), data: new Uint8Array(0) };
-                this.open[num(f, 1)] = { segment: header, pieces: [], size: 0 };
+                this.current = num(f, 1);
+                this.open[this.current] = { segment: header, pieces: [], size: 0, length: num(f, 14) };
                 if (this.onHeader) {
                     this.onHeader(header);
                 }
                 break;
             case MEDIA:
                 var open = this.open[data[0]];
+                this.current = data[0];
                 if (open) {
                     // A view (into the reply, or the part joined from pieces): MEDIA_END copies the segment out
                     open.pieces.push(data.subarray(1));

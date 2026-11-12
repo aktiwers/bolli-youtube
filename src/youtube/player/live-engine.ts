@@ -14,6 +14,10 @@
 // those formats takes while fresh. A start tells the TV the stream ends just
 // after the whole segments within WINDOW_S of it, and feeds no more until it plays (the quick start, as dash.ts's): then
 // the day-long length comes back.
+//
+// A stream that has ended and is still served this way (Live.over: for some minutes, until YouTube has made a video
+// of it) plays as a video does: from its window's first segment, its head standing, nothing asked past it, no
+// following, and the stream ended for the TV once the head's segment is in, so the player's own end comes.
 
 import { clock, progress } from '../core/time.js';
 import { tr } from '../core/i18n.js';
@@ -67,14 +71,20 @@ export function prefetchLive(video: Format, audio: Format): void {
     }, EARLY_MS);
 }
 
-/** A live stream's window on the playhead's scale (s): from its oldest segment to its head */
+/** A live stream's window on the playhead's scale (s): from its oldest segment to its head; over: of a stream that
+ * has ended */
 export interface LiveSpan {
     from: number;
     edge: number;
+    over?: boolean;
 }
 
-/** The time of t in a live stream: LIVE near the head, else how far behind it */
+/** The time of t in a live stream: LIVE near the head, else how far behind it; in one that has ended: how far into
+ * it, of its length, as a video's */
 export function liveTime(t: number, span: LiveSpan): string {
+    if (span.over) {
+        return clock(Math.max(0, t - span.from)) + ' / ' + clock(span.edge - span.from);
+    }
     var behind = span.edge - t;
     return behind < LIVE_NEAR_S ? tr('LIVE') : '\u2212' + clock(behind);
 }
@@ -148,6 +158,10 @@ export class LiveEngine implements Engine {
             return fetchSegment(audio.url, -1, undefined, true);
         };
         var probe = (this.early ? this.early.probe : fetchSegment(audio.url, -1, undefined, true)).then(null, again).then(function (got) {
+            // (a stream that has ended plays up to its head: without the head's number there is no telling where)
+            if (self.live.over && got.head < 0) {
+                throw 'network';
+            }
             self.head = got.head;
             self.headAt = Date.now();
             note('live', 'head ' + got.head + (self.early ? ' (fetched ahead)' : ''));
@@ -256,15 +270,29 @@ export class LiveEngine implements Engine {
         return this.latest < 0 ? 0 : this.starts[this.latest] + (this.head - this.latest + 1) * this.live.segment;
     }
 
-    /** The window's start on the playhead's scale (s) */
+    /** The window's start on the playhead's scale (s); of a stream that has ended: not before its first segment */
     get oldest(): number {
-        return Math.max(0, this.edge - this.live.dvr);
+        var from = Math.max(0, this.edge - this.live.dvr);
+        return this.live.over ? Math.max(from, this.edge - (this.head - this.first() + 1) * this.live.segment) : from;
+    }
+
+    /** Whether the stream has ended (it plays as a video does: api/streams.ts Live.over) */
+    get over(): boolean {
+        return !!this.live.over;
+    }
+
+    /** The window's first segment that is played (not the oldest itself: it may be gone by the time it is asked
+     * for); of a stream that has ended never before its first */
+    private first(): number {
+        var first = this.head - Math.floor(this.live.dvr / this.live.segment) + 2;
+        return this.live.over ? Math.max(0, first) : first;
     }
 
     private open(): void {
         var self = this;
         var pipe = this.pipe as Pipeline;
-        var start = Math.max(0, this.head - START_BEHIND);
+        // (a stream that has ended: from its window's start, as a video from its beginning)
+        var start = this.live.over ? this.first() : Math.max(0, this.head - START_BEHIND);
         // The start's window: the whole segments within WINDOW_S of the start (and a little over them: a segment runs
         // a few ms longer than its nominal length)
         var whole = Math.floor((WINDOW_S - 0.5) / this.live.segment);
@@ -287,6 +315,7 @@ export class LiveEngine implements Engine {
                 self.trim(t);
                 self.feedAll();
                 self.pump();
+                self.endIfDone();
             }
         };
         this.on('error', function () { self.onFail('media'); });
@@ -305,19 +334,22 @@ export class LiveEngine implements Engine {
             self.tracks.forEach(function (t) { self.trim(t); });
             self.feedAll();
             self.pump();
+            self.endIfDone();
         }, TICK_MS) as unknown as number;
         this.pump();
     }
 
     /** Each idle track fetches its next segment while less than AHEAD_S is buffered ahead (not past the next one to
-     * come); both at once (the audio's first waits to be appended until the video's sets the shift) */
+     * come; of a stream that has ended not past its head: none comes); both at once (the audio's first waits to be
+     * appended until the video's sets the shift) */
     private pump(): void {
         if (this.stopped) {
             return;
         }
+        var last = this.head + (this.live.over ? 0 : 1);
         for (var i = 0; i < this.tracks.length; i++) {
             var t = this.tracks[i];
-            if (!t.busy && !t.waiting.length && t.sq <= this.head + 1 && this.ahead(t) < AHEAD_S) {
+            if (!t.busy && !t.waiting.length && t.sq <= last && this.ahead(t) < AHEAD_S) {
                 this.fetch(t);
             }
         }
@@ -342,7 +374,8 @@ export class LiveEngine implements Engine {
             t.busy = false;
             t.xhr = null;
             t.failures = 0;
-            if (r.head >= self.head) {
+            // (the head of a stream that has ended stands)
+            if (r.head >= self.head && !self.live.over) {
                 self.head = r.head;
                 self.headAt = Date.now();
             }
@@ -443,6 +476,10 @@ export class LiveEngine implements Engine {
     /** Playing again: a viewer near the head follows it live; one following it who fell behind (a stall) is moved back
      * to START_BEHIND segments behind the head, as a start plays, once the lag is CATCH_UP_S more than that */
     private keepUp(): void {
+        // (a stream that has ended has no head to follow)
+        if (this.live.over) {
+            return;
+        }
         var t = this.video.currentTime;
         // (The head moves on in real time: after a pause, nothing fetched meanwhile told it)
         if (this.edge + (Date.now() - this.headAt) / 1000 - t < LIVE_NEAR_S) {
@@ -475,9 +512,7 @@ export class LiveEngine implements Engine {
      * anew */
     private goTo(sq: number): void {
         this.lift();
-        // (Not the oldest segment itself: it may be gone by the time it is asked for)
-        var first = this.head - Math.floor(this.live.dvr / this.live.segment) + 2;
-        sq = Math.min(this.head, Math.max(first, sq));
+        sq = Math.min(this.head, Math.max(this.first(), sq));
         var at = this.starts[sq];
         if (at !== undefined && this.buffered(this.tracks[0], at + KEYFRAME_IN) && this.buffered(this.tracks[1], at + KEYFRAME_IN)) {
             this.video.currentTime = at + KEYFRAME_IN;
@@ -501,6 +536,28 @@ export class LiveEngine implements Engine {
             }
         });
         this.pump();
+    }
+
+    /** A stream that has ended, with every segment up to its head appended: ended for the TV, which then plays out
+     * what it holds and tells the player its end (a jump back feeds again, and this ends it again) */
+    private endIfDone(): void {
+        if (!this.live.over || this.stopped || !this.pipe || this.pipe.source.readyState !== 'open' || this.landing >= 0) {
+            return;
+        }
+        for (var i = 0; i < this.tracks.length; i++) {
+            var t = this.tracks[i];
+            if (t.sq <= this.head || t.busy || t.waiting.length || !t.sb || t.sb.updating) {
+                return;
+            }
+        }
+        try {
+            // (the day-long length is not put back after it: pipeline.ts keepLength)
+            this.pipe.length = 0;
+            this.pipe.source.endOfStream();
+            note('live', 'ended at ' + this.head);
+        } catch (e) {
+            // tried again on the next tick
+        }
     }
 
     /** Drops the track's request and what it fetched (a reply to it is dropped too) */

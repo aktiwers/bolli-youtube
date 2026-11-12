@@ -12,11 +12,22 @@ export function load<T>(key: string): T | null {
     }
 }
 
-export function save(key: string, value: unknown): void {
+/** Keeps value under key; false when the storage did not take it (full or disabled) */
+export function save(key: string, value: unknown): boolean {
     try {
         window.localStorage.setItem(PREFIX + key, JSON.stringify(value));
+        return true;
     } catch (e) {
-        // storage full or disabled
+        return false;
+    }
+}
+
+/** Removes key */
+export function forget(key: string): void {
+    try {
+        window.localStorage.removeItem(PREFIX + key);
+    } catch (e) {
+        // storage unavailable
     }
 }
 

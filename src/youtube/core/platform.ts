@@ -27,6 +27,13 @@ export interface AndroidShell {
     /** The device's maker, model and Android version. Missing in shells
      * built before it */
     device?(): string;
+    /** The logos the app can show on the home screen, their ids (ui/logo.ts)
+     * with commas between ('' none). Missing in shells built before it */
+    homeLogos?(): string;
+    /** Asks for the logo of this id on the home screen: it shows there once
+     * the app is off the screen. False: the shell has none of that id.
+     * Missing in shells built before it */
+    setHomeLogo?(id: string): boolean;
 }
 
 /** webOS TV 1.x-2.x's old engine: promise.js stood in for its Promise and marked it (never where the engine names its

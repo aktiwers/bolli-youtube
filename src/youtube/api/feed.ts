@@ -8,6 +8,7 @@
 // and tokens. Shorts, unknown tiles and empty shelves are dropped.
 
 import { noteAvatars } from './avatars.js';
+import { Rate } from '../core/time.js';
 import { Keeper } from './kept-pages.js';
 import { prefs } from './prefs.js';
 import { offThread, offThreadJson } from './off-thread.js';
@@ -220,6 +221,55 @@ export function keptPage(p: Page): Promise<Rows> {
     return keepable(p) ? pages.getJson(pageKey(p), function () { return pageJson(p); }) : page(p);
 }
 
+/** Whether page p's reply is kept or on its way (asking for it now is no request) */
+export function pageKept(p: Page): boolean {
+    return keepable(p) && pages.has(pageKey(p));
+}
+
+/** A page or a tab asked for ahead of an OK (the focus rests on its tile, button or chip) is a request the viewer may
+ * never use: at most AHEAD_ASKS of them a minute */
+var AHEAD_ASKS = 6;
+var aheadAsks = new Rate(AHEAD_ASKS, 60000);
+
+/** Whether something may be asked for ahead now. kept: its reply is kept or on its way (no request: not counted) */
+export function mayAskPageAhead(kept: boolean): boolean {
+    return kept || aheadAsks.take();
+}
+
+/** A tab's tiles (more), kept a while: at hand again for a tab seen before, and asked ahead while the focus rests on
+ * its chip (tabAhead); not History's (keptTabs), which each watched video changes, as History's page is not kept */
+var tabs = new Keeper<Rows>(KEEP_MS, 6, true, true);
+
+/** Whether tab's tiles are kept and asked ahead */
+export function keptTabs(tab: Tab): boolean {
+    return !!tab.token && tab.icon !== 'SEARCH_HISTORY';
+}
+
+/** A tab's reply as the rows' text (parsed off the main thread, as a page's) */
+function tabJson(token: string): Promise<string> {
+    return offThreadJson(innertubeText('browse', { continuation: token }), 'more', moreOf);
+}
+
+export function keptTab(token: string): Promise<Rows> {
+    return tabs.getJson(token, function () { return tabJson(token); });
+}
+
+/** Keeps a tab's tiles as they are shown (a page's first tab comes with the page, not by its token), so going back to
+ * it from another tab asks nothing */
+export function keepTab(token: string, rows: Rows): void {
+    if (!tabs.has(token)) {
+        var text = JSON.stringify(rows);
+        tabs.aheadJson(token, function () { return Promise.resolve(text); });
+    }
+}
+
+/** Asks for a tab's tiles ahead, within the cap, so keptTab has them at once */
+export function tabAhead(token: string): void {
+    if (mayAskPageAhead(tabs.has(token))) {
+        tabs.aheadJson(token, function () { return tabJson(token); });
+    }
+}
+
 /** Prefetches a page (the focus rests on its tile), so keptPage has it at once */
 export function pageAhead(p: Page): void {
     if (keepable(p)) {
@@ -241,7 +291,7 @@ function tapped(json: string): string {
 }
 
 /** A page worth caching (or prefetching) */
-function keepable(p: Page): boolean {
+export function keepable(p: Page): boolean {
     return p.browseId !== 'FEhistory';
 }
 
@@ -385,8 +435,11 @@ var THUMBNAILS: { [size: string]: { file: string; width: number } } = {
     sharpest: { file: 'sddefault', width: 640 }, sharp: { file: 'hqdefault', width: 480 }, standard: { file: 'mqdefault', width: 320 }
 };
 
+/** The size set in Settings, at most what fills a tile: Sharpest on an HD or Full HD TV's 1280 px window (352 px tiles)
+ * is the 480 px picture, which fills them already (44% fewer pixels to decode and keep) */
 function thumbnailSize(): { file: string; width: number } {
-    return THUMBNAILS[prefs().pictures] || THUMBNAILS.standard;
+    var size = THUMBNAILS[prefs().pictures] || THUMBNAILS.standard;
+    return size === THUMBNAILS.sharpest && tilePx() <= THUMBNAILS.sharp.width ? THUMBNAILS.sharp : size;
 }
 
 /** A page tile's picture and its fallback: YouTube's, or where that is a video's thumbnail narrower than the size set
@@ -604,8 +657,19 @@ export function menuOf(press: any): any {
     return own ? { items: itemsOf(own) } : press;
 }
 
-/** A tile's width on a 1920 px screen */
-var PICTURE_PX = 528;
+/** The window's width (px): the page's, or in the parse worker (which has none) the one its messages say */
+var windowWidth = 1920;
+
+/** The parse worker is told the page's window width (api/off-thread.ts sends it with each reply) */
+export function setWindowWidth(width: number): void {
+    windowWidth = width;
+}
+
+/** A tile's width on the screen (px): 352 layout units at the window's scale, 528 on a 1920 px window and 352 on an HD
+ * or Full HD TV's 1280 (a smaller picture to decode there) */
+function tilePx(): number {
+    return Math.round(352 * Math.max(1, (typeof window !== 'undefined' ? window.innerWidth : windowWidth) / 1280));
+}
 
 /** A picture URL from YouTube's list of sizes: the smallest at least a tile (or fill px) wide, else the largest; '//'
  * URLs get https; px: request a round picture at that size */
@@ -617,7 +681,7 @@ export function picture(thumbs: any, px?: number, fill?: number): string {
     // order
     for (var i = 0; i < list.length; i++) {
         var w = +list[i].width || 0;
-        if (w >= (fill || PICTURE_PX) && (!pick || w < pick.width)) {
+        if (w >= (fill || tilePx()) && (!pick || w < pick.width)) {
             pick = list[i];
         }
         if (w && (!largest || w > largest.width)) {
@@ -643,7 +707,7 @@ function withPicture(video: Video, thumbs: any): Video {
     video.image = picture(thumbs);
     var widest = 0;
     sizesOf(thumbs).forEach(function (one) { widest = Math.max(widest, +one.width || 0); });
-    var of = widest && widest < PICTURE_PX ? /^https:\/\/i\.ytimg\.com\/vi\/([\w-]{11})\/(?:mq|hq)default\.jpg/.exec(video.image) : null;
+    var of = widest && widest < tilePx() ? /^https:\/\/i\.ytimg\.com\/vi\/([\w-]{11})\/(?:mq|hq)default\.jpg/.exec(video.image) : null;
     if (of) {
         video.imageOf = { id: of[1], width: widest };
     }
@@ -884,8 +948,8 @@ function fromLockup(lockup: any): Video | null {
 
 /** A video's age within a day, as YouTube writes it in the app's languages (it gives no date, only the words): seconds,
  * minutes or hours ago (3 hours ago, vor 3 Stunden, for 3 timer siden, hace 3 horas, il y a 3 heures, 3 ore fa, 3 uur
- * geleden, 3 órával ezelőtt, 3 godziny temu, há 3 horas, 3 часа назад, 3 時間前) */
-var WITHIN_A_DAY = /\d\s*(second|segund|sekund|minut|minuu|hour|hora|heure|stund|\btimer?\b|\bor[ae]\b|\buur\b|órá|perc|másodperc|godzin|час|секунд|минут|時間前|分前|秒前)/i;
+ * geleden, 3 órával ezelőtt, 3 godziny temu, há 3 horas, 3 часа назад, 3 時間前, 3시간 전) */
+var WITHIN_A_DAY = /\d\s*(second|segund|sekund|minut|minuu|hour|hora|heure|stund|\btimer?\b|\bor[ae]\b|\buur\b|órá|perc|másodperc|godzin|час|секунд|минут|時間前|分前|秒前|시간 전|분 전|초 전)/i;
 
 /** Whether a video's info line (its views and age) says it came within a day */
 export function withinADay(info: string): boolean {

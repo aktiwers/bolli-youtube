@@ -43,7 +43,8 @@ export function dislikes(id: string): Promise<number | null> {
 /** How YouTube writes a short count (a like count, a view count) in each of the app's languages, as it answers when
  * asked in them: its steps from the largest (size, what follows the number), its decimal mark, and below the smallest
  * step the whole number, grouped by group (Danish and German: 19.038, not 19 t.; elsewhere it is under 1000).
- * Spanish counts billions in millions (9166 M), Japanese in 10 000s and 100 000 000s (1.9万). */
+ * Spanish counts billions in millions (9166 M), Japanese in 10 000s and 100 000 000s (1.9万), Korean in those and in
+ * 1000s (1.2천, 1.9만). */
 var COUNTS: { [code: string]: { steps: [number, string][]; mark: string; group?: string } } = {
     en: { steps: [[1e9, 'B'], [1e6, 'M'], [1e3, 'K']], mark: '.' },
     da: { steps: [[1e9, '\u00a0mia.'], [1e6, '\u00a0mio.']], mark: ',', group: '.' },
@@ -56,7 +57,8 @@ var COUNTS: { [code: string]: { steps: [number, string][]; mark: string; group?:
     pl: { steps: [[1e9, '\u00a0mld'], [1e6, '\u00a0mln'], [1e3, '\u00a0tys.']], mark: ',' },
     pt: { steps: [[1e9, '\u00a0bi'], [1e6, '\u00a0mi'], [1e3, '\u00a0mil']], mark: ',' },
     ru: { steps: [[1e9, '\u00a0млрд'], [1e6, '\u00a0млн'], [1e3, '\u00a0тыс.']], mark: ',' },
-    ja: { steps: [[1e8, '億'], [1e4, '万']], mark: '.' }
+    ja: { steps: [[1e8, '億'], [1e4, '万']], mark: '.' },
+    ko: { steps: [[1e8, '억'], [1e4, '만'], [1e3, '천']], mark: '.' }
 };
 
 /** A count as YouTube writes one in the app's language (or code's): 999, 1.2K, 12K, 1.2M, 1.2B in English (one

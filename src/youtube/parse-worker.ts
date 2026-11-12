@@ -7,7 +7,7 @@
 // nothing they use may touch the page (window, document, localStorage).
 
 import { liveNowOf, madeChannel } from './api/channel.js';
-import { moreOf, rowsOf, subscriptionsOf } from './api/feed.js';
+import { moreOf, rowsOf, setWindowWidth, subscriptionsOf } from './api/feed.js';
 import { dataJson } from './api/off-thread.js';
 import { watchInfoOf } from './api/watch.js';
 
@@ -24,6 +24,8 @@ var scope = self as any;
 scope.onmessage = function (e: MessageEvent): void {
     var m = e.data;
     try {
+        // Pictures are chosen for the page's window
+        setWindowWidth(m.width || 1920);
         var t = Date.now();
         var reply = JSON.parse(m.text);
         var parsed = Date.now();

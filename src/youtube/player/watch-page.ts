@@ -317,9 +317,21 @@ export class WatchPage {
         this.drawMeta();
     }
 
-    /** The video's description (from its streams) */
+    /** The Description panel's lines as it was last opened with (describeAnew tells it from the other lists) */
+    private describes: (() => PanelLine[]) | null = null;
+
+    /** The video's description as its streams have it: shown where its details have none. Streams asked with the
+     * account come without one, so those of a renewal never take a known text away */
     setDescription(text: string): void {
-        this.description = text;
+        this.description = text || this.description;
+        this.describeAnew();
+    }
+
+    /** The Description panel drawn anew if it is the one open: its text or the details came after it was opened */
+    private describeAnew(): void {
+        if (this.describes && this.panel.showing(this.describes)) {
+            this.panel.refresh();
+        }
     }
 
     /** Draws SponsorBlock segments and the chapters (from the details) on the bar, for a video of duration s */
@@ -345,6 +357,7 @@ export class WatchPage {
         }
         this.channel = info.channel || this.channel;
         this.drawMeta();
+        this.describeAnew();
         this.askDislikes();
         setSrc(this.avatar, info.avatar);
         this.drawRows();
@@ -453,6 +466,7 @@ export class WatchPage {
             if (gen === self.gen) {
                 self.dislikeCount = n;
                 self.drawMeta();
+                self.describeAnew();
             }
         }, function () {
             // Asked again the next time the page shows the video
@@ -683,8 +697,17 @@ export class WatchPage {
 
     // ---- panel lists
 
-    /** Title with views, date and likes, the channel, then the description by paragraph */
+    /** The Description panel, its lines made when drawn: what comes in while it is open shows (describeAnew) */
     private descriptionPanel(): void {
+        var self = this;
+        this.describes = function () { return self.descriptionLines(); };
+        this.panel.open(tr('Description'), this.describes);
+    }
+
+    /** Title with views, date and likes, the channel, the description by paragraph (the details' own, in the app's
+     * language as YouTube's app shows it, else the streams'), then YouTube's boxes under it: each its title and note,
+     * then its text */
+    private descriptionLines(): PanelLine[] {
         var info = this.info;
         var lines: PanelLine[] = [{
             label: this.title.textContent || '',
@@ -693,7 +716,12 @@ export class WatchPage {
         if (this.channel) {
             lines.push({ label: this.channel, under: info ? info.subscribers : '' });
         }
-        this.panel.open(tr('Description'), lines.concat(paragraphs(this.description)));
+        lines = lines.concat(paragraphs(info && info.description || this.description));
+        (info ? info.notes : []).forEach(function (note) {
+            lines.push({ label: note.title, under: note.under, heading: true });
+            lines = lines.concat(paragraphs(note.text));
+        });
+        return lines;
     }
 
     /** Opens the comments over the video (the watch page's own content hidden, as YouTube's), with the first part if

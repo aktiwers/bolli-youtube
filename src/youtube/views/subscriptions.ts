@@ -5,7 +5,7 @@
 // openSubChannel). Up from the first row focuses the pills, then the channels; further down the header slides
 // away. The rows' top comes from the theme (metrics.subscriptionsTop), the look from themes/<id>.css (by-subs).
 
-import { h, releaseImages, restoreImages, setShown, setSrc, setText, toggleClass, translate } from '../core/dom.js';
+import { h, releaseImages, restoreImages, setShown, setSrc, setText, standsBy, toggleClass, translate } from '../core/dom.js';
 import { tr } from '../core/i18n.js';
 import { KEY } from '../core/keys.js';
 import { takesPointer, toPart } from '../core/pointer.js';
@@ -125,6 +125,7 @@ export class SubscriptionsView extends FeedHost implements View {
 
     show(rest?: boolean): void {
         this.shown = true;
+        standsBy(this.el, false);
         setShown(this.el, true);
         restoreImages(this.strip);
         this.feed.show(rest);
@@ -133,10 +134,25 @@ export class SubscriptionsView extends FeedHost implements View {
     /** Hidden: the channels' pictures are let go too (the rows let go of theirs) */
     hide(): void {
         this.shown = false;
+        standsBy(this.el, false);
         setShown(this.el, false);
         this.feed.hide();
         this.putChannels();
         releaseImages(this.strip);
+    }
+
+    /** Out of sight but kept drawn, the channels' pictures too (false: no rows yet, hidden) */
+    standBy(): boolean {
+        if (!this.feed.keep()) {
+            this.hide();
+            return false;
+        }
+        this.shown = false;
+        setShown(this.el, true);
+        restoreImages(this.strip);
+        this.putChannels();
+        standsBy(this.el, true);
+        return true;
     }
 
     cover(covered: boolean): void {

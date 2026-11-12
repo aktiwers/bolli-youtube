@@ -1,7 +1,8 @@
 // A playback that keeps stalling, as SmartTube's buffering detector tells it: the picture standing while it should
 // play for STALL_TOTAL_MS in all within the last STALL_WINDOW_MS calls for a reload at the same spot. Short stalls a
-// network shrugs off do not. A picture frozen with media buffered ahead of it (a decoder that hangs) is nudged on
-// sooner, as Shaka's and hls.js's stall detectors do (Freezes).
+// network shrugs off do not, nor standing while the TV's line is down (it waits for the line, not for a reload; a
+// renewal spent on it would be missing once the line is back). A picture frozen with media buffered ahead of it (a
+// decoder that hangs) is nudged on sooner, as Shaka's and hls.js's stall detectors do (Freezes).
 
 var STALL_WINDOW_MS = 60000;
 var STALL_TOTAL_MS = 20000;
@@ -15,9 +16,12 @@ export class Stalls {
     private past: number[][] = [];
     private since = 0;
 
-    /** The playback at now, stalled or playing; true when it has stalled STALL_TOTAL_MS within the window (then counted
-     * anew) */
-    note(stalled: boolean, now: number): boolean {
+    /** The playback at now, stalled or playing (down: the line is down, counted as playing); true when it has stalled
+     * STALL_TOTAL_MS within the window (then counted anew) */
+    note(stalled: boolean, now: number, down?: boolean): boolean {
+        if (down) {
+            stalled = false;
+        }
         if (stalled && !this.since) {
             this.since = now;
         } else if (!stalled && this.since) {

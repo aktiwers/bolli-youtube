@@ -18,10 +18,12 @@
 // (main.ts, own-player.ts).
 
 import { h, setShown } from '../core/dom.js';
+import { Rate } from '../core/time.js';
 import { tr } from '../core/i18n.js';
 import { mark, noteZap } from '../core/perf.js';
 import { oldEngine } from '../core/platform.js';
-import { FillLoader, LOGO } from '../ui/fill-loader.js';
+import { FillLoader } from '../ui/fill-loader.js';
+import { logo, logoRound } from '../ui/logo.js';
 import { note } from './play-log.js';
 import { PROBLEM, skipEdge, toast } from '../ui/toast.js';
 import { prefs } from '../api/prefs.js';
@@ -101,7 +103,7 @@ export class TvApp {
     private startedOn = WARM_UP;
     private startedFor = '';
     /** Times of recent restarts, and when a start last failed */
-    private restarts: number[] = [];
+    private restarts = new Rate(MAX_RESTARTS, RESTARTS_MS);
     private failedAt = 0;
     /** Warming only to wait for the command handler (it was idle): stopped, it is idle again */
     private hookWait = false;
@@ -172,7 +174,7 @@ export class TvApp {
         }
         this.phase = 'loading';
         // Only restarts after this start count toward MAX_RESTARTS
-        this.restarts = [];
+        this.restarts.clear();
         var self = this;
         var start = ++this.starts;
         tvPage().then(function (page) {
@@ -393,7 +395,7 @@ export class TvApp {
         var tv = this.page as TvPage;
         // A video wanted at the first start: start on it, so it plays as the page starts (going through the warm-up
         // video first cost ~11 s before the video was even requested); a restart after a failure uses the warm-up video
-        var want = this.restarts.length === 1 ? this.want : null;
+        var want = this.restarts.count === 1 ? this.want : null;
         this.startedOn = want ? want.id : WARM_UP;
         this.startedFor = want ? want.id : '';
         if (want) {
@@ -510,13 +512,10 @@ export class TvApp {
 
     /** Restarts: the frame loads youtube.com's page again (a wanted video waits for it) */
     private restart(): void {
-        var now = Date.now();
-        this.restarts = this.restarts.filter(function (at) { return now - at < RESTARTS_MS; });
-        if (this.restarts.length >= MAX_RESTARTS) {
+        if (!this.restarts.take()) {
             this.fail(tr('YouTube\'s player does not start. Try again in a moment.'));
             return;
         }
-        this.restarts.push(now);
         mark('tvRestart');
         // Quiet the old page now (else its video plays on while robots.txt loads)
         this.setFlag('__bolliQuiet', true);
@@ -538,7 +537,7 @@ export class TvApp {
         this.failedAt = Date.now();
         // Release its page (else YouTube's app runs on hidden without the hooks, and could play and report unseen)
         this.preloaded = '';
-        this.restarts = [];
+        this.restarts.clear();
         this.release();
         if (this.want) {
             toast(text, undefined, PROBLEM);
@@ -612,7 +611,10 @@ export class TvApp {
         var loader = this.loader as FillLoader;
         var from = this.askedAt;
         setShown(this.wait, true);
-        loader.show(LOGO, 0.05);
+        // (no logo chosen: no sign, the wait is plain)
+        if (logo()) {
+            loader.show(logo(), 0.05, logoRound());
+        }
         var self = this;
         this.waitTimer = setInterval(function () {
             var fill = (Date.now() - from) / COLD_MS;

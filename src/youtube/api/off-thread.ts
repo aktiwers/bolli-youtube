@@ -98,7 +98,8 @@ function ask(w: Worker, text: string, kind: string, arg: string, here: () => str
     var id = ++count;
     return new Promise<string>(function (ok, fail) {
         asked[id] = { kind: kind, kb: Math.round(text.length / 1024), at: Date.now(), ok: ok, fail: fail, here: here, timer: overdue(id) };
-        w.postMessage({ id: id, kind: kind, text: text, arg: arg });
+        // (the window's width: the worker has none, and pictures are chosen for it: api/feed.ts)
+        w.postMessage({ id: id, kind: kind, text: text, arg: arg, width: window.innerWidth });
     });
 }
 

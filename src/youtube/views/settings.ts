@@ -3,7 +3,7 @@
 // headings among them); the focused setting on the right, in the look of
 // YouTube's TV app's (picture, description, choices as buttons with the set
 // one ticked, a note on the focused choice). A category of one setting (a
-// page of its own, About) shows it on the right at once, wide, without the
+// page of its own, Live chat) shows it on the right at once, wide, without the
 // middle. Right or OK go a column further (a page opens); OK sets a choice
 // (or toggles it where several can be set); Left or Back go back a column,
 // then to the rail. Each category keeps the setting it was on while the app
@@ -11,7 +11,9 @@
 // categories: the app's own settings (api/prefs.ts, saved at once), Account
 // & phone (phone linking, and the account's History & data settings that
 // have an effect here, fetched when Settings shows), then About (the version,
-// the device). Clearing a history asks first, with YouTube's question.
+// a newer one that is out, the device; under it Check for new versions, in
+// a build that checks). Clearing a history asks first, with YouTube's
+// question.
 
 import { h, keepCentred, setShown, setSrc, setText, toggleClass, translate } from '../core/dom.js';
 import { language, LANGUAGES, setLanguage, tr } from '../core/i18n.js';
@@ -25,30 +27,42 @@ import { ALWAYS, languageName, offeredLanguages } from '../api/languages.js';
 import { Choice, Choices, ChoiceSetting, HIGHEST, prefDefault, prefs, Prefs, setNames, setPref, Value } from '../api/prefs.js';
 import { keyName, shortcutOf, shortcuts } from '../api/shortcuts.js';
 import { PARTS } from '../api/sponsorblock.js';
+import { codecPlays } from '../api/streams.js';
+import { hasVersionCheck, newerVersion } from '../api/version-check.js';
 import { apply, askToClear } from '../ui/account.js';
-import { icon } from '../ui/icons.js';
+import { choiceButton, choiceTile } from '../ui/choice-button.js';
 import { keyboardFor, recentWith } from '../ui/keyboard-languages.js';
 import { LanguagePicker } from '../ui/language-picker.js';
-import { LOGO } from '../ui/fill-loader.js';
+import { ADD, customOf, FULL, NOT_KEPT, removeCustomLogo } from '../ui/custom-logos.js';
+import { APP_NAME, COLOR_COLUMNS, hasHomeLogos, hasHomeScreen, homeColor, homeColorChoices, homeIconChoices, homeLogoPicture, homeName, NO_FILE, setHomeColor,
+    setHomeIcon, setHomeName, shownHomeIcon, takeCustomIcon } from '../ui/home-screen.js';
+import { ACCOUNT, chooseLogo, drawLogo, logoChoices, logoFile, LOGOS, shownLogo, takeAccountLogo, takeCustomLogo } from '../ui/logo.js';
+import { TextPage } from '../ui/text-page.js';
 import { CAPTION_STYLES } from '../player/captions.js';
 import { ChatSettings, chatSummary } from '../player/chat-settings.js';
 import { Question } from '../ui/question.js';
+import { NOT_PICTURE, TOO_BIG } from '../ui/pictures.js';
+import { PROBLEM, toast } from '../ui/toast.js';
 import { screenOff } from '../ui/screen-off.js';
 import { applyBlack, applyTheme, themes } from '../ui/theme.js';
 import { ShortcutHost, ShortcutsPage } from './shortcuts.js';
 
 /** A setting: name, description, picture ('' for none); its choices, or the steps to link a phone (code: shows a TV
- * code, for a phone on another network), or lines to read (info); open: Right or OK opens its own page (its one
- * choice too, its note always shown) */
+ * code, for a phone on another network), or lines to read (info: asked each time it is drawn); open: Right or OK opens
+ * its own page (its one choice too, its note always shown) */
 interface Setting {
     label: string;
     summary: string;
-    picture: string;
+    /** Its picture at the top of the right side ('' none; a function: asked each time it is drawn) */
+    picture: string | (() => string);
     choices?: Choices;
     steps?: string[];
     code?: boolean;
-    info?: string[];
+    info?: () => string[];
     open?: () => void;
+    /** Its choices are tiles in a grid of this many columns (the Branding settings: the arrows move in it, OK held
+     * removes a removable one); its top is small and stays while only the tiles scroll */
+    grid?: number;
 }
 
 /** A page of Settings' own over it: it takes every key while shown */
@@ -78,7 +92,7 @@ function pic(name: string): string {
 }
 
 /** A setting with choices (a list, or made when shown): now() gives the set value, set() changes it */
-function pick(label: string, summary: string, picture: string, list: Choice[] | (() => Choice[]), now: () => Value,
+function pick(label: string, summary: string, picture: string | (() => string), list: Choice[] | (() => Choice[]), now: () => Value,
     set: (value: Value) => void): Setting {
     return { label: label, summary: summary, picture: picture, choices: { list: typeof list === 'function' ? list : function () { return list as Choice[]; },
         isSet: function (value) { return value === now(); }, choose: set } };
@@ -213,6 +227,16 @@ function screenWaking(): Setting {
     });
 }
 
+/** Check for new versions (api/version-check.ts), under About: asked and told, asked only, or neither; its notes say
+ * all a check sends. The app's own logo, as About's */
+function versionCheck(): Setting {
+    return pref(tr('Check for new versions'), tr('Once a day the app asks whether a newer version is out'), logoFile(LOGOS[0]), 'versionCheck', [
+        { value: 'notify', name: tr('Notify me'), note: tr('a notice at most once a week while a newer version is out. The app sends its version, webOS or Android, and how many days ago it last asked: nothing about you or your TV') },
+        { value: 'quiet', name: tr('No notice'), note: tr('the app still asks once a day, and says that the notice is off. A newer version shows only in Settings › About') },
+        { value: 'off', name: tr('Off'), note: tr('the app asks nothing') }
+    ]);
+}
+
 /** A setting that opens a page of its own (open): its one choice the page's name, note() saying how it is set */
 function pageSetting(label: string, summary: string, picture: string, open: () => void, name: string, note: () => string): Setting {
     return { label: label, summary: summary, picture: picture, open: open, choices: { list: function () { return [{ value: 0, name: name, note: note() }]; },
@@ -284,6 +308,19 @@ function listPage(): Setting[] {
     ];
 }
 
+/** Video codec's choices: Auto, then every codec YouTube has; one this device does not play (api/streams.ts
+ * codecPlays) says so in its note (chosen, its videos play as with Auto: none of its formats is offered here) */
+export function codecChoices(): Choice[] {
+    var without = tr('a video without it plays as with Auto');
+    return ([{ value: 'auto', name: tr('Auto'), note: tr('VP9 where the video has it at the chosen quality, else another codec') }] as Choice[]).concat([
+        { value: 'vp9', name: 'VP9', note: without },
+        { value: 'av1', name: 'AV1', note: without },
+        { value: 'h264', name: 'H.264', note: tr('up to 1080p only, also when the video has more; a video without it plays as with Auto') }
+    ].map(function (c) {
+        return codecPlays(c.value) ? c : { value: c.value, name: c.name, note: tr('this TV does not play it: videos play as with Auto') };
+    }));
+}
+
 /** The playlist in the player (player/list-panel.ts): its next at a video's end, what Down shows, the list at the side
  * over or beside the picture (also in the player's settings while a playlist's video plays: main.ts) */
 export function playerPlaylists(): (Setting & ChoiceSetting)[] {
@@ -322,6 +359,92 @@ function appLanguage(restart: () => void): Setting {
         });
 }
 
+/** What the Branding settings need of the screen: the page a custom logo's address is typed on (take: what takes the
+ * address typed), the page for the home screen name, and a way to draw the right side anew after a choice that took
+ * a moment (e: why it was refused, if it was) */
+interface Brand {
+    address(take: (url: string) => Promise<unknown>): void;
+    name(): void;
+    chosen(e?: Error): void;
+}
+
+/** The columns of a grid of logo tiles */
+var LOGO_COLUMNS = 4;
+
+/** A setting whose choices are a grid of logo tiles; choose: what OK on a logo's tile does; add: what takes the
+ * address typed after OK on the tile that adds one */
+function logoGrid(label: string, summary: string, choices: () => Choice[], shown: () => Value, choose: (value: string) => void,
+    brand: Brand, add: (url: string) => Promise<unknown>): Setting {
+    var setting = pick(label, summary, '', choices, shown, function (value) {
+        if (value === ADD) {
+            brand.address(add);
+        } else {
+            choose(String(value));
+        }
+    });
+    setting.grid = LOGO_COLUMNS;
+    return setting;
+}
+
+/** The logo in the app: a built-in one, the account's picture (offered while an account is signed in; the first logo
+ * until its copy is in), the viewer's own (Custom 1 ...; OK held removes one), the tile that adds one, or none. The
+ * rail's changes at once. */
+function logoSetting(brand: Brand): Setting {
+    return logoGrid(tr('Logo'), tr('The logo at the top of the menu and while a screen loads'), logoChoices, shownLogo, function (value) {
+        if (value === ACCOUNT) {
+            // (no copy and no answer: the first logo, the choice kept; the next start tries again)
+            takeAccountLogo().then(null, function () { return undefined; });
+        } else {
+            chooseLogo(value);
+        }
+    }, brand, takeCustomLogo);
+}
+
+/** The app's logo on the TV's home screen (ui/home-screen.ts). webOS: a built-in one, one of the viewer's own (chosen
+ * once its files are written, which takes a moment), or the tile that adds one. Android: a built-in one, which the
+ * home screen shows once the app is left (its description says so) */
+function homeIconSetting(brand: Brand): Setting {
+    var summary = hasHomeLogos() ? tr('The app\'s logo on the TV\'s home screen. It changes there once you leave the app') :
+        tr('The app\'s logo on the TV\'s home screen');
+    return logoGrid(tr('Home screen logo'), summary, homeIconChoices, shownHomeIcon, function (value) {
+        setHomeIcon(value).then(function () { brand.chosen(); }, brand.chosen);
+    }, brand, takeCustomIcon);
+}
+
+/** The app's name on the TV's home screen (webOS): one button showing it, OK types another (brand.name) */
+function homeNameSetting(brand: Brand): Setting {
+    return pick(tr('Home screen name'), tr('The app\'s name on the TV\'s home screen'), '', function () {
+        return [{ value: 0, name: homeName(), note: tr('press OK to type another') }];
+    }, function () { return 0; }, brand.name);
+}
+
+/** The colour of the app's tile on the TV's home screen (webOS), a grid of colours; the chosen logo at the top shows
+ * on the colour focused */
+function homeColorSetting(): Setting {
+    var setting = pick(tr('Tile colour'), tr('The colour of the app\'s tile on the TV\'s home screen'), homeLogoPicture, homeColorChoices, homeColor, function (value) {
+        setHomeColor(String(value));
+    });
+    setting.grid = COLOR_COLUMNS;
+    return setting;
+}
+
+/** Why a picture was not taken, as one line for the viewer (url: the address typed) */
+function refused(e: Error, url: string): string {
+    var why = e && e.message;
+    return why === NOT_PICTURE ? tr('That address is not a picture. Use the address of a PNG, JPEG or WebP picture.') :
+        why === TOO_BIG ? tr('That picture is too big (2 MB at most).') :
+        why === NO_FILE ? tr('This TV does not let the app save a logo for the home screen') :
+        why === NOT_KEPT || why === FULL ? tr('The app has no room left on the TV to keep the picture') :
+        tr('Could not load {1}.', url.replace(/^https?:\/\//, '').split('/')[0]);
+}
+
+/** A picture's address as typed, made whole: '' for none (nothing typed after the scheme), https:// put before one
+ * typed without a scheme */
+export function addressTyped(text: string): string {
+    var rest = text.replace(/^https?:\/\//i, '');
+    return !rest ? '' : /^https?:\/\//i.test(text) ? text : 'https://' + rest;
+}
+
 /** A category of settings; a text among them is a small heading over those after it */
 interface Category {
     title: string;
@@ -329,9 +452,9 @@ interface Category {
 }
 
 /** The app's own settings, in categories (pages: possible start pages; more: Subtitles' "More languages"; chat: Live
- * chat settings; keys: Shortcuts; restart: starts the app again) */
-function bolli(pages: StartPage[], more: () => void, chat: () => void, keys: () => void, restart: () => void): Category[] {
-    var browsing = [
+ * chat settings; keys: Shortcuts; restart: starts the app again; brand: what the Branding settings need) */
+function bolli(pages: StartPage[], more: () => void, chat: () => void, keys: () => void, restart: () => void, brand: Brand): Category[] {
+    var browsing: (Setting | string)[] = [
         // Any page of the rail
         pref(tr('Start page'), tr('The screen the app starts on'), pic('location'), 'startPage', function () {
             return pages.map(function (p) { return { value: p.id, name: p.label, note: '' }; });
@@ -353,6 +476,14 @@ function bolli(pages: StartPage[], more: () => void, chat: () => void, keys: () 
             return themes().map(function (t) { return { value: t.id, name: t.name, note: '' }; });
         }, function (id) { applyTheme(String(id)); }));
     }
+    // Branding, under its own small heading: the logo in the app, and where the TV has a home screen entry the app
+    // can change (webOS) its logo, name and tile colour there; on Android its logo there alone
+    browsing.push(tr('Branding'), logoSetting(brand));
+    if (hasHomeScreen()) {
+        browsing.push(homeIconSetting(brand), homeNameSetting(brand), homeColorSetting());
+    } else if (hasHomeLogos()) {
+        browsing.push(homeIconSetting(brand));
+    }
     return [
         { title: tr('Playback'), settings: [
             autoplay(),
@@ -365,12 +496,15 @@ function bolli(pages: StartPage[], more: () => void, chat: () => void, keys: () 
                 { value: 720, name: '720p', note: tr('or the closest below it') },
                 { value: 480, name: '480p', note: tr('or the closest below it') }
             ]),
+            pref(tr('Video codec'), tr('The codec videos start in, chosen before the quality'), pic('clear_search_history'), 'codec', codecChoices),
             pref(tr('History'), tr('What you watch in Bolli\'s player, told to YouTube'), pic('privacy_and_terms'), 'history',
                 onOff(tr('it goes into your YouTube history, and YouTube remembers where you stopped'), tr('Bolli\'s player tells YouTube nothing of what you watch'))),
             // Its picture drawn for the app in the style of YouTube's
             pref(tr('Most replayed'), tr('A graph over the progress bar in Bolli\'s player of the parts people watch again the most, from YouTube'),
                 'replays.png', 'replays', onOff(tr('shown on videos YouTube has one for (popular ones)'), tr('no graph'))),
             // Its picture drawn for the app, as Most replayed's
+            pref(tr('Pause on chapters'), tr('Up in a video shows its chapters to pick from'), pic('clear_search_history'), 'chaptersPause',
+                onOff(tr('the video waits while you pick'), tr('the video plays on while you pick'))),
             pref(tr('Clock in videos'), tr('The time of day in a corner of the picture while a video plays in Bolli\'s player'), 'clock.png',
                 'videoClock', [
                     { value: 'off', name: tr('Off'), note: tr('the clock shows only on the app\'s screens') },
@@ -391,8 +525,15 @@ function bolli(pages: StartPage[], more: () => void, chat: () => void, keys: () 
                 { value: 'muted', name: tr('Without sound'), note: '' },
                 { value: 'off', name: tr('Off'), note: '' }
             ]),
+            pref(tr('Channel video'), tr('The video a channel plays behind its header while you rest on Play mix'), pic('clear_watch_history'), 'channelVideo',
+                onOff(tr('it starts after a few seconds, with or without sound as Previews says'), tr('only the channel\'s picture shows'))),
             pref(tr('Videos start sooner'), tr('The video or page whose tile you rest on gets ready'), pic('send_feedback'), 'preload',
-                onOff(tr('it opens about a second sooner'), '')),
+                onOff(tr('it opens about a second sooner'), ''))
+        ].concat(android() ? [] : [
+            // (LG TVs: their engine waits 3 s after every jump unless the video seems to end soon; Android has no such wait)
+            pref(tr('Quick jumps'), tr('Jumping in a video in Bolli\'s player'), pic('send_feedback'), 'quickJumps',
+                onOff(tr('the picture comes in about half a second (what was loaded further ahead is loaded again)'), tr('the picture comes after about two seconds')))
+        ]).concat([
             pref(tr('Loading sign'), tr('What shows while a video starts in Bolli\'s player'), pic('reset_app'), 'startSign',
                 onOff(tr('the channel\'s picture fills up'), tr('the screen stays dark until the video plays'))),
             pref(tr('Start picture'), tr('What shows behind the loading sign while a video starts in Bolli\'s player, until it moves'), pic('reset_app'), 'startPicture', [
@@ -400,7 +541,7 @@ function bolli(pages: StartPage[], more: () => void, chat: () => void, keys: () 
                 { value: 'frame', name: tr('The frame it starts on'), note: tr('the very picture it opens with, blurry: from YouTube\'s seek previews') },
                 { value: 'none', name: tr('None'), note: tr('dark until the video plays: its picture comes soonest') }
             ])
-        ] },
+        ]) },
         { title: tr('Playlists'), settings: ([tr('On a playlist\'s page')] as (Setting | string)[]).concat(listPage(), [tr('In the player')], playerPlaylists()) },
         { title: tr('Live chat'), settings: [liveChat(chat)] },
         { title: tr('Remote'), settings: [shortcutsSetting(keys)] },
@@ -448,16 +589,23 @@ var LINK: Setting[] = [
         tr('Tap the cast icon.'), tr('Tap \'Link with TV code\' and enter the code below.')] }
 ];
 
-/** About: the app's version, the device it runs on, where its code is, what it uses */
+/** About: the app's version, a newer one that is out with where to get it (api/version-check.ts: known some time
+ * after the start, so asked each time About is drawn), the device it runs on, where its code is, what it uses */
 function about(): Setting {
     var where = device();
-    return { label: tr('About'), summary: tr('Bolli YouTube, a light YouTube app for TVs'), picture: LOGO, info: [
-        tr('Version {1}', document.documentElement.getAttribute('data-version') || ''),
-        where ? tr('On {1}', where) : '',
-        tr('Source code: {1}', 'github.com/aktiwers/bolli-youtube'),
-        tr('With SponsorBlock, DeArrow, Return YouTube Dislike and the Roboto font (Apache License 2.0)'),
-        tr('Not made by YouTube or Google')
-    ].filter(function (line) { return line; }) };
+    // (the app's own logo, the first: not the one chosen)
+    return { label: tr('About'), summary: tr('Bolli YouTube, a light YouTube app for TVs'), picture: logoFile(LOGOS[0]), info: function () {
+        var newer = newerVersion();
+        return [
+            tr('Version {1}', document.documentElement.getAttribute('data-version') || ''),
+            newer ? tr('Version {1} is out', newer) : '',
+            !newer ? '' : android() ? tr('Download it from GitHub') : tr('Update it in the Homebrew Channel'),
+            where ? tr('On {1}', where) : '',
+            tr('Source code: {1}', 'github.com/aktiwers/bolli-youtube'),
+            tr('With SponsorBlock, DeArrow, Return YouTube Dislike and the Roboto font (Apache License 2.0)'),
+            tr('Not made by YouTube or Google')
+        ].filter(function (line) { return line; });
+    } };
 }
 
 /** The device: the Android app's model and version (its browser names an LG TV, as YouTube needs), else an LG TV's
@@ -490,6 +638,24 @@ function device(): string {
 /** "a thing" as "A thing" */
 function sentence(s: string): string {
     return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/** A setting's picture as it is now ('' none) */
+function pictureOf(s: Setting): string {
+    return typeof s.picture === 'function' ? s.picture() : s.picture;
+}
+
+/** i moved by an arrow in a grid of count tiles in columns: a row up or down (down from the last full row: to the last
+ * tile), or one right within its row; where there is none: i */
+export function gridStep(i: number, count: number, columns: number, code: number): number {
+    if (code === KEY.RIGHT) {
+        return i % columns < columns - 1 && i + 1 < count ? i + 1 : i;
+    }
+    if (code === KEY.UP) {
+        return i >= columns ? i - columns : i;
+    }
+    var rows = Math.ceil(count / columns);
+    return i + columns < count ? i + columns : Math.floor(i / columns) < rows - 1 ? count - 1 : i;
 }
 
 /** i moved one up or down, clamped to 0..count-1 */
@@ -537,6 +703,10 @@ export class SettingsView implements View {
     private info: HTMLElement;
     private buttonsBox: HTMLElement;
     private note: HTMLElement;
+    /** The choices and their note: their box (clips them where they scroll up under the picture and name), and what
+     * scrolls in it */
+    private choicesBox: HTMLElement;
+    private scroller: HTMLElement;
     /** The categories in order, the focused one, the one whose list shows, Account & phone (the account's History & data
      * join it) */
     private categories: Shown[] = [];
@@ -550,6 +720,8 @@ export class SettingsView implements View {
     private scrolled = 0;
     private categoriesScroll = false;
     private panelScrolled = 0;
+    /** What the right side's scroll moves: the whole body, or the choices only (Logo); null: nothing yet */
+    private panelMoving: HTMLElement | null = null;
     /** Changes that may set something anew (a choice, a page closed, the account, Settings shown again): the lines under
      * the settings' names are drawn again once a category shows after one */
     private changes = 0;
@@ -563,6 +735,15 @@ export class SettingsView implements View {
     private panelFrame = 0;
     /** Subtitles' "More languages" picker (built on first open); takes the keys while open */
     private languages: LanguagePicker | null = null;
+    /** The page a custom logo's address or the home screen name is typed on (built on first open); takes the keys
+     * while open */
+    private typing: TextPage | null = null;
+    /** The keys Settings itself took so far (its pages' not counted): a choice that took a moment tells by it whether
+     * the viewer went on meanwhile */
+    private pressed = 0;
+    /** The tiles as last drawn and what they were drawn from (a grid's choices): kept while those are the same, so a
+     * tick moving does not build and decode every picture again */
+    private tilesOf = '';
     /** Live chat settings (built on first open); takes the keys while open */
     private chat: ChatSettings | null = null;
     /** Shortcuts (built on first open); takes the keys while open */
@@ -598,17 +779,30 @@ export class SettingsView implements View {
         this.steps = linkBox.appendChild(h('ol', 'by-settings-steps')) as HTMLElement;
         this.code = linkBox.appendChild(h('div', 'by-settings-code')) as HTMLElement;
         this.info = this.body.appendChild(h('div', 'by-settings-info')) as HTMLElement;
-        this.buttonsBox = this.body.appendChild(h('div', 'by-settings-buttons')) as HTMLElement;
-        this.note = this.body.appendChild(h('div', 'by-settings-note')) as HTMLElement;
+        this.choicesBox = this.body.appendChild(h('div', 'by-settings-choices')) as HTMLElement;
+        this.scroller = this.choicesBox.appendChild(h('div', 'by-settings-scroll')) as HTMLElement;
+        this.buttonsBox = this.scroller.appendChild(h('div', 'by-settings-buttons')) as HTMLElement;
+        this.note = this.scroller.appendChild(h('div', 'by-settings-note')) as HTMLElement;
         panel.appendChild(this.body);
         this.el.appendChild(panel);
         var self = this;
-        bolli(pages, function () { self.moreLanguages(); }, function () { self.openChat(); }, function () { self.openKeys(); }, restart).forEach(function (c) {
+        bolli(pages, function () { self.moreLanguages(); }, function () { self.openChat(); }, function () { self.openKeys(); }, restart,
+            { address: function (take) { self.pictureAddress(take); }, name: function () { self.namePage(); },
+                chosen: function (e) { self.brandChosen(e); } }).forEach(function (c) {
             self.addCategory(c);
         });
         this.account = this.addCategory({ title: tr('Account & phone'), settings: LINK });
-        this.addCategory({ title: tr('About'), settings: [about()] });
+        // About, and under it Check for new versions in a build that has the service's address (without it: About
+        // alone, shown wide)
+        this.addCategory({ title: tr('About'), settings: hasVersionCheck() ? [about(), versionCheck()] : [about()] });
         this.drawFocus();
+        // A logo that changes while a grid of logos shows (one chosen or removed, the account's picture come in,
+        // another account): its tiles and ticks anew, the focus where it was
+        drawLogo(function () {
+            if (self.shown && !self.openPage() && self.drawn && self.drawn.grid) {
+                self.drawPanel(true);
+            }
+        });
         // A click on a category or a setting focuses it (its settings or choices show, as in YouTube's Settings; a
         // category of one page opens it, as OK); on a choice it sets it
         takesPointer(this.el, function (target) {
@@ -672,13 +866,13 @@ export class SettingsView implements View {
 
     /** Its pages made so far: the language picker, Live chat settings, Shortcuts */
     private pages(): SubPage[] {
-        return [this.languages, this.chat, this.keys].filter(function (p) { return !!p; }) as SubPage[];
+        return [this.languages, this.chat, this.keys, this.typing].filter(function (p) { return !!p; }) as SubPage[];
     }
 
     /** Its page shown over it (null: none) */
     private openPage(): SubPage | null {
         return this.languages && this.languages.shown ? this.languages : this.chat && this.chat.shown ? this.chat :
-            this.keys && this.keys.shown ? this.keys : null;
+            this.keys && this.keys.shown ? this.keys : this.typing && this.typing.shown ? this.typing : null;
     }
 
     /** The page of its own while open (null: none; the pointer's layer: core/pointer.ts; it takes every key, the
@@ -699,6 +893,7 @@ export class SettingsView implements View {
             }
             return true;
         }
+        this.pressed++;
         // (any key but a step works on the right side as it is now)
         if (code !== KEY.UP && code !== KEY.DOWN) {
             this.panelNow();
@@ -769,11 +964,18 @@ export class SettingsView implements View {
     /** Keys in the choices: Up/Down move, OK sets, Left or Back return to the settings (to the categories for one
      * alone) */
     private choicesKey(code: number): void {
+        var columns = this.setting().grid || 0;
         switch (code) {
             case KEY.UP:
             case KEY.DOWN:
-                this.button = step(this.button, this.buttons.length, code);
+                this.button = columns ? gridStep(this.button, this.buttons.length, columns, code) : step(this.button, this.buttons.length, code);
                 this.drawButtons();
+                break;
+            case KEY.RIGHT:
+                if (columns) {
+                    this.button = gridStep(this.button, this.buttons.length, columns, code);
+                    this.drawButtons();
+                }
                 break;
             case KEY.OK:
                 this.setting().choices!.choose(this.choices[this.button].value);
@@ -781,6 +983,15 @@ export class SettingsView implements View {
                 this.changed();
                 break;
             case KEY.LEFT:
+                // (in a grid: one tile left; from its first column out, as from a list)
+                if (columns && this.button % columns > 0) {
+                    this.button--;
+                    this.drawButtons();
+                    break;
+                }
+                this.place = this.alone() ? 'categories' : 'settings';
+                this.drawFocus();
+                break;
             case KEY.BACK:
                 this.place = this.alone() ? 'categories' : 'settings';
                 this.drawFocus();
@@ -812,6 +1023,75 @@ export class SettingsView implements View {
             }
             setPref('captions', code);
             self.drawPanel();
+            self.changed();
+        });
+    }
+
+    /** A custom logo's address typed (https:// to begin with): take downloads its picture in the background and
+     * makes it a custom logo, the one chosen once it is in; else one line says why */
+    private pictureAddress(take: (url: string) => Promise<unknown>): void {
+        var self = this;
+        this.typing = this.typing || new TextPage(this.el);
+        this.typing.open(tr('Picture address'), 'https://', false, function (text) {
+            var url = addressTyped(text);
+            if (url) {
+                var keys = self.pressed;
+                take(url).then(function () { self.brandChosen(undefined, '', keys === self.pressed); }, function (e: Error) { self.brandChosen(e, url); });
+            }
+        });
+    }
+
+    /** A Branding choice that took a moment is in (e: or was refused, said in one line; url: the address typed): the
+     * right side anew, with a custom logo's new tile and the tick where it is now. The focus stays where it is (on
+     * the tile chosen, or wherever the viewer went meanwhile); toSet: it goes to the one now set (a custom logo just
+     * added, no key pressed since). */
+    private brandChosen(e?: Error, url?: string, toSet?: boolean): void {
+        if (e) {
+            toast(refused(e, url || ''), PROBLEM);
+        }
+        if (this.shown && !this.openPage()) {
+            this.drawPanel(!toSet);
+        }
+        this.changed();
+    }
+
+    /** The focused choice if OK held on it removes it (a custom logo's tile), else null */
+    private removable(): Choice | null {
+        var choice = this.place === 'choices' && !this.openPage() ? this.choices[this.button] : null;
+        return choice && choice.removable ? choice : null;
+    }
+
+    /** OK held means something on a custom logo's tile (main.ts: OK then acts on its release) */
+    holds(): boolean {
+        return !!this.removable();
+    }
+
+    /** OK held (main.ts): on a custom logo's tile it asks to remove that logo (true: the hold was used). Removed, the
+     * app's logo and the home screen's go back to the first if they were it (ui/custom-logos.ts tells them). */
+    onHold(): boolean {
+        var self = this;
+        var choice = this.removable();
+        var custom = choice ? customOf(String(choice.value)) : null;
+        if (!choice || !custom) {
+            return false;
+        }
+        this.question.open({ title: tr('Remove {1}?', choice.name), subtitle: '', picture: choice.picture || '', yes: tr('Remove'), no: tr('Cancel') }, function () {
+            removeCustomLogo(custom!);
+            self.drawPanel();
+            self.changed();
+        });
+        return true;
+    }
+
+    /** The home screen name typed (the one set, else the app's own): taken at the tick, none: the app's own again */
+    private namePage(): void {
+        var self = this;
+        this.typing = this.typing || new TextPage(this.el);
+        this.typing.open(tr('Home screen name'), prefs().homeName || APP_NAME, true, function (name) {
+            setHomeName(name);
+            if (self.shown && !self.openPage()) {
+                self.drawPanel();
+            }
             self.changed();
         });
     }
@@ -992,16 +1272,17 @@ export class SettingsView implements View {
 
     /** Draws the right side: picture, name, description, and choices (or steps, or code); the stylesheet shows the
      * parts for its kind (by-settings-body--*); narrower beside the middle (its width set with its content: laid out
-     * once) */
-    private drawPanel(): void {
+     * once). keep: the focus stays on the choice it was on (else it goes to the set one). */
+    private drawPanel(keep?: boolean): void {
         var self = this;
+        var at = this.button;
         var s = this.drawn = this.setting();
+        var picture = pictureOf(s);
         toggleClass(this.panel, 'by-settings-panel--narrow', !this.alone());
-        this.body.className = 'by-settings-body' + (s.picture ? ' by-settings-body--picture' : '') +
-            (s.code ? ' by-settings-body--code' : s.steps ? ' by-settings-body--steps' : s.info ? ' by-settings-body--info' : '');
-        if (s.picture) {
-            setSrc(this.picture, s.picture);
-        }
+        this.body.className = 'by-settings-body' + (picture ? ' by-settings-body--picture' : '') +
+            (s.code ? ' by-settings-body--code' : s.steps ? ' by-settings-body--steps' : s.info ? ' by-settings-body--info' : '') +
+            (s.grid ? ' by-settings-body--grid' : '');
+        setSrc(this.picture, picture);
         setText(this.heading, s.label);
         setText(this.summary, s.summary);
         this.steps.innerHTML = '';
@@ -1009,7 +1290,7 @@ export class SettingsView implements View {
             self.steps.appendChild(h('li', 'by-settings-step', one));
         });
         this.info.innerHTML = '';
-        (s.info || []).forEach(function (line) {
+        (s.info ? s.info() : []).forEach(function (line) {
             self.info.appendChild(h('div', 'by-settings-fact', line));
         });
         if (s.code) {
@@ -1017,13 +1298,20 @@ export class SettingsView implements View {
             clearTimeout(this.codeTimer);
             this.codeTimer = setTimeout(function () { self.askCode(false); }, CODE_REST_MS) as unknown as number;
         }
-        this.buttonsBox.innerHTML = '';
         this.choices = s.choices ? s.choices.list() : [];
-        this.buttons = this.choices.map(function (c) {
-            var el = self.buttonsBox.appendChild(h('div', 'by-settings-button', c.name)) as HTMLElement;
-            return { el: el, check: el.appendChild(icon('check', 'by-check')) as HTMLElement };
-        });
-        this.button = this.setButton();
+        // (a grid's tiles stay while its choices are the same: their pictures are not built and decoded again)
+        var tiles = s.grid ? s.label + ' ' + this.choices.map(function (c) { return c.value + ' ' + (c.picture || '').length; }).join('|') : '';
+        if (!tiles || tiles !== this.tilesOf) {
+            this.tilesOf = tiles;
+            this.buttonsBox.innerHTML = '';
+            this.buttonsBox.className = 'by-settings-buttons' + (s.grid ? ' by-settings-buttons--grid by-settings-buttons--grid' + s.grid : '');
+            this.buttons = this.choices.map(function (c) {
+                var button = s.grid ? choiceTile(c) : choiceButton(c);
+                self.buttonsBox.appendChild(button.el);
+                return button;
+            });
+        }
+        this.button = keep && this.place === 'choices' ? Math.min(at, this.buttons.length - 1) : this.setButton();
         this.drawButtons();
     }
 
@@ -1041,7 +1329,11 @@ export class SettingsView implements View {
                 noted = i;
             }
         }
-        setText(this.note, noted >= 0 ? sentence(this.choices[noted].note) : '');
+        var choice = noted >= 0 ? this.choices[noted] : null;
+        // (a tile has no name on it: said here, before its note)
+        setText(this.note, !choice ? '' : s.grid ? choice.name + (choice.name && choice.note ? ': ' : '') + choice.note : sentence(choice.note));
+        // (Tile colour: the logo at the top on the colour focused, as the home screen's tile would show it)
+        this.picture.style.backgroundColor = choice && choice.color || '';
         this.scrollPanel();
     }
 
@@ -1102,24 +1394,46 @@ export class SettingsView implements View {
         askToClear(this.question, ask, undefined, function () { self.drawButtons(); self.changed(); });
     }
 
-    /** When the right side is taller than the screen, scrolls it to keep the focused choice and its note in view
-     * (the choice first); unscrolled, it has no transform and so no layer of its own */
+    /** When the right side is taller than the screen, scrolls it to keep the focused choice and its note in view (the
+     * choice first); for a grid of tiles only the tiles and their note scroll, under the setting's name and
+     * description, which stay in place. Unscrolled, nothing has a transform and so no layer of its own */
     private scrollPanel(): void {
         var b = this.buttons[this.button];
         var to = 0;
+        // A grid: only the tiles scroll, the setting's top stays; any other: the whole right side, as it always did
+        var pinned = !!this.drawn && !!this.drawn.grid;
+        var moving = pinned ? this.scroller : this.body;
         if (this.place === 'choices' && b) {
-            var view = (this.body.parentNode as HTMLElement).offsetHeight;
-            if (this.body.offsetHeight > view) {
-                var bottom = this.note.textContent ? this.note.offsetTop + this.note.offsetHeight : b.el.offsetTop + b.el.offsetHeight;
-                to = Math.max(0, Math.min(this.body.offsetHeight - view, b.el.offsetTop - ROOM, bottom + ROOM - view));
+            // (the body sits at the panel's top; the choices start where their scrolling part does in their box)
+            var top = this.choicesBox.offsetTop + this.scroller.offsetTop;
+            var view = this.panel.offsetHeight - (pinned ? top : 0);
+            var at = pinned ? 0 : top;
+            var height = pinned ? this.scroller.offsetHeight + ROOM : this.body.offsetHeight;
+            if (height > view) {
+                var bottom = at + (this.note.textContent ? this.note.offsetTop + this.note.offsetHeight : b.el.offsetTop + b.el.offsetHeight);
+                to = Math.max(0, Math.min(height - view, at + b.el.offsetTop - ROOM, bottom + ROOM - view));
+            }
+            // Logo: a choice cut by the box's top edge would show a sliver under the description: on to its end (the
+            // edge is at the scrolled distance less where the scrolling part starts in the box)
+            var edge = to - this.scroller.offsetTop;
+            for (var i = 0; pinned && to && i < this.buttons.length; i++) {
+                var el = this.buttons[i].el;
+                if (el.offsetTop < edge && el.offsetTop + el.offsetHeight > edge) {
+                    to = el.offsetTop + el.offsetHeight + this.scroller.offsetTop;
+                    break;
+                }
             }
         }
-        if (to !== this.panelScrolled) {
+        if (to !== this.panelScrolled || moving !== this.panelMoving) {
+            if (this.panelMoving && this.panelMoving !== moving) {
+                this.panelMoving.style.webkitTransform = '';
+            }
             this.panelScrolled = to;
+            this.panelMoving = moving;
             if (to) {
-                translate(this.body, 0, -to);
+                translate(moving, 0, -to);
             } else {
-                this.body.style.webkitTransform = '';
+                moving.style.webkitTransform = '';
             }
         }
     }

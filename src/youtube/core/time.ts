@@ -39,3 +39,32 @@ export function utcDate(ms: number): string {
     var d = new Date(ms);
     return d.getUTCFullYear() + '-' + pad2(d.getUTCMonth() + 1) + '-' + pad2(d.getUTCDate());
 }
+
+/** A cap on how often something is done: at most max times within any ms */
+export class Rate {
+    private times: number[] = [];
+
+    constructor(private max: number, private ms: number) {}
+
+    /** Whether one more may be done now (counted if so) */
+    take(): boolean {
+        var now = Date.now();
+        var ms = this.ms;
+        this.times = this.times.filter(function (at) { return now - at < ms; });
+        if (this.times.length >= this.max) {
+            return false;
+        }
+        this.times.push(now);
+        return true;
+    }
+
+    /** How many are counted (within ms of the last take) */
+    get count(): number {
+        return this.times.length;
+    }
+
+    /** Counts none any more */
+    clear(): void {
+        this.times = [];
+    }
+}

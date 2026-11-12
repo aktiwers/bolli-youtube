@@ -41,6 +41,10 @@ html, body { background: #0f0f0f; }
 .by-section .bd-tile--gone { opacity: 1; }
 .by-rail-logo { left: 16px; top: 30px; width: 72px; height: 60px; border-radius: 10px; }
 .by-rail-logo--focused { box-shadow: 0 0 0 4px #f1f1f1; }
+/* No logo chosen: its place is empty, an empty square while focused (it still opens the menu) */
+.by-rail-logo--none.by-rail-logo--focused { background-color: rgba(255, 255, 255, .12); }
+/* The account's picture as the logo (ui/logo.ts): a circle the box's height, centred in it (its ring round too) */
+.by-rail-logo--round { left: 22px; width: 60px; border-radius: 30px; background-size: cover; }
 .by-rail-item { left: 22px; width: 60px; height: 52px; border-radius: 12px; color: #b7b7b7; -webkit-transition: -webkit-transform .2s ease; }
 .by-rail-item--selected { color: #f1f1f1; }
 .by-rail--open .by-rail-item { width: 226px; color: #f1f1f1; }
@@ -87,7 +91,10 @@ html, body { background: #0f0f0f; }
 /* Scaled without the smooth filter: with it the TV takes ~700 ms to draw a screen's pictures, ~250 ms without (640 px
    pictures shrink a little; the difference shows only in fine text) */
 .bd-tile-img { object-fit: cover; background: #212121; image-rendering: -webkit-optimize-contrast; }
-.bd-tile--focused .bd-tile-frame { box-shadow: 0 0 0 6px #f1f1f1; }
+/* The focus ring: an element of its own over the focused tile's picture, 6 px beyond it (ui/tile-row.ts placeRing) */
+.bd-ring { position: absolute; left: 0; top: 0; z-index: 3; pointer-events: none; }
+.bd-ring-edge { width: 100%; height: 100%; box-sizing: border-box; border: 6px solid #f1f1f1; border-radius: 18px; }
+.bd-ring--round .bd-ring-edge { border-radius: 999px; }
 /* OK down on a video tile (main.ts pressTile): it gives a little at once (not animated: a layer of its own for that) */
 .by-tile--pressed { -webkit-transform: scale(.97); -webkit-transition: none; }
 /* A tile's preview: the focus ring over the video's corners (the TV's video layer draws them square) */
@@ -103,7 +110,7 @@ html, body { background: #0f0f0f; }
 .bd-tile-chip--offer { background: rgba(43, 166, 64, .2); color: #3ccf5a; }
 /* A channel's tile (in results): its picture round (the tile row makes it as wide as tall), the ring round it, its
    name and lines centred, the lines smaller (as YouTube draws it) */
-.bd-tile--round .bd-tile-frame, .bd-tile--round .bd-tile-under, .bd-tile--round .bd-tile-img { border-radius: 999px; }
+.bd-tile--round .bd-tile-frame, .bd-tile--round .bd-tile-img { border-radius: 999px; }
 .bd-tile--round .bd-tile-title, .bd-tile--round .bd-tile-line { text-align: center; }
 .bd-tile--round .bd-tile-line { font-size: 15px; }
 .bd-tile-label, .by-chapter-time { padding: 0 4px; border-radius: 4px; background: rgba(6, 6, 6, .85); font-weight: 700; color: #f1f1f1; }
@@ -300,6 +307,10 @@ html, body { background: #0f0f0f; }
 .by-langs-item--focused { background: #f1f1f1; color: #0f0f0f; }
 .by-langs-none { padding: 0 16px; line-height: 44px; font-size: 20px; color: #aaa; }
 .by-langs-keys { left: 480px; top: 176px; }
+/* The page a text is typed on (ui/text-page.ts: a custom logo's address, the home screen name), on the same page:
+   the keys in their own case (an address's path may need either), the field on one line */
+.by-address .bd-key { text-transform: none; }
+.by-address .by-langs-field { white-space: nowrap; overflow: hidden; }
 
 /* Home's search bar, as YouTube's over its rows, which go up under it (a magnifier in it, as there is no microphone) */
 .by-feed-top { height: 104px; background: #0f0f0f; }
@@ -374,6 +385,42 @@ html, body { background: #0f0f0f; }
                                                 line-height: 58px; font-size: 19px; }
 .by-settings-panel--narrow .by-settings-button .by-check { right: 24px; }
 .by-settings-panel--narrow .by-settings-note { margin-top: 22px; font-size: 16px; line-height: 22px; }
+/* A Branding setting (its choices a grid of tiles): its top, the name and the description, is half a setting's usual,
+   so the tiles have the room. Tile colour has a picture there: the chosen logo on the colour focused, as the home
+   screen's tile would show it */
+.by-settings-body--grid .by-settings-picture, .by-settings-panel--narrow .by-settings-body--grid .by-settings-picture {
+    width: 108px; height: 91px; margin-bottom: 6px; border-radius: 12px; }
+.by-settings-body--grid .by-settings-heading, .by-settings-panel--narrow .by-settings-body--grid .by-settings-heading {
+    font-size: 18px; line-height: 22px; }
+.by-settings-body--grid .by-settings-summary, .by-settings-panel--narrow .by-settings-body--grid .by-settings-summary {
+    margin-top: 4px; font-size: 14px; line-height: 19px; }
+.by-settings-body--grid .by-settings-buttons, .by-settings-panel--narrow .by-settings-body--grid .by-settings-buttons { margin-top: 18px; }
+/* A Branding setting's choices as a grid of tiles (ui/choice-button.ts choiceTile): a logo's picture, a plus (add one)
+   or a struck circle (none); the focused one white, the set one ticked in its corner; four across */
+.by-settings-buttons--grid { width: 420px; margin-left: auto; margin-right: auto; font-size: 0; text-align: left; }
+.by-settings-tile { display: inline-block; position: relative; width: 96px; height: 80px; margin: 0 12px 12px 0; border-radius: 14px;
+                    background: #3f3f3f; vertical-align: top; }
+.by-settings-buttons--grid4 .by-settings-tile:nth-child(4n) { margin-right: 0; }
+.by-settings-tile.by-settings-button--focused { box-shadow: 0 0 0 4px #f1f1f1; }
+.by-settings-tile-picture { position: absolute; left: 12px; top: 10px; width: 72px; height: 60px; object-fit: contain; }
+.by-settings-tile-picture--round { left: 18px; width: 60px; border-radius: 30px; object-fit: cover; }
+.by-settings-tile-sign { position: absolute; left: 30px; top: 22px; width: 36px; height: 36px; color: #aaa; }
+.by-settings-tile-sign svg { display: block; width: 36px; height: 36px; }
+.by-settings-tile-sign--none { box-sizing: border-box; border: 3px solid #aaa; border-radius: 18px;
+                               background: linear-gradient(to top right, transparent 45%, #aaa 45%, #aaa 55%, transparent 55%); }
+.by-settings-button--focused .by-settings-tile-sign { color: #0f0f0f; }
+.by-settings-button--focused .by-settings-tile-sign--none { border-color: #0f0f0f;
+                               background: linear-gradient(to top right, transparent 45%, #0f0f0f 45%, #0f0f0f 55%, transparent 55%); }
+.by-settings-tile .by-check { right: 4px; top: 4px; width: 20px; height: 20px; margin-top: 0; border-radius: 10px; background: #0f0f0f;
+                              color: #f1f1f1; }
+.by-settings-tile .by-check svg { width: 20px; height: 20px; }
+/* Tile colour: twelve small tiles across, each the colour itself; the focused one ringed, its colour kept */
+.by-settings-buttons--grid12 .by-settings-tile { width: 30px; height: 30px; margin: 0 5px 5px 0; border-radius: 8px; }
+.by-settings-buttons--grid12 .by-settings-tile:nth-child(12n) { margin-right: 0; }
+/* (a thin edge: the darkest ones are the panel's own colour) */
+.by-settings-tile--color { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .22); }
+.by-settings-tile--color.by-settings-button--focused { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .22), 0 0 0 3px #0f0f0f, 0 0 0 6px #f1f1f1; }
+.by-settings-buttons--grid12 .by-settings-tile .by-check { right: 5px; top: 5px; }
 .by-question { padding-top: 122px; box-sizing: border-box; background: #0f0f0f; }
 /* Settings › Shortcuts: Settings' look, its list wider for each entry's button (on the right, small and grey, a colour
    button's dot before it), "Now:" in white under what it does, every button's two places as lines; setting one: as
@@ -725,7 +772,14 @@ html, body { background: #0f0f0f; }
    (to 573), the search bar over it, its picture small beside its name, handle and subscribers, three lines of its
    description and "...more", Play mix and Subscribe as pills; its rows 64 px from the left. In its rows the header and the
    banner go, the search bar stays over the rows on the dark. */
-.by-channel-banner { left: 0; top: 0; width: 1280px; height: 573px; object-fit: cover; -webkit-transition: opacity .3s ease; }
+/* (its background, the page's colour: the TV's browser draws a bare picture that is a layer of its own, as while it
+   fades or under the banner's video, whole and squeezed into its box, then snaps it to the crop; with a background
+   it is drawn as laid out) */
+/* (scaled by the cheap filter, as the tiles' pictures: the smooth one took the TV ~0.5 s to draw a banner for the first
+   time, this one ~0.1 s; no difference to see in a 1280 px picture shown 1.5 times its size) */
+.by-channel-banner { left: 0; top: 0; width: 1280px; height: 573px; object-fit: cover; background-color: #0f0f0f; image-rendering: -webkit-optimize-contrast;
+                     -webkit-transition: opacity .3s ease; }
+.by-black .by-channel-banner { background-color: #000; }
 .by-channel-shade { height: 573px; background-image: -webkit-linear-gradient(left, rgba(0, 0, 0, .35), rgba(0, 0, 0, 0) 720px); }
 .by-channel--rows .by-channel-banner, .by-channel--rows .by-channel-shade { opacity: 0; }
 .by-channel-banner, .by-channel-shade, .by-channel-top { pointer-events: none; }
@@ -746,7 +800,12 @@ html, body { background: #0f0f0f; }
 .by-channel-buttons .by-pill { margin-right: 17px; height: 48px; line-height: 48px; padding: 0 24px; font-size: 17px; }
 .by-channel-buttons .by-pill--on { background: rgba(15, 15, 15, .55); color: #f1f1f1; }
 .by-channel-buttons .by-pill--focused { background: #f1f1f1; color: #0f0f0f; }
-.by-pill-icon { display: inline-block; width: 24px; height: 24px; margin: -6px 8px 0 -4px; vertical-align: middle; }
+/* (the drawing a block: left in the pill's 48 px line it hung 6 px under its box) */
+.by-pill-icon { display: inline-block; width: 24px; height: 24px; margin: -3px 8px 0 -4px; vertical-align: middle; }
+.by-pill-icon svg { display: block; }
+/* (Subscribed's bell: there while subscribed) */
+.by-pill-bell { display: none; }
+.by-pill--on .by-pill-bell { display: inline-block; }
 .by-channel-mic { left: 64px; }
 .by-channel-bar { left: 124px; }
 
@@ -766,18 +825,22 @@ html, body { background: #0f0f0f; }
 .by-tab-icon { display: inline-block; width: 22px; height: 22px; margin-right: 11px; vertical-align: -5px; }
 
 /* The loading sign: the app's logo (a screen loading) or the channel's round picture (a video
-   starting) dimmed, a bright copy filling in from the left; the logo pulses gently */
+   starting) dimmed, a bright copy filling in from the left; the logo pulses gently (a custom one of another shape
+   fitted in its box) */
 .by-loader-pulse { width: 216px; height: 181px; margin: -90px 0 0 -108px; -webkit-animation: by-pulse 2s ease-in-out infinite; }
-.by-loader-image { width: 216px; height: 181px; }
+.by-loader-image { width: 216px; height: 181px; object-fit: contain; }
 .by-loader-pulse > .by-loader-image { opacity: .2; }
 .by-loader-box, .by-loader-inner { -webkit-transition: -webkit-transform 1.2s cubic-bezier(.2, .7, .3, 1); }
-/* A video's start: no pulse; its fill quick and even, as it follows the start's steps and then the frames the TV
-   decodes (player/own-player.ts: full just before the picture); the channel's picture in a light ring (as the focus
-   ring) with a black line round it */
+/* A video's start: no pulse; its fill one slide, its length and easing set by the player (player/own-player.ts: nearly
+   full when the video is due, full as the picture comes); the channel's picture in a light ring (as the focus ring)
+   with a black line round it */
 .by-loader--round .by-loader-pulse { width: 128px; height: 128px; margin: -64px 0 0 -64px; -webkit-animation: none;
                                      border-radius: 64px; box-shadow: 0 0 0 4px #f1f1f1, 0 0 0 7px #000; }
 .by-loader--round .by-loader-box, .by-loader--round .by-loader-inner { -webkit-transition: -webkit-transform .2s linear; }
 .by-loader--round .by-loader-image { width: 128px; height: 128px; border-radius: 64px; object-fit: cover; }
+/* The account's picture as the logo: a circle the logo box's height, centred */
+.by-loader--account .by-loader-pulse { width: 181px; margin-left: -90px; }
+.by-loader--account .by-loader-image { width: 181px; border-radius: 91px; object-fit: cover; }
 @-webkit-keyframes by-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .65; } }
 
 /* Subscriptions, as in YouTube's phone app: round channel pictures in a row at the top (a blue dot on those

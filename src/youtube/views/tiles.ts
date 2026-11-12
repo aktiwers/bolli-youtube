@@ -323,7 +323,9 @@ export class VideoTiles {
             var shape = shelf.style === 'square' || shelf.style === 'round' ? m.square : shelf.style === 'game' ? m.game : shelf.style === 'poster' ? m.poster : m.tile;
             return new TileRow({ title: word(shelf.title), subtitle: shelf.subtitle, icon: shelf.icon, shape: shape, layout: shelf.subtitle ? layout : plain,
                 extraHeight: shelf.subtitle && lines ? lines.taller : 0,
-                items: self.items(shelf.videos), noWrap: true, bigShape: self.big && shape === m.tile ? m.big : undefined,
+                // (made when the row nears the view: titles are tidied, lengths looked up and DeArrow asked only for
+                // rows that are reached; making every row of a reply at once held the keys ~0.1 s)
+                make: function () { return self.items(shelf.videos); }, noWrap: true, bigShape: self.big && shape === m.tile ? m.big : undefined,
                 wideShape: shape === m.poster ? m.posterWide : undefined, lazy: true });
         });
     }

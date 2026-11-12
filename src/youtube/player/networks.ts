@@ -3,7 +3,10 @@
 // another network's host. A request that gets no data for STALL_MS (stallWatch) passes its network over for
 // STALLED_MS (a cache node of the viewer's provider can hang), one that gets no answer at all for UNANSWERED_MS only
 // (the TV's own connection may have dropped): the video's requests go to another (onNetwork), the next video's too.
-// When all have failed, the one that failed longest ago is tried again.
+// When all have failed, the one that failed longest ago is tried again. A media request without an answer from the
+// last network left to ask, or the window's 'offline', marks the TV's line as lost (lineLost); the next answer, or
+// 'online', as back (the fallback ladder renews again after a loss; a picture standing while the line is down is no
+// stall).
 
 import { note } from './play-log.js';
 
@@ -14,6 +17,49 @@ var STALLED_MS = 30 * 60 * 1000;
 var UNANSWERED_MS = 2 * 60 * 1000;
 /** Networks that failed lately: when, and when they may be used again */
 var failures: { [network: string]: { at: number; until: number } } = {};
+/** When the line was last lost (0: never), whether it is down now, and who hears that it answered again */
+var lostAt = 0;
+var down = false;
+var backs: (() => void)[] = [];
+
+/** The line is lost now: a media request got no answer, or the window went offline */
+export function lineLost(): void {
+    lostAt = Date.now();
+    down = true;
+}
+
+/** Something answered: the line is up (after a loss, onLineBack's listeners are told) */
+export function lineAnswered(): void {
+    if (!down) {
+        return;
+    }
+    down = false;
+    for (var i = 0; i < backs.length; i++) {
+        backs[i]();
+    }
+}
+
+/** When the line was last lost (0: never) */
+export function lastLost(): number {
+    return lostAt;
+}
+
+/** Whether the line is down: lost within UNANSWERED_MS, and nothing answered since (requests that hang without an
+ * error tell nothing of the line: after that long they count as on a line that is up) */
+export function lineDown(): boolean {
+    return down && Date.now() - lostAt < UNANSWERED_MS;
+}
+
+/** f is called each time the line answers again after a loss */
+export function onLineBack(f: () => void): void {
+    backs.push(f);
+}
+
+// (a short cable drop may not fire these on a TV: the requests' own answers tell it too)
+if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('offline', lineLost);
+    window.addEventListener('online', lineAnswered);
+}
 
 /** u on the first of its networks that has not failed lately (its own, then the others in mn's order); if all have,
  * the one that failed longest ago */
@@ -37,17 +83,20 @@ export function onNetwork(u: string): string {
 }
 
 /** A request to u got no data (stalled) or no answer: its network is passed over for a while, and true when another
- * of the video's networks has not failed lately (the request goes there at once; noted) */
+ * of the video's networks has not failed lately (the request goes there at once; noted). No answer with no other
+ * network left to ask (or none named) counts as the line lost (lineLost): one server failing alone is not the line. */
 export function networkFailed(u: string, stalled: boolean): boolean {
     var n = networksOf(u);
-    if (n.own < 0) {
-        return false;
+    var other = false;
+    if (n.own >= 0) {
+        var own = n.all[n.own].name;
+        failures[own] = { at: Date.now(), until: Date.now() + (stalled ? STALLED_MS : UNANSWERED_MS) };
+        other = n.all.some(function (x) { return x.name !== own && !failed(x.name); });
     }
-    var own = n.all[n.own].name;
-    failures[own] = { at: Date.now(), until: Date.now() + (stalled ? STALLED_MS : UNANSWERED_MS) };
-    var other = n.all.some(function (x) { return x.name !== own && !failed(x.name); });
     if (other) {
         note('network', (stalled ? 'no data' : 'no answer') + ': the next one');
+    } else if (!stalled) {
+        lineLost();
     }
     return other;
 }
@@ -78,7 +127,8 @@ function networksOf(u: string): { all: { name: string; n: number }[]; own: numbe
 }
 
 /** xhr to u gets no answer (an error) or, when watched, no data (stallWatch): moved() when another of the video's
- * networks is there to ask at once (networkFailed), else failed() */
+ * networks is there to ask at once (networkFailed), else failed(). Its answer, whatever its status, tells the line is
+ * up (lineAnswered). */
 export function onLost(xhr: XMLHttpRequest, u: string, moved: () => void, failed: () => void, watched: boolean): void {
     var lost = function (stalled: boolean): void {
         if (networkFailed(u, stalled)) {
@@ -90,6 +140,7 @@ export function onLost(xhr: XMLHttpRequest, u: string, moved: () => void, failed
     xhr.onerror = function () {
         lost(false);
     };
+    xhr.addEventListener('load', lineAnswered);
     if (watched) {
         stallWatch(xhr, function () { lost(true); });
     }

@@ -1,18 +1,25 @@
 // The left rail, as in YouTube's TV app: the logo at the top (OK opens its menu, including Settings), section
 // icons below it, the clock at the top right. When focused it expands to show the section names. Up/Down move
 // the focus at once but switch the section only once the focus rests (REST_MS), since drawing a screen takes the
-// TV a few hundred ms and would stutter on every section passed; Right or OK enter it at once. A click (the Magic
-// Remote's pointer) is OK on the item, the logo or a menu entry under it. Icons: ui/icons.ts.
+// TV a few hundred ms and would stutter on every section passed; a section that stands ready (drawn out of sight:
+// the app says so) has nothing to draw and shows with the step. Right or OK enter a section at once. A click (the Magic
+// Remote's pointer) is OK on the item, the logo or a menu entry under it. Icons: ui/icons.ts. With no logo chosen
+// (Settings › Look › Logo) the logo's place is empty but still takes the focus (an empty square then) and opens the
+// menu as ever.
 
 import { h, setClass, setShown, setSrc, setText } from '../core/dom.js';
 import { KEY, KeyHandler } from '../core/keys.js';
 import { takesPointer } from '../core/pointer.js';
 import { icon } from '../ui/icons.js';
+import { drawLogo } from '../ui/logo.js';
 import { metrics } from '../ui/theme.js';
 
 /** The focused section shows after the focus rests this long (drawing one takes the TV ~300 ms, which delays the
  * next key step) */
 var REST_MS = 500;
+/** One that stands ready: right after the highlight's frame (in the same frame the highlight would wait ~0.1 s for
+ * the section's tiles) */
+var READY_MS = 40;
 
 export interface RailItem {
     id: string;
@@ -37,6 +44,10 @@ export interface RailEntry {
 export class Rail implements KeyHandler {
     el: HTMLElement;
     private logo: HTMLElement;
+    /** The logo is the account's picture, drawn round */
+    private logoRound = false;
+    /** No logo is drawn (Settings › Look › Logo): its place is empty, an empty square while focused */
+    private noLogo = false;
     private drop: HTMLElement;
     private dropEls: HTMLElement[] = [];
     private entries: RailEntry[] = [];
@@ -56,10 +67,11 @@ export class Rail implements KeyHandler {
     /** Shows the focused section once the focus rests there */
     private restTimer = 0;
 
-    /** onSelect: a section is shown (rested: the focus rested on its entry; else Right or OK entered it); logoEntries:
-     * builds the logo's menu in its current state */
+    /** onSelect: a section is shown (rested: the focus rested on its entry or passes it; else Right or OK entered it);
+     * logoEntries: builds the logo's menu in its current state; ready: section id shows with nothing to draw (no rest
+     * needed before it) */
     constructor(private items: RailItem[], private onSelect: (id: string, rested: boolean) => void, private onLeave: () => void,
-                private logoEntries: () => RailEntry[]) {
+                private logoEntries: () => RailEntry[], private ready: (id: string) => boolean) {
         this.el = h('div', 'by-rail');
         this.el.appendChild(h('div', 'by-rail-shade'));
         this.logo = h('div', 'by-rail-logo');
@@ -89,7 +101,15 @@ export class Rail implements KeyHandler {
         this.el.appendChild(this.drop);
         this.clock = h('div', 'by-clock');
         this.el.appendChild(this.clock);
-        this.mark();
+        // The chosen logo (Settings › Look › Logo), drawn anew when another is chosen (the account's picture round),
+        // marked with the rest
+        var self = this;
+        drawLogo(function (file, round) {
+            self.logo.style.backgroundImage = file ? 'url(' + file + ')' : '';
+            self.logoRound = round;
+            self.noLogo = !file;
+            self.mark();
+        });
     }
 
     /** Renames item id (YouTube's guide names) */
@@ -197,15 +217,20 @@ export class Rail implements KeyHandler {
         });
     }
 
-    /** Focuses an item (its section shows once the focus rests there) or the logo (-1) */
+    /** Focuses an item (its section shows once the focus rests there; at once if it stands ready) or the logo (-1) */
     private go(at: number): void {
         this.at = at;
         clearTimeout(this.restTimer);
         if (at >= 0 && at !== this.selected) {
             var self = this;
-            this.restTimer = setTimeout(function () { self.showNow(true); }, REST_MS) as unknown as number;
+            this.restTimer = setTimeout(function () { self.showNow(true); }, this.ready(this.items[at].id) ? READY_MS : REST_MS) as unknown as number;
         }
         this.mark();
+    }
+
+    /** The item with the focus ('': the logo, or the rail has none) */
+    get focusedId(): string {
+        return this.focused && this.at >= 0 ? this.items[this.at].id : '';
     }
 
     /** Shows the focused item's section now (the focus rested, or entered the section) */
@@ -275,7 +300,8 @@ export class Rail implements KeyHandler {
 
     private mark(): void {
         setClass(this.el, this.focused ? 'by-rail by-rail--open' : 'by-rail');
-        setClass(this.logo, this.focused && this.at < 0 ? 'by-rail-logo by-rail-logo--focused' : 'by-rail-logo');
+        setClass(this.logo, 'by-rail-logo' + (this.logoRound ? ' by-rail-logo--round' : '') + (this.noLogo ? ' by-rail-logo--none' : '') +
+            (this.focused && this.at < 0 ? ' by-rail-logo--focused' : ''));
         for (var i = 0; i < this.els.length; i++) {
             var cls = this.tops[i] ? 'by-rail-item by-rail-item--top' : 'by-rail-item';
             if (i === this.selected) {

@@ -39,6 +39,18 @@ export interface WatchInfo {
     chapters: Chapter[];
     /** A live stream's chat: the token for its first messages ('' none; api/live-chat.ts) */
     chat: string;
+    /** The description as YouTube's app shows it, in the language asked ('' none) */
+    description: string;
+    /** YouTube's boxes under the description, in its order (empty: none) */
+    notes: WatchNote[];
+}
+
+/** A box under a video's description, named and worded by YouTube: its AI summary (under: its caution), how the video
+ * was made (under: the kind, as "Auto-dubbed") */
+export interface WatchNote {
+    title: string;
+    under: string;
+    text: string;
 }
 
 /** A chapter of a video: its name, where it begins (s), YouTube's picture of it ('' none) */
@@ -286,6 +298,12 @@ export function watchInfoOf(reply: any): WatchInfo {
     var owner = get(meta, 'owner', 'videoOwnerRenderer') || {};
     var panels: any[] = (reply && reply.engagementPanels || []).map(function (p: any) { return p.engagementPanelSectionListRenderer || {}; });
     var panel = function (id: string): any { return panels.filter(function (p) { return p.panelIdentifier === id; })[0]; };
+    // The description panel's parts, each under its renderer's name
+    var described: any[] = get(panel('video-description-ep-identifier'), 'content', 'structuredDescriptionContentRenderer', 'items') || [];
+    var part = function (kind: string): any {
+        return described.filter(function (item) { return !!(item && item[kind]); }).map(function (item) { return item[kind]; })[0];
+    };
+    var body = part('expandableVideoDescriptionBodyRenderer');
     var sets = get(results, 'autoplay', 'autoplay', 'sets') || [];
     var buttons = get(reply, 'transportControls', 'transportControlsRenderer', 'buttons');
     var likeButton = first(buttons, 'likeButtonRenderer');
@@ -315,8 +333,28 @@ export function watchInfoOf(reply: any): WatchInfo {
         like: likeOf(likeButton),
         subscribe: subscribeOf(subscribeButton),
         chapters: chaptersOf(reply),
-        chat: get(results, 'conversationBar', 'liveChatRenderer', 'continuations', 0, 'reloadContinuationData', 'continuation') || ''
+        chat: get(results, 'conversationBar', 'liveChatRenderer', 'continuations', 0, 'reloadContinuationData', 'continuation') || '',
+        description: text(get(body, 'descriptionBodyText')) || text(get(body, 'attributedDescriptionBodyText')),
+        notes: notesOf(part('expandableMetadataRenderer'), part('howThisWasMadeSectionViewModel'))
     };
+}
+
+/** The boxes under a description: YouTube's AI summary (its paragraphs) and how the video was made, each only with a
+ * text */
+function notesOf(summary: any, made: any): WatchNote[] {
+    var notes: WatchNote[] = [];
+    var paragraphs: any[] = get(summary, 'expandedContent', 'videoSummaryContentViewModel', 'paragraphs') || [];
+    var told = paragraphs.map(function (p) { return text(get(p, 'videoSummaryParagraphViewModel', 'text')); })
+        .filter(function (t) { return !!t; }).join('\n\n');
+    var header = get(summary, 'header') || {};
+    if (told) {
+        notes.push({ title: text(header.expandedTitle) || text(header.collapsedLabel), under: text(header.expandedSubtitle), text: told });
+    }
+    var how = text(get(made, 'bodyText'));
+    if (how) {
+        notes.push({ title: text(get(made, 'sectionTitle')), under: text(get(made, 'bodyHeader')), text: how });
+    }
+    return notes;
 }
 
 /** A /next reply's chapters (chapter-type macro markers in its entity updates) */

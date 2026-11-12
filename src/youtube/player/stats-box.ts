@@ -68,7 +68,7 @@ export class StatsBox {
         this.writtenAt = Date.now();
         (this.el as HTMLElement).textContent = [
             'Video ID: ' + s.id,
-            'Viewport / Frames: ' + window.innerWidth + 'x' + window.innerHeight + ' / ' + ((v.webkitDroppedFrameCount || 0) - this.dropped) + ' dropped of ' + ((v.webkitDecodedFrameCount || 0) - this.decoded),
+            'App UI / Frames: ' + window.innerWidth + 'x' + window.innerHeight + ' / ' + ((v.webkitDroppedFrameCount || 0) - this.dropped) + ' dropped of ' + ((v.webkitDecodedFrameCount || 0) - this.decoded),
             'Current / Optimal Res: ' + v.videoWidth + 'x' + v.videoHeight + ' (' + res(s.video) + ') / ' + res(s.best),
             'Codecs: ' + codec(s.video) + ' / ' + codec(s.audio),
             'Bitrate: ' + kbps(s.video) + ' kbps / ' + kbps(s.audio) + ' kbps',

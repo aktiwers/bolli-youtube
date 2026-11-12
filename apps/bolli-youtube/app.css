@@ -3,6 +3,8 @@
 
 /* The hidden youtube.com page that API requests are sent from (api/youtube.ts) */
 .by-hidden { position: absolute; left: -9999px; top: 0; width: 10px; height: 10px; border: 0; }
+/* A screen standing by (core/dom.ts standsBy): drawn but below the screen's foot, where the stage cuts it off */
+.by-standby { -webkit-transform: translate3d(0, 800px, 0); }
 
 /* YouTube's TV app (player/tv-app.ts): over everything while a video plays.
    Its page is laid out at 1920x1080 and shrunk to the app's 1280x720 units: the whole window on any TV. */
@@ -45,9 +47,7 @@
 .by-page-byline-icon { display: inline-block; vertical-align: middle; line-height: 0; }
 .by-page-back { position: absolute; line-height: 0; }
 .by-rail-shade { position: absolute; left: 0; top: 0; height: 720px; }
-.by-rail-logo { position: absolute; background: url(logo.webp) center / contain no-repeat; }
-/* webOS TV 2.x's engine decodes no WebP (promise.js) */
-.by-old-engine .by-rail-logo { background-image: url(logo.png); }
+.by-rail-logo { position: absolute; background: center / contain no-repeat; }
 .by-rail-item { position: absolute; overflow: hidden; }
 .by-rail-icon { position: absolute; }
 .by-rail-icon svg { display: block; }
@@ -87,6 +87,11 @@
 .by-settings-body--code .by-settings-code { display: block; }
 .by-settings-link, .by-settings-button { text-align: left; }
 .by-settings-button { position: relative; }
+/* The choices and their note: for a grid of tiles they alone scroll (by-settings-scroll, views/settings.ts
+   scrollPanel) under the setting's name and description, which stay, their box clipping them there; other settings
+   scroll whole */
+.by-settings-choices { position: relative; overflow: hidden; }
+.by-settings-scroll { position: relative; }
 .by-question { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; z-index: 20; text-align: center; }
 /* Screen off: over everything, the player, YouTube's and the toasts too (ui/screen-off.ts); its effects' looks */
 .by-screen-off { position: fixed; left: 0; top: 0; width: 1280px; height: 720px; z-index: 70; overflow: hidden; }

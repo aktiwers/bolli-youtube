@@ -7,19 +7,21 @@
 // is hidden, keeping focus on the same video. Rows older than REFRESH_MS are
 // refreshed the same way.
 
-import { h, LAYOUT_HEIGHT, LAYOUT_WIDTH, setShown, setText, toggleClass, translate } from '../core/dom.js';
+import { h, LAYOUT_HEIGHT, LAYOUT_WIDTH, setShown, setText, standsBy, toggleClass, translate } from '../core/dom.js';
 import { tr } from '../core/i18n.js';
-import { KEY } from '../core/keys.js';
+import { KEY, lastKeyAt } from '../core/keys.js';
 import { canListen } from '../core/platform.js';
 import { mark } from '../core/perf.js';
 import { afterClick, takesPointer, toPart } from '../core/pointer.js';
 import { View } from '../core/view.js';
 import { RowStack } from '../ui/row-stack.js';
 import { TileItem, TileRow } from '../ui/tile-row.js';
-import { more, Nudge, PageButton, PlaylistInfo, Rows, Shelf, Tab, Video } from '../api/feed.js';
+import { keepTab, keptTab, keptTabs, more, Nudge, PageButton, PlaylistInfo, Rows, Shelf, Tab, Video } from '../api/feed.js';
 import { prefs } from '../api/prefs.js';
 import { Pills } from '../ui/pills.js';
-import { FillLoader, LOGO } from '../ui/fill-loader.js';
+import { FillLoader } from '../ui/fill-loader.js';
+import { homeScreen } from '../ui/home-screen.js';
+import { logo, logoRound, rowsDrawn } from '../ui/logo.js';
 import { icon } from '../ui/icons.js';
 import { metrics, RowSpacing, word } from '../ui/theme.js';
 import { listButtons, ListStage, shuffle } from './list-stage.js';
@@ -56,6 +58,8 @@ var EMPTY_TILES = 4;
 /** Rows drawn off screen (a screen built ahead, fresh rows replacing hidden ones) keep their images this long, so
  * they are cached when shown, then release them like a hidden screen */
 var HIDDEN_IMAGES_MS = 4000;
+/** A screen kept out of sight takes its waiting fresh rows once the keys have rested this long */
+var FRESH_REST_MS = 1500;
 
 /** A copy of rows with video inserted in shelf s (or the last) at index i (for rows that lack it) */
 function withVideo(rows: Rows, video: Video, s: number, i: number): Rows {
@@ -234,6 +238,10 @@ export interface FeedOptions {
     kept?: () => KeptFeed | null;
     /** Rows this old are refreshed behind the ones shown (default REFRESH_MS) */
     refreshMs?: number;
+    /** Fresh rows that differ from the ones shown replace them at once while the focus is not in the rows (a channel's
+     * page, the focus on its header: a copy kept from hours ago would else hide a new video for the whole visit);
+     * else, as ever, once the rows are out of view */
+    freshUnfocused?: boolean;
     /** Show the logo loader while the first rows load without a cache (the start screen only) */
     logo?: boolean;
     /** Fade the rows in as they arrive (a page: no loader while it loads) */
@@ -294,6 +302,8 @@ export class FeedView implements View {
     /** The video played from here: its tile stays when fresh rows replace the ones under it */
     private played = '';
     private restTimer = 0;
+    /** Not shown but kept drawn (keep) */
+    private kept = false;
     private stack: RowStack;
     private tiles = new VideoTiles();
     private paging = new Paging(this.tiles);
@@ -412,8 +422,10 @@ export class FeedView implements View {
     /** rest: shown in passing (moving through the rail): fetch only after it has shown for REST_MS */
     show(rest?: boolean): void {
         this.shown = true;
+        this.kept = false;
         this.covered = false;
         this.tiles.rebrand();
+        standsBy(this.el, false);
         setShown(this.el, true);
         this.stack.setShown(true);
         if (!this.asked) {
@@ -443,9 +455,64 @@ export class FeedView implements View {
 
     hide(): void {
         this.shown = false;
+        this.kept = false;
+        standsBy(this.el, false);
         setShown(this.el, false);
         this.stack.setShown(false);
         this.freshenAfterClick();
+    }
+
+    /** Not shown, but its rows stay drawn with their pictures (the screen around it keeps it out of sight: View
+     * standBy). False: no rows to keep, hidden instead. */
+    keep(): boolean {
+        if (!this.hasRows) {
+            this.hide();
+            return false;
+        }
+        this.shown = false;
+        this.kept = true;
+        setShown(this.el, true);
+        this.stack.setShown(true);
+        this.freshenAtRest();
+        return true;
+    }
+
+    /** Kept out of sight with fresh rows waiting: they are swapped in once no key has come for FRESH_REST_MS (the
+     * swap draws the rows anew, ~0.1 s the keys would wait: not within the key that put the screen aside) */
+    private freshenAtRest(): void {
+        var self = this;
+        if (!this.fresh) {
+            return;
+        }
+        (function look(): void {
+            if (!self.kept || !self.fresh || self.dead) {
+                return;
+            }
+            var rested = Date.now() - lastKeyAt();
+            if (rested >= FRESH_REST_MS) {
+                self.freshen();
+            } else {
+                setTimeout(look, FRESH_REST_MS - rested);
+            }
+        })();
+    }
+
+    standBy(): boolean {
+        var kept = this.keep();
+        standsBy(this.el, kept);
+        return kept;
+    }
+
+    /** Asks for its rows and draws them out of sight, kept from the start (View.drawAhead); inner: within a screen that
+     * stands by itself */
+    drawAhead(inner?: boolean): void {
+        this.kept = true;
+        standsBy(this.el, !inner);
+        setShown(this.el, true);
+        this.stack.setShown(true);
+        if (!this.asked) {
+            this.fetch();
+        }
     }
 
     /** Closed for good (a page left with Back): late replies are dropped, nothing more is fetched or branded for it */
@@ -516,7 +583,12 @@ export class FeedView implements View {
     }
 
     setFocused(focused: boolean): void {
+        var left = this.focused && !focused;
         this.focused = focused;
+        // (the focus left the rows with other rows waiting: opts.freshUnfocused)
+        if (left && this.freshNow()) {
+            this.freshen(true);
+        }
         this.stack.setFocused(focused && this.at === 'rows');
         this.tabPills.setFocused(focused && this.at === 'tabs');
         this.buttonPills.setFocused(focused && this.at === 'buttons');
@@ -787,6 +859,13 @@ export class FeedView implements View {
         } });
     }
 
+    /** The token of the tab whose chip has the focus, unless it is the one shown ('': none): its tiles are asked for
+     * ahead once the focus has rested there (main.ts pageFocused), so OK has them at hand */
+    focusedTab(): string {
+        var tab = this.focused && this.at === 'tabs' ? this.tabs[this.tabPills.at] : null;
+        return tab && !tab.chosen && keptTabs(tab) ? tab.token : '';
+    }
+
     /** Keys on YouTube's message: Left/Right move along its buttons, OK presses one, Up goes to the search bar */
     private nudgeKey(code: number): boolean {
         var self = this;
@@ -997,7 +1076,7 @@ export class FeedView implements View {
         var title = this.headingText.textContent || '';
         var tabs = this.tabs.map(function (t) { return { title: t.title, chosen: t === tab, token: t.token }; });
         this.reloadAs(function () {
-            return more(tab.token).then(function (rows) {
+            return (keptTabs(tab) ? keptTab(tab.token) : more(tab.token)).then(function (rows) {
                 rows.title = title;
                 rows.tabs = tabs;
                 return rows;
@@ -1058,8 +1137,8 @@ export class FeedView implements View {
                 setText(this.status, '');
             }
             // Cached rows at once while these load (without a cache: the loader, if enabled)
-            if (!quiet && !this.drawKept() && this.loader) {
-                this.loader.show(LOGO, LOADING_FILL);
+            if (!quiet && !this.drawKept() && this.loader && logo()) {
+                this.loader.show(logo(), LOADING_FILL, logoRound());
             }
         }
         clearTimeout(this.restTimer);
@@ -1107,6 +1186,9 @@ export class FeedView implements View {
         this.stale = true;
         this.unchecked = kept;
         mark('keptRows');
+        // (a custom logo shown by its address loads only now)
+        rowsDrawn();
+        homeScreen();
         // Check failed (youtube.com's page did not load): treat them as not the account's
         var other = function (): void {
             if (self.unchecked === kept) {
@@ -1136,7 +1218,7 @@ export class FeedView implements View {
         var self = this;
         var stack = this.stack;
         setTimeout(function () {
-            if (!self.shown && stack === self.stack) {
+            if (!self.shown && !self.kept && stack === self.stack) {
                 stack.setShown(false);
             }
         }, HIDDEN_IMAGES_MS);
@@ -1166,7 +1248,7 @@ export class FeedView implements View {
                 if (!self.grid) {
                     self.paging.setNext(rows ? rows.next : '');
                 }
-                self.freshen();
+                self.freshen(self.freshNow());
             } else {
                 self.stale = false;
                 self.drawFresh(rows, rows ? rows.at : undefined);
@@ -1203,6 +1285,8 @@ export class FeedView implements View {
         this.draw(rows);
         this.fetchedAt = at || Date.now();
         mark('rows');
+        rowsDrawn();
+        homeScreen();
         this.aheadInSight();
     }
 
@@ -1238,13 +1322,22 @@ export class FeedView implements View {
         });
     }
 
+    /** Whether waiting fresh rows are to replace the shown ones although these are in view: opts.freshUnfocused, the
+     * focus outside the rows, and rows that differ from the ones shown (their first ones: more may have been loaded
+     * below) */
+    private freshNow(): boolean {
+        var fresh = this.fresh && this.fresh.rows;
+        return !!this.opts.freshUnfocused && !this.focused && !!fresh && !this.grid &&
+            idsOf(fresh.shelves) !== idsOf(this.paging.shelves.slice(0, fresh.shelves.length));
+    }
+
     /** Swaps in the fresh rows once out of view (covered by a video, or hidden), keeping focus on the same video. The
      * tile last opened from here (a video, or a page hiding the screen), or under the focus while a video covers the
      * screen (one opened by the pointer in place, or cast), keeps its place even if the fresh rows lack it, so Back
      * returns to it */
-    private freshen(): void {
+    private freshen(now?: boolean): void {
         var fresh = this.fresh;
-        if (!fresh || this.shown && !this.covered && !document.hidden) {
+        if (!fresh || !now && this.shown && !this.covered && !document.hidden) {
             return;
         }
         var row = this.stack.row;
@@ -1293,8 +1386,8 @@ export class FeedView implements View {
         this.stack.setRows([]);
         if (this.loading) {
             this.settled = false;
-            if (this.loader) {
-                this.loader.show(LOGO, LOADING_FILL);
+            if (this.loader && logo()) {
+                this.loader.show(logo(), LOADING_FILL, logoRound());
             }
         } else if (this.asked) {
             // The fetch failed (if passed by, it is fetched when shown)
@@ -1333,6 +1426,11 @@ export class FeedView implements View {
         self.col = 0;
         setText(self.headingText, rows ? word(rows.title) : '');
         self.tabs = rows && rows.tabs || [];
+        // (the shown tab's tiles kept under its token: back to it from another tab asks nothing)
+        var chosen = self.tabs.length >= 2 ? self.tabs.filter(function (t) { return t.chosen; })[0] : null;
+        if (rows && chosen && keptTabs(chosen)) {
+            keepTab(chosen.token, rows);
+        }
         self.buildTabs();
         self.buttons = list ? listButtons(rows && rows.buttons || [], rows && rows.playlistId || undefined) : rows && rows.buttons || [];
         self.drawButtons();
@@ -1387,7 +1485,7 @@ export class FeedView implements View {
             stack.setReach(Math.ceil((LAYOUT_HEIGHT - m.list.top) / m.list.pitch) - 1);
         }
         stack.setFocused(this.focused && this.at === 'rows');
-        stack.setShown(this.shown);
+        stack.setShown(this.shown || this.kept);
         // (over a playlist's frame)
         this.el.insertBefore(stack.el, this.stage ? this.stage.back.nextSibling : this.el.firstChild);
         return stack;

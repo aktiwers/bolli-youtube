@@ -1,6 +1,7 @@
 // The app's settings, stored on the device (core/store).
 // skip: SponsorBlock categories to skip (api/sponsorblock.ts PARTS; empty: off).
 // quality: start height (0: Auto, HIGHEST: the most a video has).
+// codec: the video codec a start prefers (api/streams.ts preferred): 'auto', 'vp9', 'av1' or 'h264'.
 // preload: prepare the focused tile's video (player/preload.ts).
 // history: report watched videos to YouTube (api/stats.ts).
 // captions: subtitle language turned on by default ('' none).
@@ -8,13 +9,19 @@
 // startPicture: what shows under it until the video moves: 'tile' (its tile's picture), 'frame' (its frame where it
 // starts, from the storyboard) or 'none'.
 // videoClock: the time of day over a video in the app's player: 'off', 'left' or 'right' (the top corner).
+// chaptersPause: the video pauses while its chapters are picked from (Up in the app's player).
+// quickJumps: a jump in a video lands in a window of its own, as a start does (player/dash.ts narrow).
 // pureBlack: the screens' background pure black instead of the theme's dark grey (ui/theme.ts applyBlack).
+// logo: the logo the app draws, by its id (ui/logo.ts LOGOS; 'none': no logo).
+// homeIcon, homeName, homeColor: the app's logo, name and tile colour on the TV's home screen (ui/home-screen.ts; webOS).
 // chatMode, chatPosition, chatHeight, chatBottom, chatSide, chatPicture, chatBox, chatSize, chatBackground, chatTimes, chatAvatars, chatFade: where a
 // live stream's chat shows and how it looks (player/chat-settings.ts).
+// channelVideo: a channel's video plays in its banner while the focus rests on Play mix (main.ts preloadFocused).
 // listLayout, listPreview, listAutoplay, listNumbers, listDetails, listButtons, listCarryOn, listKeep: a playlist's page
 // (views/list-stage.ts); listNext, listDown, listSide: the playlist in the player (player/list-panel.ts).
 // shortcuts: the remote's spare buttons (api/shortcuts.ts, Settings › Shortcuts: views/shortcuts.ts).
 // screenOff: how the screen goes black while the sound plays on (ui/screen-off.ts).
+// versionCheck: whether the app asks once a day if a newer version is out, and tells it (api/version-check.ts).
 
 import { KEY as BUTTON } from '../core/keys.js';
 import { load, save } from '../core/store.js';
@@ -32,6 +39,7 @@ export interface Prefs {
     theme: string;
     startPage: string;
     quality: number;
+    codec: 'auto' | 'vp9' | 'av1' | 'h264';
     preload: boolean;
     history: boolean;
     autoplay: boolean;
@@ -40,6 +48,8 @@ export interface Prefs {
     stableVolume: boolean;
     /** Preview of the focused tile: 'off', 'muted' or 'sound' */
     previews: string;
+    /** A channel's video plays in its banner while the focus rests on Play mix (as Previews says: with sound or without) */
+    channelVideo: boolean;
     captions: string;
     /** Auto-generated subtitles: 'words' (word by word, as YouTube shows them) or 'lines' (two lines at a time) */
     captionStyle: string;
@@ -113,8 +123,23 @@ export interface Prefs {
     listSide: string;
     /** The clock over a video in the app's player: 'off', 'left' or 'right' (player/own-player.ts) */
     videoClock: string;
+    /** The video pauses while its chapter row is open (player/own-player.ts openChapters) */
+    chaptersPause: boolean;
+    /** Jumps in a video show their picture at once (Engine.quick: what was loaded past the landing's next seconds is
+     * loaded again) */
+    quickJumps: boolean;
     /** The screens' background pure black (OLED: pixels off) instead of the theme's dark grey (ui/theme.ts) */
     pureBlack: boolean;
+    /** The logo the app draws: a logo's id in ui/logo.ts LOGOS (one no longer listed: the first), the account's
+     * picture, a custom one, or none */
+    logo: string;
+    /** The app's logo on the TV's home screen: a logo's id in ui/logo.ts LOGOS, or a custom one's value
+     * (ui/custom-logos.ts) */
+    homeIcon: string;
+    /** The app's name on the TV's home screen ('': the package's own) */
+    homeName: string;
+    /** The colour of the app's tile on the TV's home screen, as #rrggbb ('': the package's own) */
+    homeColor: string;
     /** DeArrow (api/dearrow.ts): '' off, 'classic' or 'casual' */
     dearrow: string;
     /** DeArrow's options: 'thumbnails', 'frames' (a random frame where none was chosen), 'tidy' (titles tidied) */
@@ -131,6 +156,9 @@ export interface Prefs {
     /** What wakes the screen while it is off: 'any' button, or only the Screen off shortcut's 'button' (none set: any;
      * ui/screen-off.ts) */
     screenWake: string;
+    /** The version check (api/version-check.ts): 'notify' (once a day the app asks whether a newer version is out,
+     * and tells of one), 'quiet' (it asks, and tells nothing) or 'off' (it asks nothing) */
+    versionCheck: string;
 }
 
 /** A button's shortcut (api/shortcuts.ts): key (its key code), where it works ('everywhere', 'screens': not in the
@@ -153,11 +181,19 @@ export interface ShortcutTarget {
 /** A choice's value (an on/off pref's: true or false) */
 export type Value = string | number | boolean;
 
-/** A setting's choice: value, name, note ('' for none) */
+/** A setting's choice: value, name, note ('' for none). In a grid of tiles (views/settings.ts; ui/choice-button.ts):
+ * picture: the tile shows it (a logo); round: drawn as a circle (the account's); color: the tile is that colour;
+ * tile: it shows a sign instead ('add': a plus, the tile adds a choice; 'none': a struck circle, it stands for
+ * nothing); removable: OK held on it asks to remove it */
 export interface Choice {
     value: Value;
     name: string;
     note: string;
+    picture?: string;
+    round?: boolean;
+    color?: string;
+    tile?: 'add' | 'none';
+    removable?: boolean;
 }
 
 /** A setting's choices (views/settings.ts, also the player's settings list): list, isSet, choose; many: several can be
@@ -199,11 +235,11 @@ SHORTCUTS.push({ key: BUTTON.RED, where: 'everywhere', action: 'screenOff' },
     { key: BUTTON.CH_UP, where: 'player', action: 'next' }, { key: BUTTON.CH_DOWN, where: 'player', action: 'previous' },
     { key: BUTTON.LIST, where: 'player', action: 'playlist' }, { key: BUTTON.GUIDE, where: 'player', action: 'like' },
     { key: BUTTON.SCREEN_REMOTE, where: 'everywhere', action: 'subscribe' });
-var DEFAULTS: Prefs = { skip: ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'music_offtopic'], theme: 'youtube', startPage: 'home', quality: 0, preload: true, history: true, autoplay: true, autoplayWait: 10, stableVolume: false, previews: 'sound', captions: '', captionStyle: 'words', captionLanguages: [], startSign: true, startPicture: 'tile', sabr: false, pictures: 'sharpest', replays: true, dislikes: true, liveChat: true, chatMode: 'over', chatPosition: 'right', chatHeight: 'tall', chatBottom: 'ticker', chatSide: 'right', chatPicture: 'fit', chatBox: null, chatSize: 'normal', chatBackground: 'bubbles', chatTimes: false, chatAvatars: false, chatFade: 0,
+var DEFAULTS: Prefs = { skip: ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'music_offtopic'], theme: 'youtube', startPage: 'home', quality: 0, codec: 'auto', preload: true, history: true, autoplay: true, autoplayWait: 10, stableVolume: false, previews: 'sound', channelVideo: true, captions: '', captionStyle: 'words', captionLanguages: [], startSign: true, startPicture: 'tile', sabr: false, pictures: 'sharpest', replays: true, dislikes: true, liveChat: true, chatMode: 'over', chatPosition: 'right', chatHeight: 'tall', chatBottom: 'ticker', chatSide: 'right', chatPicture: 'fit', chatBox: null, chatSize: 'normal', chatBackground: 'bubbles', chatTimes: false, chatAvatars: false, chatFade: 0,
     listLayout: 'stage', listPreview: 'sound', listAutoplay: true, listNumbers: 'charts', listDetails: true, listButtons: ['play', 'shuffle', 'repeat', 'save', 'shortcut'],
-    listCarryOn: true, listKeep: true, listNext: 0, listDown: 'row', listSide: 'over', videoClock: 'off', pureBlack: false, dearrow: '',
+    listCarryOn: true, listKeep: true, listNext: 0, listDown: 'row', listSide: 'over', videoClock: 'off', chaptersPause: true, quickJumps: true, pureBlack: false, logo: 'red', homeIcon: 'red', homeName: '', homeColor: '', dearrow: '',
     dearrowOptions: ['thumbnails', 'frames', 'tidy'], keyboardRecent: [], shortcuts: SHORTCUTS,
-    screenOff: 'iris', castWakes: false, screenWake: 'any' };
+    screenOff: 'iris', castWakes: false, screenWake: 'any', versionCheck: 'notify' };
 
 /** Read once (they are read on every key) and updated by setPref. Only changed settings are stored, so a new
  * default still applies to the rest. */
@@ -229,6 +265,10 @@ export function prefs(): Prefs {
         if (parts.length) {
             stored.dearrowOptions = DEFAULTS.dearrowOptions.filter(function (o) { return o === 'tidy' || parts.indexOf(o) >= 0; });
         }
+    }
+    // The version check's setting is one of three: anything else stored (a plain on or off) gives way to the default
+    if (stored.versionCheck !== 'notify' && stored.versionCheck !== 'quiet' && stored.versionCheck !== 'off') {
+        delete stored.versionCheck;
     }
     var read: { [name: string]: unknown } = {};
     for (var name in DEFAULTS) {

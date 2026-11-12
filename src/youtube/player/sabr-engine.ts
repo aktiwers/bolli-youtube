@@ -8,7 +8,8 @@
 // The video track's first answer after a start or seek is read as it arrives (as text: Chrome
 // 38's XMLHttpRequest has no streamed binary; x-user-defined keeps each byte) until its first
 // segment is complete, then aborted; the rest comes with the next request as bytes (converting
-// a whole 4K answer from text blocked the main thread for over a second).
+// a whole 4K answer from text blocked the main thread for over a second). Each read of the text
+// costs as much as all of it so far: it is read when due (READ_EVERY), not at each progress.
 // The back buffer is trimmed at segment starts between appends (trimming mid-append leaves a
 // hole). A seek outside the buffered data drops requests in flight and completes once both
 // tracks cover the target. A resume start lands on the video keyframe there (decoding up to a
@@ -18,26 +19,48 @@
 // Fails as 'expired' (403, or the server wants a fresh /player reply), 'protection' (device
 // attestation wanted), 'sabr' (server error or empty answers), 'network', 'media'.
 // A start tells the TV the video ends WINDOW_S after it (a resume start: after its keyframe) and appends no video
-// segment ending past that, the audio cut there, until it plays (the quick start, as dash.ts's): then the real length,
-// and the audio segment across the window appended again from the cut on (kept: not asked of the server again; its
-// frames from the cut on only, containers.ts framesFrom: else the TV plays ~46 ms of sound twice, late after it).
+// segment ending past that, the audio cut there, until its picture moves (the quick start, as dash.ts's: land): then
+// the real length, and the audio segment across the window appended again from the cut on (kept: not asked of the
+// server again; its frames from the cut on only, containers.ts framesFrom: else the TV plays ~46 ms of sound twice,
+// late after it).
+// A seek has its window too (quick jumps: engine.ts QUICK_MIN_S; narrow): what is buffered past it is removed first
+// (never during a seek on its way: waitSeek), its segments forgotten (asked of the server again), then the seek, then
+// the length told; it lifts once the picture moves (land). The audio segment across its end, sent again, goes in from
+// the cut on only (resume).
 
 import { base64Bytes, BufferedRange, FormatId, SabrAnswer, SabrReader, sabrRequest, SabrSegment } from '../api/sabr.js';
 import { Format, Sabr } from '../api/streams.js';
 import { youtubePage } from '../api/youtube.js';
-import { BEHIND_MB, BEHIND_S, bufferedEnd, Engine, hopHole, jumpTarget, KEYFRAME_IN, MB, RETRIES, roomAhead, seekNudged, STILL_AHEAD, TICK_MS, TIMEOUT_MS, windowFrom } from './engine.js';
+import { BEHIND_MB, BEHIND_S, bufferedEnd, Engine, hopHole, jumpTarget, KEYFRAME_IN, LIFT_END_S, LIFT_MS, LIFT_S, MB, QUICK_MIN_S, QUICK_SPEED, QUICK_WAIT_MS, RETRIES, roomAhead, seekNudged, SPEED_BYTES, STILL_AHEAD, TICK_MS, TIMEOUT_MS, windowFrom } from './engine.js';
 import { framesFrom, trackScale, wholeFrames } from './containers.js';
-import { networkFailed, onNetwork, stallWatch } from './networks.js';
+import { lineAnswered, networkFailed, onNetwork, stallWatch } from './networks.js';
 import { keepPipeline, openPipeline, Pipeline, setLength, setLengthSoon, spoilingFail } from './pipeline.js';
+import { note } from './play-log.js';
 
 /** Request more once less than this is buffered ahead of the playhead (s), unless more than AHEAD_MB of the track is
  * (engine.ts roomAhead);
  * trimmed to half once BEHIND_S or BEHIND_MB lie behind it */
 var READAHEAD_S = 10;
+/** A streamed answer's text is read at once (for a segment's header; at each progress until the video segment's has
+ * come, where a resume start or a jump waits for it to ask for the sound: read only when due, that request went out a
+ * progress event or two later, 50-100 ms), when the segment coming in is whole (the header
+ * tells its length) and every this many bytes meanwhile (bytes), not at each progress: each read costs as much as all
+ * the text so far (a 4K start's first answer, 17 MB, on the TV: 20 reads at each progress take 2.1 s, 6 when due 1.2 s;
+ * a single read at the end shows the picture 0.8 s later) */
+var READ_EVERY = 4 * MB;
+/** While a resume start or a jump waits for the video segment's header, the text is read at each progress up to this
+ * many bytes (the header comes within the answer's first kilobytes; an answer that never brings it is not read whole
+ * at every progress) */
+var SNAP_READ = 512 * 1024;
 /** Answers in a row that bring a track nothing new before it gives up */
 var EMPTY_ANSWERS = 5;
 /** A jump snaps to a segment start within this distance of its target (s) */
 var SNAP_S = 3;
+/** The video answers whose speeds judge the line for a seek's window (their median: one alone may be a pause of the
+ * page) */
+var SPEEDS = 3;
+/** The seeks' windows' audio cuts kept (SabrEngine.tails) */
+var TAILS = 4;
 /** Track types for a request (enabledTrackTypesBitfield) */
 var SOUND = 1;
 var PICTURE = 2;
@@ -157,6 +180,15 @@ class Track {
     }
 }
 
+/** Marks a track's piece of a media segment as in the buffer */
+function markAppended(track: Track, seg: SabrSegment): void {
+    track.pieces.forEach(function (p) {
+        if (!seg.init && p.num === seg.num) {
+            p.appended = true;
+        }
+    });
+}
+
 export class SabrEngine implements Engine {
     private tracks: Track[] = [];
     private timer = 0;
@@ -181,12 +213,36 @@ export class SabrEngine implements Engine {
     private snap = false;
     private snapFrom = -1;
     private stuckTimer = 0;
-    /** The start's window (s; 0: none), the real length, the audio segment across it, where it ended (-1: the audio's
-     * append window reset) */
+    /** The window up (s; 0: none): a start's, or a seek's (narrow); the real length, the audio segment across it, where
+     * it ended (-1: the audio's append window reset) */
     private window = 0;
     private length = 0;
     private cut: SabrSegment | null = null;
     private cutAt = -1;
+    /** A seek (not a start's own) waits to be asked: it may get a window of its own (narrow). clearing: that window's
+     * end while what lies past it is being removed (0: not) */
+    private going = false;
+    private clearing = 0;
+    /** Where the seek of the seek's window up landed (s; -1: no seek's window up), when that seek ended (ms; 0: not
+     * yet), and when the last seek was asked (ms) */
+    private landed = -1;
+    private seekedAt = 0;
+    private soughtAt = 0;
+    /** A start's window: whether it began to play, when (ms) and where (s); it lifts once the picture moved (land) */
+    private played = false;
+    private playedAt = 0;
+    private playedFrom = 0;
+    /** A seek whose window must remove waits for the seek on its way (waitSeek: 1; -1: waited QUICK_WAIT_MS, no
+     * window) */
+    private waits = 0;
+    private waitTimer = 0;
+    /** Where seeks' windows cut the audio buffer (s; the last TAILS): the audio segment across one, sent again, goes in
+     * from there on only (resume) */
+    private tails: number[] = [];
+    /** The last video answers' speeds (bit/s; those of SPEED_BYTES or more, up to SPEEDS) */
+    private speeds: number[] = [];
+    /** Seeks get a window of their own (Engine.quick) */
+    quick = false;
 
     /** onFail: 'expired', 'protection', 'sabr', 'network', 'media' */
     private onFail: (why: string) => void;
@@ -238,13 +294,36 @@ export class SabrEngine implements Engine {
                 return;
             }
             self.on('seeking', function () { self.seeked(); });
-            self.on('seeked', function () { clearTimeout(self.stuckTimer); });
+            self.on('seeked', function () {
+                clearTimeout(self.stuckTimer);
+                self.seekedAt = Date.now();
+                // (a seek that waited for this one: waitSeek; or one asked while this one's window was up, its
+                // landing held back by that window: nothing updates to bring settle again)
+                if (self.waits > 0 || self.behind()) {
+                    self.settle();
+                }
+            });
             self.on('waiting', function () { self.hop(); });
             self.on('loadedmetadata', function () { self.settle(); });
-            self.on('playing', function () { self.lift(); });
+            self.on('playing', function () {
+                // (a start's window, as a seek's, lifts once the picture moves: land; one being made for a seek is not
+                // a start's)
+                if (self.window && self.landed < 0 && !self.going && !self.played) {
+                    self.played = true;
+                    self.playedAt = Date.now();
+                    self.playedFrom = self.video.currentTime;
+                }
+            });
+            self.on('timeupdate', function () { self.land(); });
             self.on('error', function () { self.onFail('media'); });
             self.timer = setInterval(function () {
+                self.land();
                 self.hop();
+                // (a quick jump still waiting: its landing may have come without a buffer's update, or since the seek
+                // before it ended)
+                if (self.quick && self.pending >= 0) {
+                    self.settle();
+                }
                 self.pump();
             }, TICK_MS) as unknown as number;
             self.tracks.forEach(function (track) { self.feed(track); });
@@ -268,8 +347,17 @@ export class SabrEngine implements Engine {
         if (!this.tracks.length) {
             return;
         }
-        this.lift();
+        // (a seek's window whose seek is still on its way stays up: narrow lifts it, once that seek may be waited for)
+        if (!(this.landed >= 0 && this.video.seeking)) {
+            this.lift();
+        }
         this.pending = t;
+        this.going = true;
+        this.clearing = 0;
+        // (a wait given up for the seek before: this one may wait again)
+        if (this.waits < 0) {
+            this.waits = 0;
+        }
         this.snap = from >= 0;
         this.snapFrom = from;
         this.restart(t);
@@ -290,10 +378,21 @@ export class SabrEngine implements Engine {
         return this.pending;
     }
 
+    /** The real length while the TV is told a window's (a seek's, and a start's until its picture has moved) */
+    realLength(): number {
+        return this.window ? this.length : 0;
+    }
+
+    /** A seek waits behind an earlier seek's window still up (its segments past that window are held back) */
+    private behind(): boolean {
+        return this.pending >= 0 && this.landed >= 0;
+    }
+
     stop(): void {
         this.stopped = true;
         clearInterval(this.timer);
         clearTimeout(this.stuckTimer);
+        this.stopWait();
         this.tracks.forEach(function (track) { track.restart(); });
         for (var event in this.listeners) {
             this.video.removeEventListener(event, this.listeners[event]);
@@ -317,17 +416,39 @@ export class SabrEngine implements Engine {
         }
     }
 
-    /** The start's window lifted (the video plays, or a seek moves it): the real length */
+    /** The window lifted (its picture moved, or a seek moves it): the real length */
     private lift(): void {
         if (!this.window) {
             return;
         }
         this.cutAt = this.window;
         this.window = 0;
+        this.landed = -1;
+        this.played = false;
+        this.clearing = 0;
         if (this.pipe) {
             setLengthSoon(this.pipe, this.length);
         }
         this.pump();
+    }
+
+    /** A seek's window lifts once the picture moves where it landed (LIFT_S, by the TV's own clock: for LIFT_MS after
+     * the seek's end the element's time is the browser's guess), or nears where the window's video ends (LIFT_END_S). A
+     * start's the same way from where and when it began to play: lifted before its first frame shows, the TV at times
+     * falls back to its slow start */
+    private land(): void {
+        var v = this.video;
+        var seek = this.landed >= 0;
+        // (a start's: not before it began to play, nor while a seek's window is being made in its place)
+        if (!this.window || this.pending >= 0 || v.seeking || v.paused || !seek && (!this.played || this.going)) {
+            return;
+        }
+        var from = seek ? this.landed : this.playedFrom;
+        var since = seek ? this.seekedAt : this.playedAt;
+        var edge = this.within(this.window, from) || this.window;
+        if (v.currentTime > from + LIFT_S && (!seek || since > 0) && Date.now() - since >= LIFT_MS || v.currentTime > edge - LIFT_END_S) {
+            this.lift();
+        }
     }
 
     /** Where the playhead is or is going (s; until the pipeline is in, currentTime may be the previous video's) */
@@ -422,9 +543,18 @@ export class SabrEngine implements Engine {
                 // Sent from youtube.com's page, as its own player does
                 var xhr = track.xhr = new (w as unknown as { XMLHttpRequest: typeof XMLHttpRequest }).XMLHttpRequest();
                 xhr.open('POST', url, true);
+                var asked = Date.now();
                 var read = 0;
+                // The streamed text's next read is due once this much of the answer is in (0: at the next progress)
+                var due = 0;
+                // (for the play log: its reads, those after which no segment's end was known, and their time)
+                var reads = 0;
+                var untold = 0;
+                var readMs = 0;
                 var more = function (): void {
+                    var t0 = Date.now();
                     var got = xhr.responseText;
+                    reads++;
                     if (got.length > read) {
                         var b = new Uint8Array(got.length - read);
                         for (var i = 0; i < b.length; i++) {
@@ -433,15 +563,27 @@ export class SabrEngine implements Engine {
                         read = got.length;
                         reader.push(b);
                     }
+                    readMs += Date.now() - t0;
                 };
                 var done = function (): void {
                     track.failures = 0;
+                    var bytes = streaming ? read : (xhr.response as ArrayBuffer).byteLength;
+                    var ms = Date.now() - asked;
+                    if (track.kind === PICTURE && bytes >= SPEED_BYTES && ms > 0) {
+                        self.speeds.push(bytes * 8000 / ms);
+                        if (self.speeds.length > SPEEDS) {
+                            self.speeds.shift();
+                        }
+                    }
+                    if (streaming) {
+                        note('sabr streamed', Math.round(read / 1024) + ' KB, ' + reads + ' reads (' + untold + ' no end known) ' + readMs + ' ms');
+                    }
                     self.answered(track, reader.answer, taken);
                 };
                 if (streaming) {
                     xhr.overrideMimeType('text/plain; charset=x-user-defined');
-                    xhr.onprogress = function () {
-                        if (gen !== track.gen || xhr.status < 200 || xhr.status >= 300 || track.xhr !== xhr) {
+                    xhr.onprogress = function (e: ProgressEvent) {
+                        if (gen !== track.gen || xhr.status < 200 || xhr.status >= 300 || track.xhr !== xhr || e.loaded < due) {
                             return;
                         }
                         more();
@@ -450,13 +592,21 @@ export class SabrEngine implements Engine {
                             track.xhr = null;
                             xhr.abort();
                             done();
+                            return;
                         }
+                        // (while the video's keyframe is waited for, the sound's request with it: at each progress,
+                        // the text still short; the segment the answer opens first, a sound one, ends after the video's)
+                        var end = reader.segmentEnd();
+                        due = end < 0 || self.snap && read < SNAP_READ ? 0 : Math.min(end, read + READ_EVERY);
+                        untold += end < 0 ? 1 : 0;
                     };
                 } else {
                     xhr.responseType = 'arraybuffer';
                 }
                 xhr.timeout = TIMEOUT_MS;
                 xhr.onload = function () {
+                    // (any answer: the line is up)
+                    lineAnswered();
                     if (gen !== track.gen || track.xhr !== xhr) {
                         return;
                     }
@@ -560,6 +710,11 @@ export class SabrEngine implements Engine {
         if (this.snap && track.kind === PICTURE) {
             this.snapped();
         }
+        // A quick jump waiting for what this answer brought: under its window a segment can be taken without an
+        // append (its part before the cut is in the buffer already), and then no buffer's update comes to make the seek
+        if (this.quick && this.pending >= 0) {
+            this.settle();
+        }
         this.pump();
     }
 
@@ -615,6 +770,9 @@ export class SabrEngine implements Engine {
         if (this.stopped || !sb || sb.updating) {
             return;
         }
+        if (track.kind === SOUND && this.tails.length && this.resume(track, sb)) {
+            return;
+        }
         if (track.kind === SOUND && this.cutAt >= 0 && !this.window) {
             var again = this.cut;
             this.cut = null;
@@ -627,11 +785,14 @@ export class SabrEngine implements Engine {
                 sb.appendWindowStart = dropped ? 0 : this.cutAt;
                 try {
                     sb.appendBuffer(part);
+                    track.full = false;
                 } catch (e) {
-                    // Full: again once more is trimmed
+                    // Full: again once more is trimmed (trim leaves a track with segments waiting alone unless full)
                     this.cut = again;
                     if ((e as Error).name !== 'QuotaExceededError') {
                         this.onFail('media');
+                    } else {
+                        track.full = true;
                     }
                 }
                 return;
@@ -671,15 +832,72 @@ export class SabrEngine implements Engine {
             this.onFail('media');
             return;
         }
-        track.pieces.forEach(function (p) {
-            if (!seg.init && p.num === seg.num) {
-                p.appended = true;
-            }
-        });
+        markAppended(track, seg);
     }
 
-    /** Performs the pending seek once the metadata is in, no buffer is updating and both tracks cover the target; one
-     * not done within SEEK_STUCK_MS is nudged */
+    /** The audio segment across a seek's window's cut (tails), sent again while its part up to the cut is buffered
+     * (else appended whole, it goes in again over what is about to play): taken without an append, and the window's
+     * cut segment (the lift appends it from the cut on); with no window up, appended from the cut on through the cut
+     * (feed); with a window up that ends further on, its part from the cut to the window now. True: feed goes no
+     * further (an append began, or waits on a full buffer). */
+    private resume(track: Track, sb: SourceBuffer): boolean {
+        var seg = track.queue[0];
+        if (!seg || seg.init) {
+            return false;
+        }
+        var start = seg.startMs / 1000;
+        var end = (seg.startMs + seg.durationMs) / 1000;
+        var k = 0;
+        while (k < this.tails.length && !(start < this.tails[k] - 0.01 && end > this.tails[k] + 0.01)) {
+            k++;
+        }
+        // (a start's cut segment still to go in: first)
+        if (k === this.tails.length || this.cut && !this.window) {
+            return false;
+        }
+        var tail = this.tails[k];
+        var held = bufferedEnd(sb.buffered, start, 0.05);
+        if (held < tail - 0.05 || held > tail + 0.1) {
+            this.tails.splice(k, 1);
+            return false;
+        }
+        if (!this.window || tail >= this.window - 0.01) {
+            this.tails.splice(k, 1);
+            track.queue.shift();
+            markAppended(track, seg);
+            this.cut = seg;
+            if (!this.window) {
+                this.cutAt = tail;
+            }
+            return false;
+        }
+        var dropped = wholeFrames(track.format.mime);
+        try {
+            sb.appendWindowStart = 0;
+            sb.appendWindowEnd = this.window;
+            sb.appendWindowStart = dropped ? 0 : tail;
+            sb.appendBuffer(framesFrom(seg.data, tail, track.scale, dropped));
+            track.full = false;
+        } catch (e) {
+            // Full: again once more is trimmed (as above)
+            if ((e as Error).name !== 'QuotaExceededError') {
+                this.onFail('media');
+            } else {
+                track.full = true;
+            }
+            return true;
+        }
+        this.tails.splice(k, 1);
+        track.queue.shift();
+        markAppended(track, seg);
+        if (end > this.window) {
+            this.cut = seg;
+        }
+        return true;
+    }
+
+    /** Performs the pending seek once the metadata is in, no buffer is updating and both tracks cover the target (a
+     * seek's window made first: narrow); one not done within SEEK_STUCK_MS is nudged */
     private settle(): void {
         var t = this.pending;
         var v = this.video;
@@ -693,14 +911,200 @@ export class SabrEngine implements Engine {
                 return;
             }
         }
+        var w = this.going ? this.narrow(t) : 0;
+        if (w < 0) {
+            return;
+        }
+        this.going = false;
         this.pending = -1;
         clearTimeout(this.stuckTimer);
+        this.soughtAt = Date.now();
+        this.seekedAt = 0;
         this.stuckTimer = seekNudged(v, t);
+        // The length told after the seek is asked (the playhead, now the seek's target, lies within it)
+        if (w) {
+            this.landed = t;
+            setLengthSoon(this.pipe, w);
+        }
+    }
+
+    /** A seek's window, before the seek (quick jumps): the window from where the seek lands (engine.ts windowFrom),
+     * with the video of the landing's run that ends within it (at least QUICK_MIN_S). What is buffered past it is
+     * removed (the video from where that video ends, the audio from the window: its segment across the window goes in
+     * again from there, resume) and those segments are forgotten at once (asked of the server again; a seek that comes
+     * before this one is asked does not take them as there). Not during a seek on its way (waitSeek): an earlier seek's
+     * window still up is lifted only then, and a start's or a window's audio cut goes in first. Returns the window's
+     * end; 0: none (quick jumps off, a slow line, near the end, the stream ended, a seek not waited for); -1: settle
+     * comes again (the buffers update, or a seek is waited for). */
+    private narrow(t: number): number {
+        if (this.clearing) {
+            var cleared = this.clearing;
+            this.clearing = 0;
+            return cleared;
+        }
+        var plan = this.plan(t);
+        if (plan && this.video.seeking && this.removes(plan.w, plan.end)) {
+            if (this.waitSeek()) {
+                return -1;
+            }
+            plan = null;
+        }
+        this.stopWait();
+        // (with the buffers updating for it, decided anew at their end)
+        if (this.window) {
+            this.lift();
+            if (this.updating()) {
+                return -1;
+            }
+        }
+        if (!plan) {
+            return 0;
+        }
+        var audio = this.tracks[1];
+        if (this.cutAt >= 0) {
+            this.feed(audio);
+            if (this.updating()) {
+                return -1;
+            }
+            // (waits on a full buffer: a plain seek)
+            if (this.cutAt >= 0) {
+                return 0;
+            }
+        }
+        var w = plan.w;
+        this.window = w;
+        var removing = false;
+        try {
+            for (var i = 0; i < this.tracks.length; i++) {
+                var track = this.tracks[i];
+                var sb = track.sb as SourceBuffer;
+                var b = sb.buffered;
+                var last = b.length ? b.end(b.length - 1) : 0;
+                var from = i ? w : plan.end;
+                // (an audio frame across the window's end stays)
+                if (last > from + 0.05) {
+                    sb.remove(from, last);
+                    removing = true;
+                    this.forget(track, from);
+                    if (i && this.tails.indexOf(w) < 0) {
+                        this.tails.push(w);
+                        if (this.tails.length > TAILS) {
+                            this.tails.shift();
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            // No window: a plain seek, once a removal begun has ended
+            this.lift();
+            this.going = false;
+            return this.updating() ? -1 : 0;
+        }
+        if (removing) {
+            this.clearing = w;
+            return -1;
+        }
+        return w;
+    }
+
+    /** The window a seek to t would get, and where its video ends (null: none) */
+    private plan(t: number): { w: number; end: number } | null {
+        var pipe = this.pipe as Pipeline;
+        if (!this.quick || pipe.source.readyState !== 'open' || this.slow()) {
+            return null;
+        }
+        var w = windowFrom(t, this.length);
+        var end = w ? this.within(w, t) : 0;
+        return end - t >= QUICK_MIN_S ? { w: w, end: end } : null;
+    }
+
+    /** Whether a window to w, its video ending at end, has anything to remove from a buffer */
+    private removes(w: number, end: number): boolean {
+        for (var i = 0; i < this.tracks.length; i++) {
+            var b = (this.tracks[i].sb as SourceBuffer).buffered;
+            if (b.length && b.end(b.length - 1) > (i ? w : end) + 0.05) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** A seek whose window must remove, with another seek on its way (this TV hangs on a removal during a seek). True:
+     * that one is waited for (settle comes again at its 'seeked'), but only one in a window of its own, which ends within
+     * QUICK_WAIT_MS of being asked. False: no window for this seek. */
+    private waitSeek(): boolean {
+        var self = this;
+        var left = QUICK_WAIT_MS - (Date.now() - this.soughtAt);
+        if (this.waits < 0 || !this.window || this.landed < 0 || left <= 0) {
+            return false;
+        }
+        if (!this.waits) {
+            this.waits = 1;
+            this.waitTimer = setTimeout(function () {
+                self.waitTimer = 0;
+                self.waits = -1;
+                self.settle();
+            }, left) as unknown as number;
+        }
+        return true;
+    }
+
+    private stopWait(): void {
+        clearTimeout(this.waitTimer);
+        this.waitTimer = 0;
+        this.waits = 0;
+    }
+
+    /** The line's speed (bit/s): the median of the last video answers (0: none measured yet) */
+    private speed(): number {
+        return this.speeds.length ? this.speeds.slice().sort(function (a, b) { return a - b; })[this.speeds.length >> 1] : 0;
+    }
+
+    /** A line too slow for a seek's window: under QUICK_SPEED times the video format's bitrate (none measured: not) */
+    private slow(): boolean {
+        var speed = this.speed();
+        return speed > 0 && speed < QUICK_SPEED * this.tracks[0].format.bitrate;
+    }
+
+    /** Where the video of a window ending at w ends: the end of the last segment, of the run the video track has at t,
+     * that ends within the window (s; 0: none) */
+    private within(w: number, t: number): number {
+        var pieces = this.tracks[0].pieces;
+        var at = this.tracks[0].at(t);
+        var end = 0;
+        for (var i = at; i >= 0 && i < pieces.length && (i === at || pieces[i].num === pieces[i - 1].num + 1) && pieces[i].endMs / 1000 <= w + 0.01; i++) {
+            end = pieces[i].endMs / 1000;
+        }
+        return end;
+    }
+
+    /** A track's segments whose data a removal from s on takes (the video's starting there or later, the audio's ending
+     * past it) are its no longer, queued or not: the server sends them again */
+    private forget(track: Track, s: number): void {
+        var gone: { [num: number]: boolean } = {};
+        track.pieces.forEach(function (p) {
+            if (track.kind === PICTURE ? p.startMs / 1000 >= s - 0.01 : p.endMs / 1000 > s + 0.01) {
+                gone[p.num] = true;
+            }
+        });
+        track.pieces = track.pieces.filter(function (p) { return !gone[p.num]; });
+        track.queue = track.queue.filter(function (q) { return q.init || !gone[q.num]; });
+    }
+
+    private updating(): boolean {
+        for (var i = 0; i < this.tracks.length; i++) {
+            var sb = this.tracks[i].sb;
+            if (sb && sb.updating) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** Moves the playhead over a small gap just before buffered data (playback stalls there) */
     private hop(): void {
-        if (this.pending < 0 && this.video.readyState <= 2 && this.tracks.length) {
+        // (in a seek's window not while a buffer updates, as the length just told may make it: on at its updateend)
+        if (this.pending < 0 && this.video.readyState <= 2 && this.tracks.length && !(this.landed >= 0 && this.updating())) {
             hopHole(this.video);
         }
     }
@@ -716,6 +1120,10 @@ export class SabrEngine implements Engine {
 
     /** The playhead moved (an app or player seek): a track lacking that position requests from there */
     private seeked(): void {
+        // (a seek's window up: the landing is where this seek goes, also a hop's or a nudge's)
+        if (this.landed >= 0) {
+            this.landed = this.video.currentTime;
+        }
         this.restart(this.video.currentTime);
         this.pump();
     }

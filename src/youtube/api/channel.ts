@@ -62,17 +62,31 @@ var UNOPENED_MAX = 4;
 var fetches: { [key: string]: number } = {};
 var storedSeq: { [key: string]: number } = {};
 
-/** A channel page from the memory cache, a prefetch, or the persistent store, as how asks */
-export function keptChannel(p: Page, how?: Wanted): Promise<Channel> {
+/** A channel page from the memory cache, a prefetch, or the persistent store, as how asks; unseen: for a page built
+ * ahead that has not shown (not yet counted as opened: channelOpened does that when it shows) */
+export function keptChannel(p: Page, how?: Wanted, unseen?: boolean): Promise<Channel> {
     var key = pageKey(p);
     if (how === 'renew' || how === 'new' && fromTV[key]) {
         channels.drop(key);
     }
-    return channels.getJson(key, function () { return asked(p, how === 'renew' || how === 'new', true); }).then(function (c) {
-        opened(key);
+    // (asked as a prefetch while unseen: stored persistently only once opened)
+    return channels.getJson(key, function () { return asked(p, how === 'renew' || how === 'new', !unseen); }).then(function (c) {
+        if (!unseen) {
+            opened(key);
+        }
         noteAvatar(c.title, c.avatar);
         return c;
     });
+}
+
+/** Whether channel page p's reply is in the memory cache or on its way (asking for it now is no request to YouTube) */
+export function channelKept(p: Page): boolean {
+    return channels.has(pageKey(p));
+}
+
+/** A channel page taken while unseen (keptChannel) shows now: it counts as opened */
+export function channelOpened(p: Page): void {
+    opened(pageKey(p));
 }
 
 /** Loads a prefetched channel's banner into the browser's cache (made on first use) */

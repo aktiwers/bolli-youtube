@@ -9,12 +9,12 @@
 // metrics.channel, the look from themes/<id>.css. Resting focus on a sub
 // page button prefetches that page; images are released while hidden.
 
-import { h, releaseImages, restoreImages, setShown, setSrc, setText, toggleClass, translate } from '../core/dom.js';
+import { h, releaseImages, restoreImages, setShown, setSrc, setText, standsBy, toggleClass, translate } from '../core/dom.js';
 import { tr } from '../core/i18n.js';
 import { KEY } from '../core/keys.js';
 import { takesPointer, toPart } from '../core/pointer.js';
 import { View } from '../core/view.js';
-import { Channel, keptChannel } from '../api/channel.js';
+import { Channel, channelOpened, keptChannel } from '../api/channel.js';
 import { Page, Rows, Video } from '../api/feed.js';
 import { drawSubscribe, pressSubscribe } from '../ui/account.js';
 import { icon } from '../ui/icons.js';
@@ -56,6 +56,7 @@ export class ChannelView extends FeedHost implements View {
     private buttonRow: HTMLElement;
     private buttons = new Pills('by-pill--focused');
     private subscribeButton: HTMLElement | null = null;
+    private subscribeLabel: HTMLElement | null = null;
     private rowsBox: HTMLElement;
     private panel: SidePanel;
     private channel: Channel | null = null;
@@ -68,6 +69,9 @@ export class ChannelView extends FeedHost implements View {
     private fitted = false;
     /** Name and avatar shown from `known` before YouTube's reply */
     private early = false;
+    /** Its page, and whether it has shown (built ahead it has not yet: api/channel.ts keptChannel's unseen) */
+    private of: Page;
+    private seen = false;
 
     /** open: OK on a tile; openPage: opens a sub page over this one; search: OK on the search bar; known: name and
      * avatar to show at once; shortcut: its Shortcut button (none: no button) */
@@ -75,6 +79,7 @@ export class ChannelView extends FeedHost implements View {
         search: (voice: boolean) => void, known?: KnownChannel, private shortcut?: (c: Channel) => void) {
         super();
         var self = this;
+        this.of = page;
         this.el = h('div', 'by-channel');
         this.banner = h('img', 'by-channel-banner bd-fade') as HTMLImageElement;
         this.el.appendChild(this.banner);
@@ -114,7 +119,8 @@ export class ChannelView extends FeedHost implements View {
         this.bar = new SearchBar(this.el, 'by-channel', search);
         this.feed = new FeedView(function (renew) {
             // Rows from the cache or storage, else from YouTube; a renew fetches fresh rows behind the shown ones
-            return keptChannel(page, renew ? 'renew' : known && known.fresh ? 'new' : 'kept').then(function (c) {
+            // (built ahead and not shown yet: not counted as an opened page until show())
+            return keptChannel(page, renew ? 'renew' : known && known.fresh ? 'new' : 'kept', !self.seen).then(function (c) {
                 // The feed owns the rows; do not hold them here too
                 var rows = c.rows;
                 c.rows = NO_ROWS;
@@ -126,7 +132,7 @@ export class ChannelView extends FeedHost implements View {
                 }
                 return rows;
             });
-        }, texts, open, { pad: metrics().channel.pad, refreshMs: RENEW_MS });
+        }, texts, open, { pad: metrics().channel.pad, refreshMs: RENEW_MS, freshUnfocused: true });
         this.rowsBox.appendChild(this.feed.el);
         this.panel = new SidePanel(this.el);
         setShown(this.el, false);
@@ -140,6 +146,12 @@ export class ChannelView extends FeedHost implements View {
     }
 
     show(): void {
+        if (!this.seen) {
+            this.seen = true;
+            channelOpened(this.of);
+            this.bannerAfter();
+        }
+        standsBy(this.el, false);
         restoreImages(this.el);
         setShown(this.el, true);
         this.feed.show();
@@ -148,11 +160,51 @@ export class ChannelView extends FeedHost implements View {
         }
     }
 
+    /** The page shows for the first time with its banner in already (it was built ahead): the banner is left out of
+     * the first frame and fades in right after. Drawn for the first time it alone takes the TV ~0.15 s (a 1280 px
+     * picture decoded and scaled over the banner's 32 tiles), which the whole page waited for; the rest of the page
+     * takes ~0.13 s */
+    private bannerAfter(): void {
+        var banner = this.banner;
+        if (!/bd-fade--in/.test(banner.className)) {
+            return;
+        }
+        banner.style.webkitTransition = 'none';
+        banner.style.opacity = '0';
+        // (the frame after the one the page comes on in)
+        requestAnimationFrame(function () {
+            requestAnimationFrame(function () {
+                banner.style.webkitTransition = banner.style.opacity = '';
+            });
+        });
+    }
+
     hide(): void {
         this.panel.close();
+        standsBy(this.el, false);
         setShown(this.el, false);
         this.feed.hide();
         releaseImages(this.el);
+    }
+
+    /** Loads and draws out of sight, standing by from the start */
+    drawAhead(): void {
+        standsBy(this.el, true);
+        setShown(this.el, true);
+        this.feed.drawAhead(true);
+    }
+
+    /** Out of sight but kept drawn, its header's pictures too (false: no rows yet, hidden) */
+    standBy(): boolean {
+        this.panel.close();
+        if (!this.feed.keep()) {
+            this.hide();
+            return false;
+        }
+        restoreImages(this.el);
+        setShown(this.el, true);
+        standsBy(this.el, true);
+        return true;
     }
 
     /** Closed for good (Back): its rows stop as well */
@@ -269,6 +321,7 @@ export class ChannelView extends FeedHost implements View {
         this.buttons.clear();
         this.pageAt = {};
         this.subscribeButton = null;
+        this.subscribeLabel = null;
         var add = function (label: string, press: () => void): HTMLElement {
             return self.buttonRow.appendChild(self.buttons.add(h('div', 'by-pill', label), press)) as HTMLElement;
         };
@@ -284,6 +337,9 @@ export class ChannelView extends FeedHost implements View {
                     self.panel.refresh();
                 });
             });
+            // (a bell, shown by the theme while subscribed, and the text)
+            this.subscribeButton.appendChild(icon('bell', 'by-pill-icon by-pill-bell'));
+            this.subscribeLabel = this.subscribeButton.appendChild(h('span')) as HTMLElement;
         }
         c.pages.forEach(function (p) {
             self.pageAt[self.buttons.count] = p.page;
@@ -355,15 +411,10 @@ export class ChannelView extends FeedHost implements View {
         }
     }
 
-    /** Draws Subscribe, or Subscribed with a bell icon */
+    /** Draws Subscribe, or Subscribed with its bell (the theme's by-pill--on) */
     private drawSubscribe(): void {
-        var el = this.subscribeButton;
-        if (el) {
-            var sub = this.channel && this.channel.subscribe;
-            drawSubscribe(el, sub, 'by-pill--on');
-            if (sub && sub.subscribed) {
-                el.insertBefore(icon('bell', 'by-pill-icon'), el.firstChild);
-            }
+        if (this.subscribeButton && this.subscribeLabel) {
+            drawSubscribe(this.subscribeButton, this.subscribeLabel, this.channel && this.channel.subscribe, 'by-pill--on');
         }
     }
 

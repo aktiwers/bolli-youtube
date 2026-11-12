@@ -24,7 +24,7 @@ export function youtubeKeyboard(lines: string[], onChange: (text: string) => voi
 }
 
 /** A side key: its icon instead of its label (none: the label stays), styled as a side key */
-function sideKey(keyboard: Keyboard, label: string, name?: string): void {
+export function sideKey(keyboard: Keyboard, label: string, name?: string): void {
     var el = keyboard.keyEl(label);
     if (el) {
         el.setAttribute('data-side', '');

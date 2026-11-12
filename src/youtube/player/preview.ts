@@ -5,6 +5,12 @@
 // video (own-player.ts peekStart: small at the tile, the app keeping the keys),
 // so OK takes it over full screen without reloading, then switches quality in
 // place; hence the preview uses the codec the player would pick (VP9 or H.264).
+// On LG TVs a video whose start is in another codec than the VP9 pipeline kept from
+// the video before (a little-watched one: H.264 to 1080p, VP9 to 360p only)
+// previews in VP9 if it has it: leaving a VP9 pipeline holds the page ~1 s there,
+// in the middle of browsing. OK then starts it as any video (the replacing in its
+// start), from where the preview was. The other way (from H.264 to VP9) costs
+// ~0.15 s, so there the preview is in the start's codec as ever.
 // The TV draws video on its own layer (a video inside the rounded, clipped tile
 // played but never showed), so the player's video lies over the tile with a ring
 // over its corners. It stops on any other key, after PREVIEW_MS (or at the
@@ -24,10 +30,17 @@ export interface PreviewWay extends PeekLook {
     ended?: () => void;
 }
 
-import { kindOf, pickFormat, streams } from '../api/streams.js';
+import { Format, kindOf, pickFormat, streams, Streams } from '../api/streams.js';
 import { OwnPlayer, PeekLook, startOf } from './own-player.js';
+import { android } from '../core/platform.js';
+import { pictureKind, replacesPipeline } from './pipeline.js';
 
 var HEIGHT = 480;
+/** A preview in the kept pipeline's codec, where the start's is another, is at least this high (below it the start's
+ * codec is taken, the pipeline replaced) */
+var KEPT_MIN_HEIGHT = 360;
+/** The pipelines an LG TV is slow to leave for another codec's (~1 s with the page standing; from H.264 ~0.15 s) */
+var SLOW_TO_LEAVE = /vp9/;
 /** How long a preview plays at most, and how long its sound fades out before it stops */
 var PREVIEW_MS = 90000;
 var FADE_MS = 8000;
@@ -35,6 +48,32 @@ var FADE_MS = 8000;
  * GO_ON_MS */
 var GO_ON_S = 2;
 var GO_ON_MS = 60000;
+/** A preview in another codec than the kept pipeline's waits this much longer: it replaces the pipeline, which holds
+ * the page 0.2-1 s (a key pressed then waits for it), so only once the focus has rested well */
+var OTHER_KIND_MS = 1500;
+
+/** A preview's format: at HEIGHT in the codec of the start's format (start), so a take-over switches to that in place */
+export function previewFormat(s: Streams, start: Format): Format | null {
+    return formatOf(s, kindOf(start.mime));
+}
+
+function formatOf(s: Streams, kind: string): Format | null {
+    return pickFormat(s.videos.filter(function (f) { return kindOf(f.mime) === kind; }), HEIGHT);
+}
+
+/** The format a preview plays in: the start's codec's (previewFormat), unless that would replace a kept pipeline the
+ * TV is slow to leave (slow: an LG TV) and the video has the pipeline's codec at KEPT_MIN_HEIGHT or more: then that
+ * one (audio: the preview's sound's mime) */
+export function shownFormat(s: Streams, start: Format, audio: string, slow: boolean): Format | null {
+    var format = previewFormat(s, start);
+    if (slow && format && SLOW_TO_LEAVE.test(pictureKind()) && replacesPipeline([format.mime, audio])) {
+        var kept = formatOf(s, pictureKind());
+        if (kept && kept.height >= KEPT_MIN_HEIGHT && !replacesPipeline([kept.mime, audio])) {
+            return kept;
+        }
+    }
+    return format;
+}
 
 export class TilePreview {
     private id = '';
@@ -78,25 +117,31 @@ export class TilePreview {
         startOf(streams(id), id, 0).then(function (start) {
             var s = start.streams;
             var chosen = start.formats;
-            // The codec the player would play (VP9 or H.264), so a take-over switches to its format in place
-            var kind = chosen ? kindOf(chosen.video.mime) : '';
-            var format = chosen && pickFormat(s.videos.filter(function (f) { return kindOf(f.mime) === kind; }), HEIGHT);
+            var format = chosen && shownFormat(s, chosen.video, s.audios[0].format.mime, !android());
             // Only if the tile is still in the page (its row may have been rebuilt meanwhile)
             if (gen !== self.gen || !chosen || !format || !document.body.contains(frame)) {
                 return;
             }
-            var at = frame.getBoundingClientRect();
-            if (!at.width || !at.height) {
-                return;
-            }
-            self.id = id;
-            // (the tile's picture, laid over the video until it moves)
-            var picture = (frame.tagName === 'IMG' ? frame : frame.querySelector('.bd-tile-img')) as HTMLImageElement | null;
-            self.player.peekStart(id, s, format, chosen.video, s.audios[0], start.t, at, sound, stopped, how, picture && picture.getAttribute('src') || '');
-            // The whole video (its end tells), else until PREVIEW_MS or the video's end if that comes first
-            if (!how.whole) {
-                var left = format.duration > 0 ? (format.duration - start.t) * 1000 : 0;
-                self.limit(left > 0 ? Math.min(PREVIEW_MS, left) : PREVIEW_MS);
+            var begin = function (): void {
+                // (still wanted and in the page: the wait may have passed meanwhile)
+                var at = frame.getBoundingClientRect();
+                if (gen !== self.gen || !format || !chosen || !at.width || !at.height || !document.body.contains(frame)) {
+                    return;
+                }
+                self.id = id;
+                // (the tile's picture, laid over the video until it moves)
+                var picture = (frame.tagName === 'IMG' ? frame : frame.querySelector('.bd-tile-img')) as HTMLImageElement | null;
+                self.player.peekStart(id, s, format, chosen.video, s.audios[0], start.t, at, sound, stopped, how, picture && picture.getAttribute('src') || '');
+                // The whole video (its end tells), else until PREVIEW_MS or the video's end if that comes first
+                if (!how.whole) {
+                    var left = format.duration > 0 ? (format.duration - start.t) * 1000 : 0;
+                    self.limit(left > 0 ? Math.min(PREVIEW_MS, left) : PREVIEW_MS);
+                }
+            };
+            if (replacesPipeline([format.mime, s.audios[0].format.mime])) {
+                self.timer = setTimeout(begin, OTHER_KIND_MS) as unknown as number;
+            } else {
+                begin();
             }
         }, function () { return undefined; });
     }
@@ -108,9 +153,15 @@ export class TilePreview {
         this.timer = setTimeout(function () { self.stop(); }, length) as unknown as number;
     }
 
-    /** Whether a preview of id is playing (OK on its tile takes it over) */
+    /** Whether a preview of id is playing (OK on its tile takes it over, if takes says so) */
     playing(id: string): boolean {
         return this.player.peeking(id);
+    }
+
+    /** Whether the preview of id playing is one a start takes over as it plays (in the start's codec); else a start
+     * stops it and begins where it was */
+    takes(id: string): boolean {
+        return this.player.peekTaken(id);
     }
 
     /** Where the last preview of id stopped (s), if it played long enough and stopped recently (0: none) */

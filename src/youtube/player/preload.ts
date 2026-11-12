@@ -10,6 +10,7 @@
 // release.
 
 import { knownAvatar } from '../api/avatars.js';
+import { Rate } from '../core/time.js';
 import { prefs } from '../api/prefs.js';
 import { segments } from '../api/sponsorblock.js';
 import { playableStreams, sabrFirstNow, Streams, streams, streamsKept } from '../api/streams.js';
@@ -24,10 +25,10 @@ var latest = '';
 /** Loads the channel picture into the browser cache for the start */
 var avatar = new Image();
 
-/** Requests to YouTube a short rest may make per minute to load the tile's video ahead (more: the longer rest's
- * preload asks, as before); those of the last minute */
+/** Requests to YouTube a short rest may make per minute to load the tile's video ahead (past that the longer rest's
+ * preload asks) */
 var READY_ASKS = 10;
-var asks: number[] = [];
+var asks = new Rate(READY_ASKS, 60000);
 
 /** Preload video id (of channel) for a start at t (s). kept: not cancelled by a key press (the next video,
  * preloaded while one plays) */
@@ -49,8 +50,11 @@ export function preloadVideo(id: string, t: number, channel: string, kept?: bool
         var s = start.streams;
         var f = start.formats;
         // SABR streams need no heads: the streams and the player script are ready; a live stream its first segments
+        // (none of a stream that has ended: it starts at its beginning, not behind its head)
         if (f && (kept || asked === latest) && s.live) {
-            prefetchLive(f.video, f.audio);
+            if (!s.live.over) {
+                prefetchLive(f.video, f.audio);
+            }
         } else if (f && (kept || asked === latest) && !s.sabr) {
             prefetchHeads(f.video, f.audio, start.t);
         }
@@ -66,16 +70,7 @@ export function startSoon(id: string): void {
 
 /** Whether a short rest may load video id ahead now: its streams kept (no request), or within READY_ASKS a minute */
 export function mayAskAhead(id: string): boolean {
-    var now = Date.now();
-    asks = asks.filter(function (at) { return now - at < 60000; });
-    if (streamsKept(id, sabrFirstNow(prefs().sabr, id))) {
-        return true;
-    }
-    if (asks.length >= READY_ASKS) {
-        return false;
-    }
-    asks.push(now);
-    return true;
+    return streamsKept(id, sabrFirstNow(prefs().sabr, id)) || asks.take();
 }
 
 /** The streams asked ahead of a start: as a guest (age-restricted videos are not prepared: SABR needs YouTube's player

@@ -1,4 +1,4 @@
-// Minimal JSON over XMLHttpRequest (Chrome 38 has no fetch). Parsed with the
+// Minimal JSON (and bytes: getBytes) over XMLHttpRequest (Chrome 38 has no fetch). Parsed with the
 // browser's own JSON.parse: this app loads no polyfills.
 
 export interface HttpError {
@@ -52,6 +52,42 @@ export function postText(url: string, body: unknown, headers?: { [name: string]:
 export function sendRequest(method: string, url: string, headers?: { [name: string]: string }): Promise<void> {
     return send(method, url, null, headers).then(function () {
         return undefined;
+    });
+}
+
+/** A GET's reply as bytes, at most maxBytes (more: dropped as soon as the download passes it, an HttpError 'too big') */
+export function getBytes(url: string, timeoutMs: number, maxBytes: number): Promise<ArrayBuffer> {
+    return new Promise<ArrayBuffer>(function (resolve, reject) {
+        var xhr = new XMLHttpRequest();
+        var tooBig = function () {
+            reject({ status: 0, url: url, message: 'too big', body: '' } as HttpError);
+        };
+        xhr.open('GET', url, true);
+        xhr.timeout = timeoutMs;
+        xhr.responseType = 'arraybuffer';
+        xhr.onprogress = function (e) {
+            if (e.loaded > maxBytes || e.lengthComputable && e.total > maxBytes) {
+                xhr.abort();
+                tooBig();
+            }
+        };
+        xhr.onload = function () {
+            var data = xhr.response as ArrayBuffer | null;
+            if (xhr.status < 200 || xhr.status >= 300 || !data) {
+                reject({ status: xhr.status, url: url, message: 'HTTP ' + xhr.status, body: '' } as HttpError);
+            } else if (data.byteLength > maxBytes) {
+                tooBig();
+            } else {
+                resolve(data);
+            }
+        };
+        xhr.onerror = function () {
+            reject({ status: 0, url: url, message: 'network error', body: '' } as HttpError);
+        };
+        xhr.ontimeout = function () {
+            reject({ status: 0, url: url, message: 'timeout', body: '' } as HttpError);
+        };
+        xhr.send(null);
     });
 }
 

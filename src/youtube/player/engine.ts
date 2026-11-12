@@ -19,8 +19,9 @@ export interface Engine {
     /** Takes new URLs for the playing formats (the old ones expired) and continues in place, keeping the buffer;
      * false if the formats differ (or the engine does not support it) */
     renew?(video: Format, audio: Format): boolean;
-    /** Switches a format in place, about ahead s ahead of the playhead (an engine without: the player restarts) */
-    switchVideo?(f: Format, ahead?: number): void;
+    /** Switches a format in place, about ahead s ahead of the playhead (an engine without: the player restarts);
+     * soon: the video as near as the TV allows, the new format's first part fetched before the old one goes */
+    switchVideo?(f: Format, ahead?: number, soon?: boolean): void;
     switchAudio?(f: Format, ahead?: number): void;
     /** The parts the player will skip (an engine may load past them) */
     skips?: () => Skip[];
@@ -29,6 +30,12 @@ export interface Engine {
     /** Buffers at most s ahead (0: as usual again): a video loaded ahead needs only what the TV decodes before its
      * first picture */
     hold(s: number): void;
+    /** Quick jumps (Settings): a seek gets a window of its own, as a start has one (an engine without: its seeks as
+     * before) */
+    quick?: boolean;
+    /** The video's real length (s) while the engine tells the TV a shorter one (a seek's window, a start's until its
+     * picture has moved), else 0: the element's length is the window's end meanwhile */
+    realLength?(): number;
 }
 
 /** A part the player will skip (s) */
@@ -67,6 +74,30 @@ export var WINDOW_S = 9.5;
 export function windowFrom(start: number, length: number): number {
     return length - start > WINDOW_S + 1 ? start + WINDOW_S : 0;
 }
+/** A seek's window (quick jumps, Engine.quick): as a start's, the TV is told the video ends within WINDOW_S of where
+ * the seek lands, so its engine shows the picture at once (measured on the TV, guest 4K, to the picture moving: a jump
+ * into what is buffered 1.8-2.3 -> 0.45-0.55 s, one past it 2.2 -> 0.75-1.1 s, one back 1.9-2.1 -> 0.5-1 s). What is
+ * buffered past the window is removed first (this TV's network keeps no media: loaded again once the window lifts),
+ * so only with at least QUICK_MIN_S of video in the window, and with the last video download at least QUICK_SPEED
+ * times the format's bitrate (or none of SPEED_BYTES measured yet). Then the seek, and only then the length: told
+ * first, a jump back (the playhead past the new length) makes the browser hop to that end before the seek. The
+ * window lifts once the picture has moved LIFT_S past the landing (LIFT_MS), or is within LIFT_END_S of the window's
+ * end: at 'playing' (where a start's lifts) the TV may not have shown a frame yet and, given the real length, waits
+ * its 3 s after all (one jump in three) */
+export var QUICK_MIN_S = 1.5;
+export var QUICK_SPEED = 1.5;
+/** A seek whose window needs a removal waits for a seek in a window still on its way (a removal during a seek hangs
+ * on this TV), until that one has been on its way this long (ms): measured, it ends 0.25-0.3 s after it is asked with
+ * its landing buffered, 0.3-0.7 s with it fetched (guest 4K) */
+export var QUICK_WAIT_MS = 1200;
+export var SPEED_BYTES = 512 * 1024;
+export var LIFT_S = 0.25;
+export var LIFT_END_S = 0.5;
+/** The element's time counts for a seek's window's lift only this long after the seek's end (ms): until then it is
+ * the browser's own guess, running on from the landing at once, while the TV shows its first frame ~0.35 s after the
+ * seek's end and reports its own time ~0.45-0.55 s after it (the element's time then steps back ~0.3 s). A window
+ * lifted on that guess, before a frame shows, can leave the TV waiting its 3 s after all (one jump in twelve) */
+export var LIFT_MS = 600;
 /** A jump lands this far after the keyframe (s): inside the buffer, not just before its first frame (that seek never ends) */
 export var KEYFRAME_IN = 0.05;
 /** A hole this short just ahead of the playhead is hopped over (s); a seek still not done after SEEK_STUCK_MS is

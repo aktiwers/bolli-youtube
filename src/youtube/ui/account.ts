@@ -123,10 +123,10 @@ export function subscribed(sub: Subscribe | null): boolean {
     return !!(sub && sub.subscribed);
 }
 
-/** Draws a Subscribe button as YouTube does: Subscribe, or Subscribed (with class on) */
-export function drawSubscribe(el: HTMLElement, sub: Subscribe | null, on: string): void {
+/** Draws a Subscribe button as YouTube does: Subscribe, or Subscribed (el with class on; the text in label) */
+export function drawSubscribe(el: HTMLElement, label: HTMLElement, sub: Subscribe | null, on: string): void {
     var yes = subscribed(sub);
-    setText(el, yes ? tr('Subscribed') : tr('Subscribe'));
+    setText(label, yes ? tr('Subscribed') : tr('Subscribe'));
     toggleClass(el, on, yes);
 }
 

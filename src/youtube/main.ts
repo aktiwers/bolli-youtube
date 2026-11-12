@@ -10,7 +10,7 @@
 // open pages. Back from a video returns to where it was picked; Back in the
 // rail goes to the start page, then exits. Debug hooks live in window.__bolli (debug.ts).
 
-import { fadeInImages, h, LAYOUT_HEIGHT, LAYOUT_WIDTH, toggleClass } from './core/dom.js';
+import { fadeInImages, h, isStandingBy, LAYOUT_HEIGHT, LAYOUT_WIDTH, toggleClass } from './core/dom.js';
 import { tr } from './core/i18n.js';
 import { initKeys, KEY, keyCame, lastKeyAt, setActive, setHoldOk } from './core/keys.js';
 import { initPerf, mark, noteKey } from './core/perf.js';
@@ -24,13 +24,14 @@ import { PROBLEM, toast } from './ui/toast.js';
 import { screenIsOff, screenKey, screenLayer, screenOff, screenWake } from './ui/screen-off.js';
 import { googleOf, keptProfiles, ownChannel, Profile, profiles, signOut } from './api/accounts.js';
 import { saveAvatars } from './api/avatars.js';
-import { Channel, channelAhead, isChannel, keptChannel } from './api/channel.js';
+import { Channel, channelAhead, channelKept, isChannel, keptChannel } from './api/channel.js';
 import { dearrowFetch, dearrowOn, saveDearrow, Wanted } from './api/dearrow.js';
-import { first, get, home, keptPage, page, Page, pageAhead as fetchPageAhead, PageButton, PlaylistInfo, Rows, searchAhead as fetchSearchAhead, sized, SubChannel, subscriptions, tapAhead, text, toastOf, Video } from './api/feed.js';
+import { first, get, home, keepable, keptPage, mayAskPageAhead, page, Page, pageAhead as fetchPageAhead, pageKept, PageButton, PlaylistInfo, Rows, searchAhead as fetchSearchAhead, sized, SubChannel, subscriptions, tabAhead, tapAhead, text, toastOf, Video } from './api/feed.js';
 import { freshGuideNames, guideNames } from './api/guide.js';
 import { forgetKept, pruneKept } from './api/kept-pages.js';
 import { prepareNames } from './api/languages.js';
 import { prefs, Shortcut, ShortcutTarget } from './api/prefs.js';
+import { checkAgain, checkVersion } from './api/version-check.js';
 import { keyName, PLAYER, SCREENS, shortcutAt } from './api/shortcuts.js';
 import { forgetSaves, run, Subscribe, watchInfo } from './api/watch.js';
 import { forgetRows, keepRows, keptFor, keptRows } from './api/kept-rows.js';
@@ -47,6 +48,7 @@ import { Question } from './ui/question.js';
 import { SidePanel } from './ui/side-panel.js';
 import { applyBlack, applyTheme, metrics } from './ui/theme.js';
 import { openTileMenu } from './ui/tile-menu.js';
+import { ACCOUNT_PICTURE_PX, setLogoAccount } from './ui/logo.js';
 import './ui/themes/youtube.js';
 import { AccountsView } from './views/accounts.js';
 import { SignInView } from './views/signin.js';
@@ -102,7 +104,7 @@ var RAIL: RailItem[] = [
     { id: 'settings', label: tr('Settings'), icon: 'settings', bottom: true }
 ];
 // A section shown by resting on its entry waits a moment before asking YouTube (the focus may move on); Right or OK: at once
-var menu = new Rail(RAIL, switchSection, leaveMenu, logoEntries);
+var menu = new Rail(RAIL, switchSection, leaveMenu, logoEntries, standsReady);
 root.appendChild(stage);
 root.appendChild(menu.el);
 // A click on the rail's items moves the keys there (what it is on takes the focus inside: core/pointer.ts); the open
@@ -141,6 +143,22 @@ var pages: Screen[] = [];
 var pagesOf: { [id: string]: Screen[] } = {};
 /** Focus is in the rail (else on the screen) */
 var menuFocused = false;
+/** Screens standing by (View.standBy: out of sight but kept drawn, back on screen with nothing to draw), the newest
+ * last: the section the rail just left and the ones beside its focus, the screen a page opened over. Each holds
+ * memory (its layers and decoded pictures) and costs every frame a little, so at most STANDING_MAX, let go STAND_MS
+ * after the rail lost the focus (PAGE_STAND_MS after a page opened), and at once under a video. */
+var standing: Screen[] = [];
+var STANDING_MAX = 2;
+var STAND_MS = 4000;
+var PAGE_STAND_MS = 20000;
+var standTimer = 0;
+/** The sections beside the rail's focus are drawn out of sight once it has rested this long (the highlight first);
+ * one not built yet is built from its stored rows after BUILD_REST_MS (building one takes the TV ~0.2 s: not between
+ * quick steps) */
+var NEIGHBOURS_MS = 80;
+var BUILD_REST_MS = 300;
+var neighboursTimer = 0;
+var buildTimer = 0;
 var clockTimer = 0;
 /** YouTube's TV app starts once the first screen has its pictures and no key was pressed for IDLE_START_MS
  * (START_LATEST_MS at most), or at once when a video is picked: its start blocks this app's thread for seconds,
@@ -152,8 +170,13 @@ var START_LATEST_MS = 15000;
 var PRELOAD_REST_MS = 1500;
 var preloadTimer = 0;
 /** A focused video tile resting this long has its video loaded ahead, paused and hidden (readyFocused) */
-var READY_REST_MS = 500;
+var READY_REST_MS = 400;
 var readyTimer = 0;
+/** A page tile's page, the page of a channel's button (Videos, Live, ...) or a tab's tiles (Latest, Popular, Oldest)
+ * are asked for ahead (a page also built) once the focus has rested there this long, within api/feed.ts
+ * mayAskPageAhead's requests a minute */
+var PAGE_REST_MS = 500;
+var pageTimer = 0;
 /** A channel page's Play mix preview waits out YouTube's own delay (from the focus's rest) */
 var headerTimer = 0;
 /** With the app's player, YouTube's TV app (kept for films) is released once focus has been off films this long (not
@@ -194,6 +217,8 @@ interface Screen extends View {
     layer?: () => HTMLElement | null;
     /** It keeps code before any shortcut (Search's keyboard the numbers; what is open over it keeps every key: layer) */
     ownKeys?: (code: number) => boolean;
+    /** OK on its page tiles opens something else than the tile's page (no page is built ahead for them) */
+    opensOwn?: boolean;
 }
 
 /** A screen of the account's rows (load), stored across starts; name: used in the load-failure message */
@@ -279,8 +304,11 @@ function openChannels(list: SubChannel[]): void {
         return { id: id, title: c.title, channel: '', length: '', info: '', page: c.page, image: c.picture, round: true };
     });
     var rows: Rows = { title: tr('All subscriptions'), next: '', shelves: [{ title: '', videos: videos, grid: true }] };
-    pushPage(new FeedView(function () { return Promise.resolve(rows); }, feedTexts(tr('your subscriptions'), tr('No subscriptions yet.')),
-        function (v) { openSubChannel(byId[v.id]); }, pageOptions()));
+    var grid: Screen = new FeedView(function () { return Promise.resolve(rows); }, feedTexts(tr('your subscriptions'), tr('No subscriptions yet.')),
+        function (v) { openSubChannel(byId[v.id]); }, pageOptions());
+    // (OK on a tile here opens the channel's page, not the tile's own: none is built ahead for it)
+    grid.opensOwn = true;
+    pushPage(grid);
 }
 
 /** Section id, built on first use */
@@ -299,9 +327,15 @@ function section(id: string): Screen {
             id === 'subscriptions' ? new SubscriptionsView(yourFeed(id, subscriptions),
                 feedTexts(tr('your subscriptions'), tr('No videos from your subscriptions.')), openTile,
                 feedOptions(id, { refreshMs: SUBSCRIPTIONS_REFRESH_MS }), openSubChannel, openChannels, function (c) {
-                    // Focus rested on a channel: prefetch its page so OK opens it at once
+                    // Focus rested on a channel: its page fetched ahead, and built once it has rested a little longer
+                    // (building one holds the keys ~0.1 s: not while moving along the channels), so OK shows it at once
                     if (c.channel && prefs().preload) {
-                        channelAhead(c.channel, c.fresh);
+                        var page = c.channel;
+                        channelAhead(page, c.fresh);
+                        clearTimeout(builtTimer);
+                        builtTimer = setTimeout(function () {
+                            buildAhead(page, { title: c.title, picture: c.picture, fresh: c.fresh });
+                        }, BUILD_AHEAD_MS) as unknown as number;
                     }
                 }) :
             id === 'library' ? new LibraryView(yourFeed(id, function () { return page({ browseId: browse.browseId }); }),
@@ -335,13 +369,23 @@ function switchSection(id: string, rest?: boolean): void {
         if (pages.length) {
             screen().hide();
             dropPages(id);
-            screen().show();
+            bring(screen());
             updateMenu();
         }
         return;
     }
     if (current) {
-        screen().hide();
+        // (the rail moving on: the section left stands by, to be back at once if the focus returns; the one coming
+        // is taken off the list first, so making room for the one left cannot hide it)
+        var coming = screenOf(id);
+        if (coming) {
+            unstand(coming);
+        }
+        if (menuFocused) {
+            setBy(screen());
+        } else {
+            screen().hide();
+        }
     }
     if (id === 'search') {
         beforeSearch = current;
@@ -354,7 +398,7 @@ function switchSection(id: string, rest?: boolean): void {
     if (id === 'search') {
         (sections[id] as SearchView).enter();
     }
-    screen().show(rest);
+    bring(screen(), rest);
     // Its focus as the rail's: none while the rail has it (a section shown by resting on its entry)
     updateMenu();
 }
@@ -395,8 +439,104 @@ function dropPages(id: string): void {
     list.length = 0;
 }
 
+/** The screen section id shows: its top page, else the section itself (undefined: not built yet) */
+function screenOf(id: string): Screen | undefined {
+    var list = pagesOf[id];
+    return list && list.length ? list[list.length - 1] : sections[id];
+}
+
+/** Section id stands by (and was not hidden since): the rail shows it with the step, it has nothing to draw */
+function standsReady(id: string): boolean {
+    var view = screenOf(id);
+    return !!view && standing.indexOf(view) >= 0 && isStandingBy(view.el);
+}
+
+/** Shows view (rest: in passing, as switchSection), no longer standing by */
+function bring(view: Screen, rest?: boolean): void {
+    unstand(view);
+    view.show(rest);
+}
+
+function unstand(view: Screen): void {
+    var at = standing.indexOf(view);
+    if (at >= 0) {
+        standing.splice(at, 1);
+    }
+}
+
+/** Takes view out of sight: standing by if it can (the one longest so is let go past STANDING_MAX), else hidden */
+function setBy(view: Screen): void {
+    unstand(view);
+    if (!view.standBy) {
+        view.hide();
+    } else if (view.standBy()) {
+        standing.push(view);
+        while (standing.length > STANDING_MAX) {
+            (standing.shift() as Screen).hide();
+        }
+    }
+}
+
+/** Hides every screen standing by: now, or (ms) once that time has passed with no other call */
+function letGo(ms?: number): void {
+    clearTimeout(standTimer);
+    if (ms) {
+        standTimer = setTimeout(letGo, ms) as unknown as number;
+        return;
+    }
+    standing.splice(0).forEach(function (view) { view.hide(); });
+}
+
+/** Section id is a screen of rows (they can be drawn ahead from the stored ones: not Search's keyboard or Settings) */
+function hasRows(id: string): boolean {
+    return id !== 'search' && id !== 'settings';
+}
+
+/** The rail's items beside its focus, the one below first (none while a video shows or the app is out of sight:
+ * nothing is drawn then) */
+function neighbours(): RailItem[] {
+    var at = RAIL.map(function (r) { return r.id; }).indexOf(menu.focusedId);
+    return at < 0 || own.busy || tv.busy || document.hidden ? [] : [RAIL[at + 1], RAIL[at - 1]].filter(function (r) { return !!r; });
+}
+
+/** The sections beside the rail's focus stand by (drawing one is no request), so a step to either shows it at once:
+ * one of them now, the other after another NEIGHBOURS_MS (drawing a screen holds the keys ~0.1 s); one not built
+ * yet gets its turn once the focus has rested (buildNeighbour) */
+function neighboursBy(): void {
+    clearTimeout(buildTimer);
+    var drew = false;
+    neighbours().forEach(function (r) {
+        var view = screenOf(r.id);
+        if (view && view !== screen() && view.standBy && standing.indexOf(view) < 0) {
+            if (drew) {
+                clearTimeout(neighboursTimer);
+                neighboursTimer = setTimeout(neighboursBy, NEIGHBOURS_MS) as unknown as number;
+            } else {
+                drew = true;
+                setBy(view);
+            }
+        } else if (!view && hasRows(r.id)) {
+            // (one timer, whichever of the two is not built: buildNeighbour builds one and comes back here)
+            clearTimeout(buildTimer);
+            buildTimer = setTimeout(buildNeighbour, BUILD_REST_MS - NEIGHBOURS_MS) as unknown as number;
+        }
+    });
+}
+
+/** Builds one section beside the rail's focus that was not shown in this run, from its stored rows (YouTube is asked
+ * when it shows), and has it stand by; the other one's turn comes after another rest */
+function buildNeighbour(): void {
+    var next = neighbours().filter(function (r) { return !sections[r.id] && hasRows(r.id); })[0];
+    if (next) {
+        prepared[next.id] = true;
+        (section(next.id) as FeedView).prepare();
+        neighboursBy();
+    }
+}
+
 /** Closes a page for good: off the stage, its work ended (late replies, paging, timers) */
 function discard(view: Screen): void {
+    unstand(view);
     unstage(view);
     if (view.destroy) {
         view.destroy();
@@ -424,17 +564,87 @@ function takeOut(view: Screen): void {
 }
 
 /** Opens a page over the current screen (Back closes it): a channel page (UC…, not a sub page; known: name and avatar
- * to show at once) or any other */
+ * to show at once) or any other. The one built ahead (buildAhead) shows at once. */
 function openPage(p: Page, known?: KnownChannel): void {
+    var ready = built && built.key === builtKey(p) ? built.view : null;
+    if (ready) {
+        built = null;
+    } else {
+        dropBuilt();
+    }
+    pushPage(ready || pageView(p, known));
+    // (built ahead but its request failed meanwhile: asked again now, as an OK on a page not built is)
+    if (ready && ready.retry) {
+        ready.retry(true);
+    }
+}
+
+/** The screen of page p (not yet on the stage) */
+function pageView(p: Page, known?: KnownChannel): Screen {
     var texts = {
         empty: tr('Nothing here yet.'),
         noAccount: NO_ACCOUNT,
         failed: tr('Could not load this page. Press OK to try again.')
     };
-    pushPage(isChannel(p) ? new ChannelView(p, texts, openTile, openPage, openSearch, known, function (c: Channel) {
+    return isChannel(p) ? new ChannelView(p, texts, openTile, openPage, openSearch, known, function (c: Channel) {
         // Its videos: its uploads, newest first (YouTube's playlist UU… of channel UC…), whatever its tabs are
         askShortcut('channel', p.browseId, { title: c.title, channel: p, videos: { browseId: 'VLUU' + p.browseId.slice(2) } });
-    }) : new FeedView(function () { return keptPage(p); }, texts, openTile, pageOptions()));
+    }) : new FeedView(function () { return keptPage(p); }, texts, openTile, pageOptions());
+}
+
+/** The page built ahead of OK on its tile (one at a time): fetched as pageAhead does once the focus has rested there,
+ * and drawn out of sight as it arrives, so OK has nothing to build or draw (building a channel page takes the TV
+ * ~0.13 s, drawing one 0.3-0.6 s). Dropped when the focus goes to another tile, a video starts or another page opens. */
+var built: { key: string; view: Screen } | null = null;
+/** A channel of Subscriptions' strip (fetched ahead after 0.3 s there) is built this much later: 0.5 s in all, as a
+ * page tile's page */
+var BUILD_AHEAD_MS = 200;
+var builtTimer = 0;
+
+function builtKey(p: Page): string {
+    return p.browseId + ' ' + (p.params || '');
+}
+
+/** What a channel's round tile knows of its channel (shown while its page loads; undefined: nothing) */
+function knownOf(tile: Video): KnownChannel | undefined {
+    return tile.round && tile.image ? { title: tile.title, picture: tile.image } : undefined;
+}
+
+/** Page p fetched ahead and, with Videos start sooner, built ahead (known: as openPage) */
+function pageReady(p: Page, known?: KnownChannel): void {
+    pageAhead(p);
+    if (prefs().preload) {
+        buildAhead(p, known);
+    }
+}
+
+/** Builds page p ahead (known: as openPage), unless it is the one built; only a page that is fetched ahead (not
+ * History: each showing of it asks YouTube) and that OK on the focused tile opens */
+function buildAhead(p: Page, known?: KnownChannel): void {
+    var key = builtKey(p);
+    if (built && built.key === key) {
+        return;
+    }
+    dropBuilt();
+    if (!isChannel(p) && !keepable(p) || screen().opensOwn) {
+        return;
+    }
+    var view = pageView(p, known);
+    if (view.drawAhead) {
+        stage.appendChild(view.el);
+        view.drawAhead();
+        built = { key: key, view: view };
+    }
+}
+
+/** Lets go of the page built ahead (closed for good), and of one about to be built */
+function dropBuilt(): void {
+    clearTimeout(builtTimer);
+    if (built) {
+        built.view.hide();
+        discard(built.view);
+        built = null;
+    }
 }
 
 /** A page button (e.g. History's): a filter's choices in the panel (a choice reloads the page filtered), an on/off
@@ -487,9 +697,18 @@ function playList(videos: Video[], ids: string[], repeat: boolean, playlist?: Pl
 function pushPage(view: Screen): void {
     // A tile's preview belongs to its screen
     preview.stop();
-    screen().hide();
+    // (a page built ahead that is not the one opening: no longer wanted)
+    if (built && built.view !== view) {
+        dropBuilt();
+    }
+    // (the screen under it stands by for a while: Back shows it at once)
+    setBy(screen());
+    letGo(PAGE_STAND_MS);
     pages.push(view);
-    stage.appendChild(view.el);
+    // (a page built ahead is on the stage already: put there again, the TV would lay it out and draw it anew)
+    if (view.el.parentNode !== stage) {
+        stage.appendChild(view.el);
+    }
     view.show();
     updateMenu();
 }
@@ -501,7 +720,7 @@ function closePage(): void {
     var view = pages.pop() as Screen;
     view.hide();
     discard(view);
-    screen().show();
+    bring(screen());
     if (fromPlayer && fromPlayer.view === view) {
         var id = fromPlayer.id;
         fromPlayer = null;
@@ -512,7 +731,7 @@ function closePage(): void {
 /** OK on a tile: opens a page or plays a video */
 function openTile(video: Video): void {
     if (video.page) {
-        openPage(video.page, video.round && video.image ? { title: video.title, picture: video.image } : undefined);
+        openPage(video.page, knownOf(video));
     } else {
         play(video);
     }
@@ -587,10 +806,13 @@ function pageAhead(p: Page): void {
 
 /** The YouTube account may have changed: reload feeds fetched for another account */
 function accountChanged(): void {
+    dropBuilt();
     forgetSaves();
     forgetKept();
     forgetPages();
     forgetHistorySettings();
+    // (until the account is known again, no account's picture as the logo)
+    setLogoAccount(null);
     knowAccount();
     account().then(function (id) {
         var changed = false;
@@ -661,11 +883,12 @@ var namesAsked: { [key: string]: boolean } = {};
 /** Requested size of the account picture in the logo's list (shown at 28 px on a 1.5x screen) */
 var RAIL_PICTURE_PX = 64;
 
-/** Looks up the current account (stored name and picture; if unknown, requested once per run); with none, opens "Who's
- * watching?" (not where Guest was chosen there) */
+/** Looks up the current account (stored name and picture; if unknown, requested once per run), and tells the logo
+ * (its picture may be the logo); with none, opens "Who's watching?" (not where Guest was chosen there) */
 function knowAccount(): void {
     keptProfiles().then(function (list) {
         me = list[0] && list[0].current ? list[0] : null;
+        logoAccount();
         if (!me) {
             guestChosen().then(function (guest) {
                 if (!guest) {
@@ -674,9 +897,17 @@ function knowAccount(): void {
             }, function () { return undefined; });
         } else if (!me.name && !namesAsked[me.key]) {
             namesAsked[me.key] = true;
-            profiles().then(function (fresh) { me = fresh[0] && fresh[0].current ? fresh[0] : null; }, function () { return undefined; });
+            profiles().then(function (fresh) {
+                me = fresh[0] && fresh[0].current ? fresh[0] : null;
+                logoAccount();
+            }, function () { return undefined; });
         }
     }, function () { return undefined; });
+}
+
+/** Tells the logo the current account and its picture's address (ui/logo.ts: Settings' "Your YouTube avatar") */
+function logoAccount(): void {
+    setLogoAccount(me ? { key: me.key, url: me.picture ? sized(me.picture, ACCOUNT_PICTURE_PX) : '' } : null);
 }
 
 /** Starts the app again (what it keeps across starts saved first) */
@@ -804,7 +1035,7 @@ function switched(): void {
         dropPages(id);
     }
     if (current === startPage()) {
-        screen().show();
+        bring(screen());
     } else {
         switchSection(startPage());
     }
@@ -905,7 +1136,8 @@ function play(video: Video): void {
     // The player takes over this video's playing preview (not from a playlist with Settings › Starting from a playlist:
     // From the start); any other preview stops (its position is kept)
     var fromStart = !!video.playlist && !prefs().listCarryOn;
-    if (!bolli || !preview.playing(video.id) || fromStart) {
+    // (nor a preview playing in the kept pipeline's codec where the video starts in another: stopped, started where it was)
+    if (!bolli || !preview.takes(video.id) || fromStart) {
         preview.stop();
     }
     var t = startTime(video);
@@ -1023,7 +1255,9 @@ function preloadFocused(): void {
     clearTimeout(preloadTimer);
     clearTimeout(headerTimer);
     clearTimeout(readyTimer);
+    clearTimeout(pageTimer);
     readyTimer = setTimeout(function () { readyFocused(false); }, READY_REST_MS) as unknown as number;
+    pageTimer = setTimeout(pageFocused, PAGE_REST_MS) as unknown as number;
     preloadTimer = setTimeout(function () {
         var p = prefs();
         if (own.busy || tv.busy || document.hidden) {
@@ -1035,7 +1269,7 @@ function preloadFocused(): void {
         if (header) {
             var channel = view as ChannelView;
             var wanted = header;
-            if (p.previews !== 'off' && !tv.warming) {
+            if (p.previews !== 'off' && p.channelVideo && !tv.warming) {
                 headerTimer = setTimeout(function () {
                     if (own.busy || tv.busy || document.hidden || screen() !== channel || !channel.headerPreview()) {
                         return;
@@ -1052,7 +1286,7 @@ function preloadFocused(): void {
         // A channel's sub page button (Videos, Shorts, ...): that page, as a page tile's
         var sub = view instanceof ChannelView ? view.focusedPage() : null;
         if (sub) {
-            pageAhead(sub);
+            pageReady(sub);
             return;
         }
         // A playlist's preview plays in its frame as its own setting says (not in the tile), its details asked for (not
@@ -1067,7 +1301,7 @@ function preloadFocused(): void {
         var video = waiting || !p.preload && !previews ? null : tile;
         if (!video || video.page || video.movie) {
             if (video && video.page) {
-                pageAhead(video.page);
+                pageReady(video.page, knownOf(video));
             }
             return;
         }
@@ -1089,15 +1323,39 @@ function preloadFocused(): void {
     }, PRELOAD_REST_MS) as unknown as number;
 }
 
+/** The focus has rested PAGE_REST_MS: the focused page tile's page, or the page of the channel button in focus (Videos,
+ * Live, ...), is fetched and built ahead, or the tiles of the tab in focus fetched, so an OK soon after finds them on
+ * their way or ready. Past the requests a minute allowed (what is kept is none) a page waits for the longer rest
+ * (preloadFocused), a tab for its OK */
+function pageFocused(): void {
+    var tile = focusedTile();
+    var view = screen();
+    if (!prefs().preload || own.busy || tv.busy || tv.warming || document.hidden) {
+        return;
+    }
+    var tab = view instanceof FeedView ? view.focusedTab() : '';
+    if (tab) {
+        tabAhead(tab);
+        return;
+    }
+    var page = tile && tile.page || (view instanceof ChannelView ? view.focusedPage() : null);
+    // (checked here too, not only in pageAhead and buildAhead: no request is counted for what will not be asked)
+    if (!page || !isChannel(page) && !keepable(page) || view.opensOwn || built && built.key === builtKey(page) ||
+        !mayAskPageAhead(isChannel(page) ? channelKept(page) : pageKept(page))) {
+        return;
+    }
+    pageReady(page, tile ? knownOf(tile) : undefined);
+}
+
 /** The focused video tile's video loaded paused and hidden (own.ready), so OK starts it at once: after READY_REST_MS of
- * rest within preload.ts's share of requests, else once the longer rest's preload comes (late; also while a closed video
- * is kept to resume, as a preview would let it go then). Not a live stream (its preload fetches its newest segments),
- * nor while YouTube's player holds the decoder for films */
+ * rest within preload.ts's share of requests, else once the longer rest's preload comes (late). A closed video kept to
+ * resume goes for it (not for its own tile: OK resumes it there). Not a live stream (its preload fetches its newest
+ * segments), nor while YouTube's player holds the decoder for films */
 function readyFocused(late: boolean): void {
     var video = focusedTile();
     // (the screen's pictures checked last: it measures them; the late call comes once preloadFocused found them in)
     if (!prefs().preload || !video || video.page || video.movie || video.live || own.busy || tv.busy || tv.warming || tv.ready ||
-        document.hidden || own.readyFor(video.id) || own.leftId === video.id || own.leftId && !late ||
+        document.hidden || own.readyFor(video.id) || own.leftId === video.id ||
         !late && (picturesWaiting() || !mayAskAhead(video.id))) {
         return;
     }
@@ -1150,6 +1408,12 @@ function holdTile(): Video | null {
     return video && !video.page ? video : null;
 }
 
+/** Whether OK held means something to the screen for what it has focused (Settings: a custom logo's tile) */
+function screenHolds(): boolean {
+    var s = screen();
+    return !question.shown && !(promptMade && promptMade.shown) && !menuFocused && !own.busy && !tv.busy && !tileMenu.shown && !!s.holds && s.holds();
+}
+
 /** After every key: only one of rail and screen shows focus */
 function updateMenu(): void {
     var view = screen();
@@ -1162,7 +1426,19 @@ function updateMenu(): void {
     if (view.setFocused) {
         view.setFocused(!menuFocused);
     }
+    // In the rail: its neighbours stand by once the focus has rested a moment. Out of it: those standing by for it
+    // are let go soon (a page's covered screen keeps its own, longer time)
+    clearTimeout(neighboursTimer);
+    if (menuFocused) {
+        clearTimeout(standTimer);
+        neighboursTimer = setTimeout(neighboursBy, NEIGHBOURS_MS) as unknown as number;
+    } else if (wasInRail) {
+        letGo(STAND_MS);
+    }
+    wasInRail = menuFocused;
 }
+/** The rail had the focus at the last updateMenu */
+var wasInRail = false;
 
 /** Every screen and page (shown or not) */
 function allScreens(): Screen[] {
@@ -1198,6 +1474,11 @@ function route(code: number): boolean {
                     opened.reload();
                 }
             } });
+            return true;
+        }
+        // ... or on something of the screen's own (Settings: a custom logo's tile, to remove it)
+        var held = screen();
+        if (screenHolds() && held.onHold && held.onHold()) {
             return true;
         }
         code = KEY.OK;
@@ -1280,13 +1561,15 @@ function route(code: number): boolean {
 
 /** The shortcut on code where it works now (api/shortcuts.ts): in the app's player, else on the screens; none while
  * something is open over them (it keeps every key: a panel, Live chat settings, a page of Settings' own) or the screen
- * keeps the key (Search's keyboard its numbers); false: none */
+ * keeps the key (Search's keyboard its numbers), but the comments' own shortcut over the comments (it closes them);
+ * false: none */
 function runShortcut(code: number): boolean {
     var inPlayer = own.busy;
     var view = screen();
-    var taken = inPlayer ? !!own.layer() : !!(view.layer && view.layer()) || !!view.ownKeys && view.ownKeys(code);
-    var s = keyName(code) && !taken ? shortcutAt(code, inPlayer ? PLAYER : SCREENS) : null;
-    if (!s) {
+    var s = keyName(code) ? shortcutAt(code, inPlayer ? PLAYER : SCREENS) : null;
+    var taken = inPlayer ? !!own.layer() && !(s && s.action === 'comments' && own.commentsOpen) :
+        !!(view.layer && view.layer()) || !!view.ownKeys && view.ownKeys(code);
+    if (!s || taken) {
         return false;
     }
     if (!inPlayer || !own.act(s.action)) {
@@ -1526,8 +1809,9 @@ document.addEventListener('error', function (e) {
 initKeys();
 // OK acts on release; held down, it opens a video tile's menu (as YouTube's TV app)
 setHoldOk(true);
-/** The tile picture shown pressed while OK is down on it */
+/** The tile picture shown pressed while OK is down on it, and the focus ring's edge around it */
 var pressedFrame: HTMLElement | null = null;
+var pressedRing: HTMLElement | null = null;
 
 /** OK going down on a video tile (its release starts it, a hold opens its menu): it looks pressed at once (not under its
  * preview), and with Videos start sooner its streams are asked now, so the start at the release finds them on their way */
@@ -1536,6 +1820,12 @@ function pressTile(video: Video): void {
     if (frame && !preview.playing(video.id)) {
         pressedFrame = frame;
         toggleClass(frame, 'by-tile--pressed', true);
+        // (the ring gives with it: the tile's row holds it, ui/tile-row.ts)
+        var strip = frame.parentNode && frame.parentNode.parentNode as HTMLElement | null;
+        pressedRing = strip ? strip.querySelector('.bd-ring-edge') as HTMLElement | null : null;
+        if (pressedRing) {
+            toggleClass(pressedRing, 'by-tile--pressed', true);
+        }
     }
     if (prefs().preload && !video.movie) {
         startSoon(video.id);
@@ -1546,6 +1836,10 @@ function unpressTile(): void {
     if (pressedFrame) {
         toggleClass(pressedFrame, 'by-tile--pressed', false);
         pressedFrame = null;
+    }
+    if (pressedRing) {
+        toggleClass(pressedRing, 'by-tile--pressed', false);
+        pressedRing = null;
     }
 }
 
@@ -1617,6 +1911,10 @@ function pressKey(code: number): boolean {
     if (code !== KEY.OK && (now ? now.id : '') !== (was ? was.id : '')) {
         own.unready();
     }
+    // (a page built ahead belongs to what had the focus: a tile, or with none focused a channel of Subscriptions' strip)
+    if (code !== KEY.OK && (!now || !was || now.id !== was.id)) {
+        dropBuilt();
+    }
     if (code === KEY.OK && !keep) {
         preview.stop();
     }
@@ -1632,8 +1930,9 @@ function staysPut(code: number): boolean {
     return !!s && (s.action === 'screenOff' || s.action === 'subscribe');
 }
 
-// OK where holding it means nothing (all but a video tile's menu) acts as it goes down, not at its release: decided by
-// what has the focus then (ahead of keys.ts, which keeps the hold's press), the press's repeats and release dropped
+// OK where holding it means nothing (all but a video tile's menu and what a screen holds: screenHolds) acts as it
+// goes down, not at its release: decided by what has the focus then (ahead of keys.ts, which keeps the hold's press),
+// the press's repeats and release dropped
 var okTaken = '';
 var okAt = 0;
 var okRepeated = false;
@@ -1662,9 +1961,11 @@ function okFirst(code: number, isUp: boolean): boolean {
     okAt = now;
     okRepeated = false;
     var tile = holdTile();
-    if (tile) {
+    if (tile || screenHolds()) {
         okTaken = 'hold';
-        pressTile(tile);
+        if (tile) {
+            pressTile(tile);
+        }
         return false;
     }
     okTaken = 'now';
@@ -1826,6 +2127,11 @@ function shownOver(shown: boolean): void {
     }
     if (shown) {
         preview.stop();
+        // (nothing stands by under a video: its memory is the player's)
+        clearTimeout(neighboursTimer);
+        clearTimeout(buildTimer);
+        letGo();
+        dropBuilt();
         root.style.display = 'none';
         // Release covered pictures, except on the screen Back returns to (so they show at once)
         releaseTimer = setTimeout(function () {
@@ -1914,6 +2220,19 @@ whenScreenRests(function () {
             }
         }
     }, function () { return undefined; });
+    // Whether a newer version is out: asked once a day, half a minute from here, and told at most once a week by a
+    // toast the viewer can see (not under a video, behind another app or on a screen that is off)
+    checkVersion(function () {
+        return own.busy || tv.busy || document.hidden || screenIsOff();
+    }, function (version) {
+        toast(tr('Bolli YouTube {1} is out. See Settings › About.', version), 'info');
+    });
+    // (and again each time the app comes back on screen: a TV that keeps the app for days starts it only once)
+    document.addEventListener('visibilitychange', function () {
+        if (!document.hidden) {
+            checkAgain();
+        }
+    });
 });
 
 /** Sections built ahead (prepareSections); their account is not checked until they show */

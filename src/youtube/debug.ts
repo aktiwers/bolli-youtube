@@ -5,7 +5,7 @@
 import { Page, Video } from './api/feed.js';
 import { offThreadStats } from './api/off-thread.js';
 import { prefs, reloadPrefs, setPref } from './api/prefs.js';
-import { forgetStreams, sabrStreams, streams } from './api/streams.js';
+import { forgetStreams, sabrStreams, streams, takeLiveAsOver } from './api/streams.js';
 import { identities, innertube, innertubeAs } from './api/youtube.js';
 import { Cast } from './cast.js';
 import { OwnPlayer, startFormats } from './player/own-player.js';
@@ -37,6 +37,8 @@ export function debugHooks(app: DebugApp): void {
     debug.play = function (id: string, t?: number): void {
         app.play({ id: id, title: id, channel: '', length: '', info: '', start: t });
     };
+    // liveAsOver(on): live streams asked for from now on play as one that has ended does (api/streams.ts)
+    debug.liveAsOver = takeLiveAsOver;
     // own: the app's player; tv: YouTube's TV app hidden in this one (player/tv-app.ts)
     debug.own = app.own;
     debug.tv = app.tv;

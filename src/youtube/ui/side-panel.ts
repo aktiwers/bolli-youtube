@@ -118,6 +118,11 @@ export class SidePanel {
         this.draw();
     }
 
+    /** Whether the list shown is the one opened with these lines */
+    showing(lines: () => PanelLine[]): boolean {
+        return this.shown && this.stack[this.stack.length - 1].lines === lines;
+    }
+
     /** Rebuilds the shown list (something in it changed), keeping the focus */
     refresh(): void {
         if (this.shown) {

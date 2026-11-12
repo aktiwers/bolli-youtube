@@ -30,3 +30,26 @@ export function lunaCall(uri: string, params: object, reply: (message: string, d
     bridge.call(uri, JSON.stringify(params));
     return bridge;
 }
+
+/** Calls waiting for their one reply (held: a bridge let go is dropped with its reply) */
+var waiting: Bridge[] = [];
+
+/** A call whose one reply is wanted: resolves with it when it says returnValue true, rejects otherwise (a refusal, no
+ * such service, or outside the TV) */
+export function lunaAsk(uri: string, params: object): Promise<{ [key: string]: unknown }> {
+    return new Promise<{ [key: string]: unknown }>(function (resolve, reject) {
+        var bridge = lunaCall(uri, params, function (_message, reply) {
+            waiting = waiting.filter(function (b) { return b !== bridge; });
+            if (reply && reply.returnValue === true) {
+                resolve(reply);
+            } else {
+                reject(new Error('refused'));
+            }
+        });
+        if (bridge) {
+            waiting.push(bridge);
+        } else {
+            reject(new Error('no services'));
+        }
+    });
+}

@@ -7,7 +7,9 @@
 // frame, so 100 drawn tiles would slow the whole screen. The containing
 // screen sets how many screens of images to keep (setImages; a decoded
 // poster is ~0.6 MB); images more than a screen behind or two ahead are
-// released. Moving focus changes two class names and one transform. A click on a tile (the Magic Remote's pointer)
+// released. Moving focus changes two class names and two transforms: the strip's, and the focus ring's, an element of
+// its own over the focused tile's picture (a layer: as a shadow on the picture's box it had the TV draw that tile's
+// part of the row anew, its picture scaled again, at every step). A click on a tile (the Magic Remote's pointer)
 // is OK on it in place: the focus moves there for it and back after, as YouTube's opens a tile without moving the
 // keys' focus.
 
@@ -70,6 +72,9 @@ export interface TileRowOptions {
     shape: TileShape;
     /** The items, when already known */
     items?: TileItem[];
+    /** Or what makes them, called when the row first needs them (it nears the view, or is looked through): the
+     * rows of a screen that are never reached then cost nothing to make */
+    make?: () => TileItem[];
     /** Or a loader for them (called by load()) */
     load?: () => Promise<TileItem[]>;
     /** Called after loading (empty items: nothing found; failed: retried when
@@ -102,6 +107,13 @@ var LAYOUT: TileLayout = { pad: 56, gap: 24, under: 40, head: 40, rowGap: 26 };
 var DRAWN_AROUND = 2;
 /** A failed load is not retried before this */
 var RETRY_MS = 20000;
+/** The strip's box begins this far above its tiles, so what a tile draws above itself (the focus ring, a stack's
+ * edges) lies inside it. The strip is a layer of its own, and a layer whose outline grows upwards is drawn anew as a
+ * whole: without the room, each row gaining or losing the ring cost the TV a full row of tiles (~50 ms) before the
+ * step could show. */
+var ROOM_ABOVE = 12;
+/** How far the focus ring reaches beyond the picture's box on each side (the theme's bd-ring-edge border) */
+var RING = 6;
 
 /** Height of one row, heading included (noTitle: a grid line, without) */
 export function rowHeight(shape: TileShape, noTitle?: boolean, layout?: TileLayout): number {
@@ -111,7 +123,6 @@ export function rowHeight(shape: TileShape, noTitle?: boolean, layout?: TileLayo
 
 interface Tile {
     el: HTMLElement;
-    under: HTMLElement;
     frame: HTMLElement;
     img: HTMLImageElement;
     /** The image is requested (src set) */
@@ -123,8 +134,17 @@ interface Tile {
 
 export class TileRow {
     el: HTMLElement;
-    items: TileItem[] = [];
+    /** The items made so far, and what makes them when they are first asked for (null: made, or given) */
+    private made: TileItem[] = [];
+    private toMake: (() => TileItem[]) | null = null;
     private strip: HTMLElement;
+    /** The focus ring (made when the row first marks a tile: most rows of a screen never do), and its size,
+     * roundness and showing as last set */
+    private ring: HTMLElement | null = null;
+    private ringW = 0;
+    private ringH = 0;
+    private ringRound = false;
+    private ringShown = false;
     /** Tile width and gap */
     private step: number;
     /** Tiles in view from the margin */
@@ -176,7 +196,12 @@ export class TileRow {
         }
         this.strip = h('div', 'bd-row-strip');
         this.strip.style.position = 'relative';
-        this.strip.style.height = Math.max(options.shape.h, options.wideShape ? options.wideShape.h : 0) + this.layout.under + 'px';
+        this.strip.style.marginTop = -ROOM_ABOVE + 'px';
+        // A layer of its own from the start (scroll moves it by its transform): one that became a layer only when
+        // its row was first focused had its tiles drawn anew then, and those of the rows after it
+        translate(this.strip, 0, 0);
+
+        this.strip.style.height = Math.max(options.shape.h, options.wideShape ? options.wideShape.h : 0) + this.layout.under + ROOM_ABOVE + 'px';
         this.el.appendChild(this.strip);
         var self = this;
         takesPointer(this.el, function (target) {
@@ -194,7 +219,30 @@ export class TileRow {
             if (!options.lazy) {
                 this.update();
             }
+        } else if (options.make) {
+            this.toMake = options.make;
+            this.asked = true;
         }
+    }
+
+    get items(): TileItem[] {
+        var make = this.toMake;
+        if (make) {
+            this.toMake = null;
+            try {
+                this.made = make();
+            } catch (e) {
+                // (stored rows an older build kept may not make tiles: the row stays empty until fresh rows replace
+                // it; thrown on, it would stop the key that reached the row)
+                this.made = [];
+            }
+        }
+        return this.made;
+    }
+
+    set items(items: TileItem[]) {
+        this.toMake = null;
+        this.made = items;
     }
 
     get focused(): TileItem | null {
@@ -271,7 +319,7 @@ export class TileRow {
         toggleClass(this.el, 'bd-row--big', shape !== this.options.shape);
         this.step = shape.w + this.layout.gap;
         this.screen = Math.ceil(LAYOUT_WIDTH / this.step);
-        this.strip.style.height = shape.h + this.layout.under + 'px';
+        this.strip.style.height = shape.h + this.layout.under + ROOM_ABOVE + 'px';
         for (var i = 0; i < this.tiles.length; i++) {
             var tile = this.tiles[i];
             if (tile) {
@@ -281,6 +329,7 @@ export class TileRow {
         }
         this.scroll();
         this.update();
+        this.placeRing();
     }
 
     /** screens: screens of images kept from the margin (0: none, the row is
@@ -353,8 +402,12 @@ export class TileRow {
         });
     }
 
-    /** Calls fn for each item with this id, with its tile (undefined: not built yet) and index */
+    /** Calls fn for each item with this id, with its tile (undefined: not built yet) and index (none while the items
+     * are not made yet: they are made with what there is to know then) */
     private eachTile(id: string, fn: (item: TileItem, tile: Tile | undefined, index: number) => void): void {
+        if (this.toMake) {
+            return;
+        }
         for (var i = 0; i < this.items.length; i++) {
             if (this.items[i].id === id) {
                 fn(this.items[i], this.tiles[i], i);
@@ -417,7 +470,7 @@ export class TileRow {
             tile = buildTile(item, this.shape, this.layout.under);
             tile.el.style.position = 'absolute';
             tile.el.style.left = this.left(index) + 'px';
-            tile.el.style.top = '0';
+            tile.el.style.top = ROOM_ABOVE + 'px';
             tile.el.style.display = 'none';
             if (index < this.first) {
                 toggleClass(tile.el, 'bd-tile--gone', true);
@@ -445,6 +498,45 @@ export class TileRow {
         if (this.options.wideShape) {
             this.widen(want);
         }
+        this.placeRing();
+    }
+
+    /** Puts the focus ring around the marked tile's picture box (hidden while no tile is marked), by its transform;
+     * its size is set only when the box's changes (another shape, a round tile) */
+    private placeRing(): void {
+        var at = this.marked;
+        var ring = this.ring;
+        if (!ring) {
+            if (at < 0) {
+                return;
+            }
+            ring = this.ring = this.strip.appendChild(h('div', 'bd-ring')) as HTMLElement;
+            ring.appendChild(h('div', 'bd-ring-edge'));
+            this.ringShown = true;
+        }
+        if ((at >= 0) !== this.ringShown) {
+            this.ringShown = at >= 0;
+            ring.style.display = this.ringShown ? '' : 'none';
+        }
+        if (at < 0) {
+            return;
+        }
+        var wide = this.options.wideShape;
+        var shape = wide && at === this.wideAt ? wide : this.shape;
+        var round = !!this.items[at].round;
+        var w = (round ? shape.h : shape.w) + 2 * RING;
+        var height = shape.h + 2 * RING;
+        if (w !== this.ringW || height !== this.ringH) {
+            this.ringW = w;
+            this.ringH = height;
+            ring.style.width = w + 'px';
+            ring.style.height = height + 'px';
+        }
+        if (round !== this.ringRound) {
+            this.ringRound = round;
+            toggleClass(ring, 'bd-ring--round', round);
+        }
+        translate(ring, this.left(at) + (round ? (shape.w - shape.h) / 2 : 0) - RING, ROOM_ABOVE - RING);
     }
 
     /** Tile index's offset in the strip (tiles after the wide one shift by its extra width) */
@@ -536,10 +628,10 @@ function progressTile(tile: Tile, progress: number): void {
 /** Sizes a tile to shape (round: a centred square image as tall as the shape) */
 function sizeTile(tile: Tile, shape: TileShape, round: boolean): void {
     tile.el.style.width = shape.w + 'px';
-    tile.frame.style.width = tile.under.style.width = (round ? shape.h : shape.w) + 'px';
-    tile.frame.style.height = tile.under.style.height = shape.h + 'px';
+    tile.frame.style.width = (round ? shape.h : shape.w) + 'px';
+    tile.frame.style.height = shape.h + 'px';
     if (round) {
-        tile.frame.style.marginLeft = tile.under.style.marginLeft = (shape.w - shape.h) / 2 + 'px';
+        tile.frame.style.marginLeft = (shape.w - shape.h) / 2 + 'px';
     }
 }
 
@@ -549,9 +641,6 @@ function buildTile(item: TileItem, shape: TileShape, textH: number): Tile {
         var edge = el.appendChild(h('div', 'bd-tile-stack bd-tile-stack--' + i)) as HTMLElement;
         edge.style.backgroundColor = color;
     });
-    // Empty element behind the image, same size: the theme draws the focus shadow on it
-    var under = h('div', 'bd-tile-under');
-    el.appendChild(under);
     var frame = h('div', 'bd-tile-frame');
     el.appendChild(frame);
     var img = h('img', 'bd-tile-img bd-fade') as HTMLImageElement;
@@ -587,7 +676,7 @@ function buildTile(item: TileItem, shape: TileShape, textH: number): Tile {
     if (item.rank) {
         el.appendChild(h('div', 'bd-tile-rank', item.rank));
     }
-    var tile: Tile = { el: el, under: under, frame: frame, img: img, hasImage: false, label: null, bar: null };
+    var tile: Tile = { el: el, frame: frame, img: img, hasImage: false, label: null, bar: null };
     sizeTile(tile, shape, !!item.round);
     if (item.progress) {
         progressTile(tile, item.progress);

@@ -19,6 +19,7 @@ import { android } from '../core/platform.js';
 import { load, save } from '../core/store.js';
 import { Ended, paramBytes, text } from './feed.js';
 import { languageOrder, subtitleLanguages, trackName } from './languages.js';
+import { prefs } from './prefs.js';
 import { forgetScript, playerScript, playerSts } from './player-script.js';
 import { SabrClient } from './sabr.js';
 import { forgetOnesie, onesie, prepareOnesie } from './onesie.js';
@@ -123,10 +124,13 @@ export interface Streams {
     live: Live | null;
 }
 
-/** A live stream's segments: about this long each (s), and how far back they reach (s) */
+/** A live stream's segments: about this long each (s), and how far back they reach (s). over: the stream has ended
+ * and YouTube still serves it as it was live, for the minutes until it has made a video of it: its head stands, and
+ * it plays from its window's start to its head as a video does */
 export interface Live {
     segment: number;
     dvr: number;
+    over?: boolean;
 }
 
 /** A storyboard level: sheets of w x h frames, cols x rows a sheet, one frame every interval ms */
@@ -486,6 +490,12 @@ export function forgetStreams(id: string): void {
     kept = kept.filter(function (k) { return k.id !== id; });
 }
 
+/** Drop the cached streams of all videos but id (the line came back: the TV may have another address now, which
+ * their URLs are refused for) */
+export function forgetOtherStreams(id: string): void {
+    kept = kept.filter(function (k) { return k.id === id; });
+}
+
 /** History's report URLs (a /player reply's playbackTracking) and the playback id that reply was asked with: the
  * reports name the same */
 export interface Tracking {
@@ -693,12 +703,22 @@ function ask(id: string, again: boolean): Promise<Streams> {
     });
 }
 
+/** Tests on a TV: a live stream is taken for one that has ended (played from its window's start to the head it has
+ * then), so that way of playing can be tried while no stream has just ended */
+var liveAsOver = false;
+export function takeLiveAsOver(on: boolean): void {
+    liveAsOver = on;
+}
+
 /** What the own player can play from a /player reply (sabr: formats come via SABR, not URLs) */
 export function streamsOf(reply: any, sabr?: boolean): Streams {
     var details = reply.videoDetails || {};
     var formats: any[] = reply.streamingData && reply.streamingData.adaptiveFormats || [];
-    // A live stream's formats are numbered segments (no index)
-    var live = !!details.isLive && !sabr ? formats.filter(function (f) { return f.targetDurationSec; })[0] : null;
+    // A live stream's formats are numbered segments (no index). So are those of a stream that has just ended, until
+    // YouTube has made a video of it: no format of it has an index yet (over)
+    var numbered = sabr ? [] : formats.filter(function (f) { return f.targetDurationSec; });
+    var over = !details.isLive && !formats.some(function (f) { return f.indexRange; });
+    var live = details.isLive || over ? numbered[0] || null : null;
     var playable = formats.filter(function (f) {
         // (a WebM video needs its length: its last segment ends there; a live stream's segments are numbered, SABR's
         // come whole)
@@ -731,6 +751,11 @@ export function streamsOf(reply: any, sabr?: boolean): Streams {
         storyboard: storyboardOf(reply.storyboards),
         live: live ? { segment: +live.targetDurationSec, dvr: +live.maxDvrDurationSec || 0 } : null
     };
+    // (one that has ended reaches back over all of it where YouTube names no window)
+    if (s.live && (over || liveAsOver)) {
+        s.live.over = true;
+        s.live.dvr = s.live.dvr || +details.lengthSeconds || 0;
+    }
     // (its words ours in another app language: the player is asked in English)
     var said = paid && text(paid.text);
     if (said) {
@@ -816,6 +841,34 @@ function supported(f: any): boolean {
         SUPPORTED[key] = asked && (decoders !== null ? decoders : sized || !/av01/.test(f.mimeType));
     }
     return SUPPORTED[key];
+}
+
+/** A format's codec as viewers name it ("VP9", "AV1", "H.264"; '' one not known) */
+export function codecName(mime: string): string {
+    var kind = kindOf(mime);
+    return kind === 'video/webm vp9' ? 'VP9' : kind === 'video/mp4 av01' ? 'AV1' : kind === 'video/mp4 avc1' ? 'H.264' : '';
+}
+
+/** Settings › Video codec's choices as format kinds (kindOf) */
+var CODEC_KINDS: { [codec: string]: string } = { vp9: 'video/webm vp9', av1: 'video/mp4 av01', h264: 'video/mp4 avc1' };
+/** A format of each codec that a device playing the codec at all plays: 1080p at 30 fps, in the codec string YouTube
+ * gives its 1080p (H.264 High 4.0, AV1 Main 4.0 8-bit), so the device is asked about the codec, not about 4K or 60 fps
+ * (H.264 has no more than 1080p here) */
+var CODEC_SAMPLES: { [codec: string]: string } = { vp9: 'video/webm; codecs="vp9"', av1: 'video/mp4; codecs="av01.0.08M.08"', h264: 'video/mp4; codecs="avc1.640028"' };
+
+/** Whether this device plays the codec ('vp9', 'av1', 'h264'), asked as its formats are (supported): Settings say so
+ * on one it does not play (chosen all the same, videos play as with Auto: preferred) */
+export function codecPlays(codec: string): boolean {
+    var mime = CODEC_SAMPLES[codec];
+    return !!mime && supported({ mimeType: mime, width: 1920, height: 1080, fps: 30 });
+}
+
+/** The formats a start or the quality menu picks from: those of the codec Settings prefer if the video has any, else
+ * all (Auto: all). The streams keep every codec, for the fallback ladder's codec step */
+export function preferred(videos: Format[]): Format[] {
+    var kind = CODEC_KINDS[prefs().codec];
+    var mine = kind ? videos.filter(function (f) { return kindOf(f.mime) === kind; }) : [];
+    return mine.length ? mine : videos;
 }
 
 /** The most lines the player plays: 8K, where the device plays it (supported, shown) */

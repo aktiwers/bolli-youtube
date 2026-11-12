@@ -43,6 +43,19 @@ export function setShown(el: HTMLElement, shown: boolean): void {
     el.style.visibility = shown ? '' : 'hidden';
 }
 
+/** Puts a screen out of sight while it stays drawn (by: true), or back in its place: the stylesheet's by-standby moves
+ * it below the screen's foot. What is drawn there keeps its layers and its decoded pictures, so back in place it
+ * shows at the next frame with nothing drawn anew (hidden and shown again, the TV draws a screen of tiles in
+ * 0.3-0.6 s). */
+export function standsBy(el: HTMLElement, by: boolean): void {
+    toggleClass(el, 'by-standby', by);
+}
+
+/** Whether el stands by (standsBy) */
+export function isStandingBy(el: HTMLElement): boolean {
+    return (' ' + el.className + ' ').indexOf(' by-standby ') >= 0;
+}
+
 /** How far to scroll list (in a view this tall) to keep el centred, clamped at both ends (-1: not laid out yet) */
 export function centred(list: HTMLElement, view: number, el: HTMLElement): number {
     return view ? Math.max(0, Math.min(list.offsetHeight - view, el.offsetTop + el.offsetHeight / 2 - view / 2)) : -1;

@@ -462,8 +462,9 @@ export class ChatView {
      * beside a strip; else as the theme has them (layout units, its place as laid out; hidden by the watch page: as the
      * theme has them) */
     private makeRoom(): void {
-        var x = this.el.offsetLeft;
-        var w = this.el.offsetWidth;
+        // (measured only while the chat is on: the read lays the page out, ~40 ms at each preview's and video's start)
+        var x = this.on ? this.el.offsetLeft : 0;
+        var w = this.on ? this.el.offsetWidth : 0;
         var showing = this.on && w > 0;
         var atRight = x + w / 2 > LAYOUT_WIDTH / 2;
         // Beside a strip: the room left for the picture (from, to: layout units from the top)
