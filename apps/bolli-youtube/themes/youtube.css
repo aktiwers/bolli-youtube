@@ -302,6 +302,8 @@ html, body { background: #0f0f0f; }
 .by-langs-field { left: 104px; top: 104px; width: 676px; height: 48px; line-height: 48px; padding: 0 20px;
                   border-radius: 24px; background: #303030; font-size: 24px; font-weight: 700; color: #f1f1f1; }
 .by-langs-field--empty { color: #8a8a8a; font-weight: 400; }
+/* The real text field the TV's own keyboard types into: the shown field's look, with the caret */
+.by-langs-input { box-sizing: content-box; margin: 0; border: 0; outline: 0; font-family: inherit; }
 .by-langs-list { left: 104px; top: 176px; width: 340px; }
 .by-langs-item { height: 44px; line-height: 44px; padding: 0 48px 0 16px; border-radius: 8px; font-size: 20px; color: #f1f1f1; }
 .by-langs-item--focused { background: #f1f1f1; color: #0f0f0f; }

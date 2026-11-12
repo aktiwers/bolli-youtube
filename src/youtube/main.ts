@@ -12,7 +12,7 @@
 
 import { fadeInImages, h, isStandingBy, LAYOUT_HEIGHT, LAYOUT_WIDTH, toggleClass } from './core/dom.js';
 import { tr } from './core/i18n.js';
-import { initKeys, KEY, keyCame, lastKeyAt, setActive, setHoldOk } from './core/keys.js';
+import { initKeys, isTyping, KEY, keyCame, lastKeyAt, setActive, setHoldOk } from './core/keys.js';
 import { initPerf, mark, noteKey } from './core/perf.js';
 import { android, exitApp, ignorePointer } from './core/platform.js';
 import { initPointer, Layer, takesPointer } from './core/pointer.js';
@@ -1975,7 +1975,8 @@ function okFirst(code: number, isUp: boolean): boolean {
 }
 ['keydown', 'keyup'].forEach(function (type) {
     window.addEventListener(type, function (e: Event) {
-        if (okFirst((e as KeyboardEvent).keyCode, type === 'keyup')) {
+        // (a real text field has the keys: core/keys.ts setTyping)
+        if (!isTyping() && okFirst((e as KeyboardEvent).keyCode, type === 'keyup')) {
             e.preventDefault();
             e.stopPropagation();
         }

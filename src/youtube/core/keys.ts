@@ -63,6 +63,19 @@ export function setActive(handler: KeyHandler): void {
     active = handler;
 }
 
+/** While a real text field has the focus (the TV's own keyboard, a phone's or a plugged-in one types into it): the
+ * keys are the field's, but those taken says it takes (Enter, Back); null: the keys are the app's again */
+var typing: ((code: number) => boolean) | null = null;
+export function setTyping(taken: ((code: number) => boolean) | null): void {
+    typing = taken;
+    releaseOk();
+}
+
+/** Whether a real text field has the keys (setTyping) */
+export function isTyping(): boolean {
+    return !!typing;
+}
+
 /** OK acts on release, and held down sends KEY.HOLD (for Google TV's remote) */
 export function setHoldOk(on: boolean): void {
     holdOk = on;
@@ -71,12 +84,12 @@ export function setHoldOk(on: boolean): void {
 
 export function initKeys(): void {
     document.addEventListener('keydown', function (e: KeyboardEvent) {
-        if (down(e.keyCode)) {
+        if (typing ? typing(e.keyCode) : down(e.keyCode)) {
             e.preventDefault();
         }
     }, true);
     document.addEventListener('keyup', function (e: KeyboardEvent) {
-        if (up(e.keyCode)) {
+        if (!typing && up(e.keyCode)) {
             e.preventDefault();
         }
     }, true);
