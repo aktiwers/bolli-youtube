@@ -178,6 +178,10 @@ var SPEED_TRIES = 40;
 /** Streams are fetched anew (expired URLs, a playback that keeps stalling) again only this long after the last time
  * (sooner, that is not what helps), or after the line was lost since (ladder.ts renewal) */
 var RENEW_AGAIN_MS = 10 * 60 * 1000;
+/** A live stream that gets no further at its head: YouTube is asked whether it has ended no sooner than this after
+ * the last ask (ms), and at most this often for one start */
+var OVER_AGAIN_MS = 10000;
+var OVER_ASKS = 8;
 /** How long the volume shows after the phone changes it */
 var VOLUME_SHOWN_MS = 1500;
 /** How long a start waits for DeArrow's title of a video no tile asked it for (ms) */
@@ -346,6 +350,11 @@ export class OwnPlayer {
     private toldOffline = false;
     /** This start's ways tried after its engine failed (failed, nextStep) */
     private tries = noTries();
+    /** A live stream that got no further at its head: YouTube is being asked whether it has ended; when it was last
+     * asked (ms); and how often for this start */
+    private overAsking = false;
+    private overAskedAt = 0;
+    private overAsks = 0;
     private askedAt = 0;
     private moving = false;
     /** The picture height the quality tag was drawn for (0: not yet) */
@@ -1804,6 +1813,9 @@ export class OwnPlayer {
         this.held = false;
         // (a renewal for the previous video may still be on its way: it is not this start's)
         this.tries = noTries();
+        this.overAsking = false;
+        this.overAskedAt = 0;
+        this.overAsks = 0;
         this.loop = !!want.loop;
         this.upNext.hide();
         (window as any).__bolli.steps = {};
@@ -2411,8 +2423,19 @@ export class OwnPlayer {
         }
     }
 
-    /** The engine failed for why: the next step of the ladder (nextStep) */
-    private failed(why: string): void {
+    /** The engine failed for why: the next step of the ladder (nextStep). A live stream that gets no further at its
+     * head (the engine's 'stands', or a failure of the segment to come) may have ended: YouTube is asked first
+     * (liveOver), unless that was just done (asked: it was, for this failure) */
+    private failed(why: string, asked?: boolean): void {
+        var live = this.engine instanceof LiveEngine && !this.engine.over ? this.engine : null;
+        if (live && !asked && (why === 'stands' || live.atHead()) && (this.overAsking || this.overAsks < OVER_ASKS && Date.now() - this.overAskedAt >= OVER_AGAIN_MS)) {
+            this.liveOver(live, why);
+            return;
+        }
+        // (the head stands and the stream has not ended, or YouTube was just asked: nothing to do but wait on)
+        if (why === 'stands') {
+            return;
+        }
         var want = this.want as Want;
         var s = this.streams as Streams;
         var tries = this.tries;
@@ -2481,6 +2504,39 @@ export class OwnPlayer {
                 }, why);
             }
         }
+    }
+
+    /** Asks YouTube whether the live stream playing has ended (it gets no further at its head, for why). Ended: the
+     * engine plays out what it has and ends, and the player's own end follows as a video's. Not ended, or no answer:
+     * a failure takes the ladder's step; the head merely standing is waited out (the engine says so again). One ask
+     * at a time; what the engine says meanwhile waits for its answer */
+    private liveOver(engine: LiveEngine, why: string): void {
+        if (this.overAsking) {
+            return;
+        }
+        var want = this.want as Want;
+        var self = this;
+        this.overAsking = true;
+        this.overAskedAt = Date.now();
+        this.overAsks++;
+        var told = function (over: boolean): void {
+            self.overAsking = false;
+            if (self.want !== want || self.engine !== engine) {
+                return;
+            }
+            note('live', want.id + (over ? ': the stream has ended' : ': the stream has not ended (' + why + ')'));
+            if (over) {
+                engine.finish();
+            } else {
+                self.failed(why, true);
+            }
+        };
+        forgetStreams(want.id);
+        streams(want.id, true).then(function (s) {
+            told(!s.live || !!s.live.over);
+        }, function (e: NoStreams) {
+            told(!unanswered(e) && (!!e.ended || noneCanPlay(e)));
+        });
     }
 
     /** A video format of a codec neither playing nor tried yet for this video (null: none left) */

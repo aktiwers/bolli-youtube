@@ -18,6 +18,10 @@
 // A stream that has ended and is still served this way (Live.over: for some minutes, until YouTube has made a video
 // of it) plays as a video does: from its window's first segment, its head standing, nothing asked past it, no
 // following, and the stream ended for the TV once the head's segment is in, so the player's own end comes.
+//
+// A stream may end while it plays: the segment to come then never comes. One asked for that has not come after
+// several segments' time is told as the failure 'stands' (again each such while); the player asks YouTube whether
+// the stream has ended and, if so, calls finish: the stream is over from then on, plays out what it has and ends.
 
 import { clock, progress } from '../core/time.js';
 import { tr } from '../core/i18n.js';
@@ -42,6 +46,10 @@ var LIVE_NEAR_S = 25;
 var CATCH_UP_S = 15;
 /** A start fetched ahead is taken this long (ms): the head moves on a segment each ~5 s */
 var EARLY_MS = 10000;
+/** A segment to come that has not come after this many segments' time, and at least this long (s): the stream may
+ * have ended ('stands') */
+var STANDS_SEGMENTS = 3;
+var STANDS_MIN_S = 12;
 
 type Got = { data: ArrayBuffer; head: number };
 
@@ -133,9 +141,12 @@ export class LiveEngine implements Engine {
     private windowSq = -1;
     /** The start fetched ahead this one takes (null: none) */
     private early: typeof early = null;
+    /** Since when a segment to come is waited for with none come meanwhile (ms; 0: none is) */
+    private waitingSince = 0;
     private onFail: (why: string) => void;
 
-    /** onFail: 'expired' (the URLs expired), 'media' (Media Source or the decoder), 'network' */
+    /** onFail: 'expired' (the URLs expired), 'media' (Media Source or the decoder), 'network', 'stands' (the segment
+     * to come does not come: no failure yet, the stream may have ended) */
     constructor(private video: HTMLVideoElement, private live: Live, onFail: (why: string) => void) {
         this.onFail = spoilingFail(onFail);
         // Past the stream's window, so its oldest segment still lies after 0
@@ -281,6 +292,36 @@ export class LiveEngine implements Engine {
         return !!this.live.over;
     }
 
+    /** Whether every track has fetched all there is, up to the head: what fails then is a segment to come */
+    atHead(): boolean {
+        var head = this.head;
+        return head >= 0 && this.tracks.length > 0 && this.tracks.every(function (t) { return t.sq > head; });
+    }
+
+    /** The stream has ended while it played (the player asked YouTube): it is over from now on. The request for a
+     * segment to come is dropped, and the stream ends for the TV once what it has is in (endIfDone) */
+    finish(): void {
+        if (this.stopped || this.live.over) {
+            return;
+        }
+        // (the engine's own: the streams keep what YouTube said of them)
+        this.live = { segment: this.live.segment, dvr: this.live.dvr, over: true };
+        this.waitingSince = 0;
+        var head = this.head;
+        this.tracks.forEach(function (t) {
+            if (t.busy && t.sq > head) {
+                t.gen++;
+                if (t.xhr) {
+                    t.xhr.abort();
+                    t.xhr = null;
+                }
+                t.busy = false;
+            }
+        });
+        note('live', 'over at ' + head);
+        this.endIfDone();
+    }
+
     /** The window's first segment that is played (not the oldest itself: it may be gone by the time it is asked
      * for); of a stream that has ended never before its first */
     private first(): number {
@@ -335,6 +376,7 @@ export class LiveEngine implements Engine {
             self.feedAll();
             self.pump();
             self.endIfDone();
+            self.checkStands();
         }, TICK_MS) as unknown as number;
         this.pump();
     }
@@ -366,6 +408,9 @@ export class LiveEngine implements Engine {
         delete kept[key];
         var got = ahead || fetchSegment(t.format.url, sq, function (xhr) { t.xhr = xhr; }, sq <= this.head);
         t.busy = true;
+        if (sq > this.head && !this.waitingSince) {
+            this.waitingSince = Date.now();
+        }
         got.then(function (r) {
             // Stopped, or a jump or switch moved the track on meanwhile
             if (self.stopped || t.gen !== gen) {
@@ -376,6 +421,10 @@ export class LiveEngine implements Engine {
             t.failures = 0;
             // (the head of a stream that has ended stands)
             if (r.head >= self.head && !self.live.over) {
+                // (it moved, or the segment waited for came: the stream goes on)
+                if (r.head > self.head || sq > self.head) {
+                    self.waitingSince = 0;
+                }
                 self.head = r.head;
                 self.headAt = Date.now();
             }
@@ -538,6 +587,17 @@ export class LiveEngine implements Engine {
         this.pump();
     }
 
+    /** A segment to come has not come for several segments' time: told as 'stands', and again after as long */
+    private checkStands(): void {
+        var after = Math.max(STANDS_SEGMENTS * this.live.segment, STANDS_MIN_S) * 1000;
+        if (this.stopped || this.live.over || !this.waitingSince || Date.now() - this.waitingSince < after) {
+            return;
+        }
+        this.waitingSince = Date.now();
+        note('live', 'the head stands at ' + this.head);
+        this.onFail('stands');
+    }
+
     /** A stream that has ended, with every segment up to its head appended: ended for the TV, which then plays out
      * what it holds and tells the player its end (a jump back feeds again, and this ends it again) */
     private endIfDone(): void {
@@ -607,7 +667,8 @@ function fetchSegment(url: string, sq: number, started?: (xhr: XMLHttpRequest) =
         xhr.responseType = 'arraybuffer';
         xhr.timeout = TIMEOUT_MS;
         xhr.onload = function () {
-            if (xhr.status === 200 && xhr.response) {
+            // (an answer without data is no segment)
+            if (xhr.status === 200 && xhr.response && (xhr.response as ArrayBuffer).byteLength) {
                 resolve({ data: xhr.response as ArrayBuffer, head: +(xhr.getResponseHeader('X-Head-Seqnum') || -1) });
             } else {
                 reject(xhr.status || 'network');
