@@ -183,8 +183,11 @@ export interface Nudge {
 export interface SubChannel {
     title: string;
     picture: string;
-    /** It has new videos (YouTube's blue dot) */
+    /** It has new videos (YouTube's blue dot), until it is looked at (api/looked.ts) */
     fresh: boolean;
+    /** Its newest video in Subscriptions' rows was started, here or elsewhere: no dot is shown, though YouTube marks
+     * it still (its page is fetched anew all the same) */
+    seen?: boolean;
     /** In the group listed first (recent uploads), not only in the A-Z list */
     recent: boolean;
     /** Its latest videos (Subscriptions' page for it), and its channel page (null: unknown) */
@@ -254,9 +257,13 @@ export function keptTab(token: string): Promise<Rows> {
     return tabs.getJson(token, function () { return tabJson(token); });
 }
 
-/** Keeps a tab's tiles as they are shown (a page's first tab comes with the page, not by its token), so going back to
- * it from another tab asks nothing */
-export function keepTab(token: string, rows: Rows): void {
+/** Keeps a tab's tiles as its page brought them (a page's first tab comes with the page, not by its token), so going
+ * back to it from another tab asks nothing. anew (the page was just fetched): in place of what was kept, the newer
+ * tiles; else only where none are kept (a kept page drawn again would keep its old tiles young for good) */
+export function keepTab(token: string, rows: Rows, anew: boolean): void {
+    if (anew) {
+        tabs.drop(token);
+    }
     if (!tabs.has(token)) {
         var text = JSON.stringify(rows);
         tabs.aheadJson(token, function () { return Promise.resolve(text); });

@@ -13,7 +13,8 @@
 // (sabrStreams: the signed-in TV client, formats via SABR only:
 // player/sabr-engine.ts); playableStreams tries that first if Settings say so.
 
-import { getText, HttpError } from '../core/http.js';
+import { fakedStreams } from '../core/fake-net.js';
+import { ABORTED, abortSent, getText, HttpError } from '../core/http.js';
 import { language, tr } from '../core/i18n.js';
 import { android } from '../core/platform.js';
 import { load, save } from '../core/store.js';
@@ -43,6 +44,8 @@ var CLIENT = {
 };
 /** VISIONOS's number (X-YouTube-Client-Name) */
 var CLIENT_NAME = '101';
+/** The name a video's guest /player requests are sent under (before its id), by which they can be aborted (askAnew) */
+var ASKED = 'streams ';
 /** Order of subtitle kinds within a language */
 var KINDS = ['own', 'asr', 'translated'];
 
@@ -185,6 +188,9 @@ export interface NoStreams {
     refused?: boolean;
     /** A live stream that has ended, as YouTube still describes it */
     ended?: Ended;
+    /** Both ways failed, at least one of them not by YouTube's word on the video but by its request (streamsFailure):
+     * what that failed by, the one most worth asking again first ('no answer', 'http', 'refused') */
+    failed?: string;
 }
 
 /** The visitor id: the stored one while recent (unless fresh), else a new one */
@@ -227,6 +233,11 @@ var AGAIN = 3;
 /** A SABR start from cold first fetches and runs YouTube's player script (~4 s): its requests count as hung only after
  * this long */
 var SABR_STUCK_MS = 8000;
+/** The line having just answered again (askAnew), a request counts as hung after this long at most, whatever its
+ * method (it is asked on a line that answers, the player script at hand; but a connection the browser kept from before
+ * the loss can hang it): the next one goes out then. A second word of the line's return within it is the same
+ * return: the request it brought has that long */
+var BACK_STUCK_MS = 5000;
 /** How long a /player reply's tracking URLs stay usable, and how many videos' are kept */
 var TRACKING_MS = 10 * 60 * 1000;
 var TRACKING_MAX = 4;
@@ -327,8 +338,8 @@ export function playableStreams(id: string, sabrFirst: boolean, asking?: Asking)
         return signedIn ? onlyBy(s) : s;
     }, function (e: NoStreams) {
         // Removed, an upcoming live stream, or no network: the other method cannot play it either; nor is it asked once
-        // the viewer has gone
-        if (noneCanPlay(e) || noAnswer(e) || asking && !asking(!sabr, false)) {
+        // the viewer has gone, or for a request let go (askAnew)
+        if (noneCanPlay(e) || noAnswer(e) || letGo(e) || asking && !asking(!sabr, false)) {
             throw e;
         }
         return by(!sabr).then(function (s) {
@@ -342,7 +353,9 @@ export function playableStreams(id: string, sabrFirst: boolean, asking?: Asking)
             if (tv.asYouTube && guest.status === tv.status) {
                 throw { status: tv.status, reason: tv.reason, refused: true, ended: guest.ended } as NoStreams;
             }
-            throw { status: e.status, reason: e.reason + (other.reason ? ' (' + (sabr ? 'as a guest' : 'SABR') + ': ' + other.reason + ')' : '') } as NoStreams;
+            var by = [streamsFailure(e), streamsFailure(other)];
+            throw { status: e.status, reason: e.reason + (other.reason ? ' (' + (sabr ? 'as a guest' : 'SABR') + ': ' + other.reason + ')' : ''),
+                failed: ['no answer', 'http', 'refused'].filter(function (one) { return by.indexOf(one) >= 0; })[0] } as NoStreams;
         });
     });
 }
@@ -374,6 +387,11 @@ export function stuckFor(sabr: boolean): number {
 }
 
 function keep(id: string, sabr: boolean, asking: () => Promise<Streams>, fresh?: boolean): Promise<Streams> {
+    // (a TV test's answer in place of YouTube's, core/fake-net.ts: never kept)
+    var faked = fakedStreams();
+    if (faked) {
+        return faked;
+    }
     var now = Date.now();
     var had = keptOf(id, sabr, now);
     // (fresh: past one on its way, not past streams that came)
@@ -396,27 +414,57 @@ function keep(id: string, sabr: boolean, asking: () => Promise<Streams>, fresh?:
  * asked again, else the other method's first): false once they are no longer wanted */
 export type Asking = (sabr: boolean, again: boolean) => boolean;
 
+/** The streams waited for (patient): each one's way to ask anew for the line's return; and when the line last came
+ * back (askAnew; ms, 0: never) */
+var waiting: (() => void)[] = [];
+var backAt = 0;
+
+/** Whether the line came back within BACK_STUCK_MS */
+function justBack(): boolean {
+    var since = Date.now() - backAt;
+    return since >= 0 && since < BACK_STUCK_MS;
+}
+
+/** The line answers again after a loss (the player says so, for the video it plays, id; the TV saying it is online
+ * counts too): the streams still waited for (patient: the player's) are asked anew at once, their time for an answer
+ * starting over, short at first (BACK_STUCK_MS). The video's requests on their way from before are let go, as the
+ * browser may have put them on connections that hang on for their own time: no later caller shares one, and the
+ * guest's are aborted (SABR's, made of several from YouTube's page, run out their time; so does a guest's on webOS
+ * TV 2.x's engine). Once per return (justBack) */
+export function askAnew(id: string): void {
+    if (justBack()) {
+        return;
+    }
+    backAt = Date.now();
+    kept = kept.filter(function (k) { return k.done || k.id !== id; });
+    abortSent(ASKED + id);
+    waiting.slice().forEach(function (anew) { anew(); });
+}
+
+/** A request let go for the line's return (askAnew): not a failure of its own */
+function letGo(e: NoStreams): boolean {
+    return e.status === 'HTTP' && e.reason === ABORTED;
+}
+
 /** ask(false)'s streams, asked again while none have come (ask(true): a new request, past the cache): wait (by
- * default STUCK_MS) later, then after twice as long each time, AGAIN times, and at once when the network comes back; again() first, false once
+ * default STUCK_MS) later, then after twice as long each time, AGAIN times, and at once, with all of that anew, when
+ * the line comes back (askAnew: right after one the first wait is BACK_STUCK_MS at most); again() first, false once
  * they are no longer wanted. The first streams that come are taken. A failure with an answer from YouTube (about the
  * video, a refusal, an odd reply) is the answer at once; one with none waits for the requests still on their way and
- * those planned, and once none are left rejects with the last failure. */
+ * those planned, and once none are left rejects with the last failure (not that of a request let go). */
 export function patient(ask: (fresh: boolean) => Promise<Streams>, again: () => boolean, first?: number): Promise<Streams> {
     return new Promise<Streams>(function (resolve, reject) {
         var open = 0;
         var done = false;
         var timer = 0;
-        var wait = first || STUCK_MS;
+        var stuck = first || STUCK_MS;
+        var wait = justBack() ? Math.min(stuck, BACK_STUCK_MS) : stuck;
         var left = AGAIN;
         var last: NoStreams | null = null;
-        // (not in the tests' fake window)
-        var hears = typeof window.addEventListener === 'function';
         var noMore = function (): void {
             clearTimeout(timer);
             timer = 0;
-            if (hears) {
-                window.removeEventListener('online', anew);
-            }
+            waiting = waiting.filter(function (one) { return one !== back; });
         };
         var settle = function (): void {
             done = true;
@@ -444,6 +492,12 @@ export function patient(ask: (fresh: boolean) => Promise<Streams>, again: () => 
             take(ask(true));
             plan();
         };
+        // The line is back: asked anew now, the waits and their count from the start
+        var back = function (): void {
+            wait = Math.min(stuck, BACK_STUCK_MS);
+            left = AGAIN;
+            anew();
+        };
         var take = function (asked: Promise<Streams>): void {
             open++;
             asked.then(function (s) {
@@ -453,25 +507,39 @@ export function patient(ask: (fresh: boolean) => Promise<Streams>, again: () => 
                 }
             }, function (e: NoStreams) {
                 open--;
-                last = e;
+                last = letGo(e) && last || e;
                 if (!done && (!unanswered(e) || !open && !timer)) {
                     settle();
-                    reject(e);
+                    reject(last);
                 }
             });
         };
-        if (hears) {
-            window.addEventListener('online', anew);
-        }
+        waiting.push(back);
         take(ask(false));
         plan();
     });
 }
 
-/** A failure with no answer from YouTube at all (the network down, a request timed out, a server error): worth asking
- * again; any other is YouTube's answer (about the video, a refusal, an odd reply) */
+/** A failure with no answer from YouTube at all (the network down, a request timed out or let go, a server error):
+ * worth asking again; any other is YouTube's answer (about the video, a refusal, an odd reply) */
 export function unanswered(e: NoStreams): boolean {
-    return noAnswer(e) || e.status === 'HTTP' && /^(timeout|network error|HTTP 5\d\d)$/.test(e.reason || '');
+    return noAnswer(e) || letGo(e) || e.status === 'HTTP' && /^(timeout|network error|HTTP 5\d\d)$/.test(e.reason || '');
+}
+
+/** What a streams request's failure is, as the player's ladder names it (player/ladder.ts cause): 'no answer' (none
+ * came at all: the network down, a request timed out), 'refused' (answered with HTTP 403: YouTube refusing this
+ * player, where the line holds), 'http' (any other answer that is none about the video: an HTTP error, a server's
+ * among them, or a reply that cannot be read), or '' (YouTube's answer about the video or this player: a refusal, a
+ * method that cannot be had). Of both ways failing (playableStreams): what either's request failed by */
+export function streamsFailure(e: NoStreams): string {
+    var reason = e.reason || '';
+    if (e.failed) {
+        return e.failed;
+    }
+    if (noAnswer(e) || letGo(e) || e.status === 'HTTP' && /^(timeout|network error)/.test(reason)) {
+        return 'no answer';
+    }
+    return e.status !== 'HTTP' ? '' : /^(HTTP|YouTube answered) 403\b/.test(reason) ? 'refused' : 'http';
 }
 
 /** A SABR /player request's playback context: the player script's signature timestamp, the device's playback (as
@@ -679,7 +747,7 @@ function askPlayer(id: string, visitorId: string, hl: string): Promise<any> {
         playbackContext: { contentPlaybackContext: { html5Preference: 'HTML5_PREF_WANTS' } },
         contentCheckOk: true,
         racyCheckOk: true
-    }, { 'X-YouTube-Client-Name': CLIENT_NAME, 'X-YouTube-Client-Version': CLIENT.clientVersion, 'X-Goog-Visitor-Id': visitorId });
+    }, { 'X-YouTube-Client-Name': CLIENT_NAME, 'X-YouTube-Client-Version': CLIENT.clientVersion, 'X-Goog-Visitor-Id': visitorId }, ASKED + id);
 }
 
 /** Fetch a video's streams (again: retry with a new visitor id after a bot check) */
@@ -715,9 +783,10 @@ export function streamsOf(reply: any, sabr?: boolean): Streams {
     var details = reply.videoDetails || {};
     var formats: any[] = reply.streamingData && reply.streamingData.adaptiveFormats || [];
     // A live stream's formats are numbered segments (no index). So are those of a stream that has just ended, until
-    // YouTube has made a video of it: no format of it has an index yet (over)
+    // YouTube has made a video of it: no format of it has an index yet (over). Only of a stream: an upload whose
+    // formats come without an index is no stream that ended, and the live engine has no head to find in it
     var numbered = sabr ? [] : formats.filter(function (f) { return f.targetDurationSec; });
-    var over = !details.isLive && !formats.some(function (f) { return f.indexRange; });
+    var over = !details.isLive && !!details.isLiveContent && !formats.some(function (f) { return f.indexRange; });
     var live = details.isLive || over ? numbered[0] || null : null;
     var playable = formats.filter(function (f) {
         // (a WebM video needs its length: its last segment ends there; a live stream's segments are numbered, SABR's

@@ -8,8 +8,12 @@
 // offered on that TV; a live stream plays at 1x). A video that does not play
 // tries its other codecs, then the other way
 // of getting its streams (as a guest or by SABR), and only then YouTube's
-// player (onFallback). A casting phone (cast.ts) drives it through its
-// public methods and onChange.
+// player (onFallback; Settings can turn that off: the video then stays here,
+// stopped). That is for a video YouTube refuses this player, or a format
+// that does not play here: one stopped by the TV's line is never handed
+// over, it is kept and started anew where it was until it plays, as is one
+// YouTube's servers fail for a while (ladder.ts). A casting phone (cast.ts)
+// drives it through its public methods and onChange.
 
 import { h, LAYOUT_HEIGHT, LAYOUT_WIDTH, setPicture, setShown, setText, toggleClass } from '../core/dom.js';
 import { language, tr } from '../core/i18n.js';
@@ -32,7 +36,7 @@ import { keyName, wakeKey } from '../api/shortcuts.js';
 import { Replays, replays } from '../api/replays.js';
 import { Segment, segmentAt, segments, skippedText } from '../api/sponsorblock.js';
 import { WatchReport } from '../api/stats.js';
-import { Asking, AudioTrack, AUTO_LINES, base, Caption, captionIn, captionList, codecName, learnMethod, forgetOtherStreams, forgetStreams, Format, kindOf, noneCanPlay, NoStreams, patient, pickFormat, playableStreams, preferred, reasonInLanguage, sabrStreams, Storyboard, storyboardFrame, streams, Streams, stuckFor, unanswered } from '../api/streams.js';
+import { askAnew, Asking, AudioTrack, AUTO_LINES, base, Caption, captionIn, captionList, codecName, learnMethod, forgetOtherStreams, forgetStreams, Format, kindOf, noneCanPlay, NoStreams, patient, pickFormat, playableStreams, preferred, reasonInLanguage, sabrStreams, Storyboard, storyboardFrame, streams, Streams, streamsFailure, stuckFor, unanswered } from '../api/streams.js';
 import { watchLaterAdd } from '../api/menu.js';
 import { channelPicture, run, watchInfo, WatchInfo } from '../api/watch.js';
 import { FillLoader } from '../ui/fill-loader.js';
@@ -50,8 +54,8 @@ import { ChatSettings } from './chat-settings.js';
 import { ChatView } from './chat-view.js';
 import { ChapterRow } from './chapter-row.js';
 import { noPresses, pressAim, pressWait } from './jump-keys.js';
-import { nextStep, noTries, renewal, took } from './ladder.js';
-import { lastLost, lineDown, onLineBack } from './networks.js';
+import { Cause, cause, Line, lineAt, nextStep, noted, noTries, renewal, retryWait, took, unsure, YOUTUBE_GIVE_UP_MS } from './ladder.js';
+import { awaitLine, lastAnswered, lastLost, lineAnswered, lineDown, onLineBack, probe, probed } from './networks.js';
 import { Freezes, Stalls } from './stalls.js';
 import { AutoQuality } from './auto-quality.js';
 import { ListPanel } from './list-panel.js';
@@ -89,12 +93,18 @@ var SAME_SHAPE = 0.02;
 /** The seek frames at the playhead are fetched this long after the picture moves (ms: after the start's own
  * downloads), so a first jump shows its frame at once */
 var FRAMES_AHEAD_MS = 4000;
-/** A video not playing this long after OK goes to YouTube's player; one with no streams yet (YouTube not answering)
- * waits on while they are asked for again (api/streams.ts patient, load again), checked every NO_STREAMS_CHECK_MS, up
- * to NO_STREAMS_MS from the first ask (a TV offline: until the network is back or the viewer leaves, told so once) */
+/** A start is looked at every START_LOOK_MS until its picture moves; one not playing START_GIVE_UP_MS after OK is
+ * told why (the line, YouTube: it waits on) or takes the ladder's next step (giveUpLater). Media for a first picture
+ * has come once START_CAME_S of it are buffered (this TV wants about 5 s from where it starts; a start's window holds
+ * 9.5). Streams that got no answer are asked for again NO_STREAMS_CHECK_MS later (api/streams.ts patient asks
+ * meanwhile), until they come or the viewer leaves */
 var START_GIVE_UP_MS = 15000;
-var NO_STREAMS_MS = 45000;
+var START_LOOK_MS = 5000;
+var START_CAME_S = 6;
 var NO_STREAMS_CHECK_MS = 5000;
+/** The picture having moved this long, a failure's tries anew are counted from none again (ladder.ts retryWait), as
+ * is the time YouTube has been failing it */
+var STEADY_MS = 60000;
 /** A quality the viewer picks, Auto's step up and a preview taken over full screen come as soon as the TV allows
  * (dash.ts switchSoon: the new format's first part is fetched before the old one's data goes). That part not coming,
  * at least this far ahead (s), beyond what the TV's decoder already holds (removing buffer under the decoder fails):
@@ -112,6 +122,9 @@ var LEFT_MS = 60000;
 var AUDIO_SWITCH_S = 2;
 /** A skip segment ending this close to the video's end (s) counts as reaching the end */
 var END_SKIP_S = 1;
+/** A part is skipped by its timer from this little before its start on (s: a timer is not exact to the ms, nor the
+ * element's time between the TV's own reports) */
+var SKIP_NEAR_S = 0.05;
 /** The TV's pipeline may stop at a video's very end without ending it (seen where the picture track ends a little
  * before the sound): the time standing this near the end this long ends it here */
 var END_STUCK_S = 0.5;
@@ -233,8 +246,8 @@ export class OwnPlayer {
     onShown: (shown: boolean) => void = function () { return undefined; };
     /** Closed (Back, the end) */
     onClosed: () => void = function () { return undefined; };
-    /** A video's picture started moving */
-    onStarted: () => void = function () { return undefined; };
+    /** A video's picture started moving: its id and its channel's name */
+    onStarted: (id: string, channel: string) => void = function () { return undefined; };
     /** A video reported to History stopped (closed or replaced): progress (0-1) and position (s) */
     onWatched: (id: string, progress: number, t: number) => void = function () { return undefined; };
     /** YouTube's player takes over the video, from t (s); false: it cannot run here */
@@ -344,17 +357,29 @@ export class OwnPlayer {
     private track: Captions | null = null;
     /** Incremented per start, so late replies for an earlier start are dropped */
     private gen = 0;
-    /** When this start first asked for its streams (loads after no answer keep it), and whether the TV being offline was
-     * told (giveUpLater) */
-    private firstAskedAt = 0;
-    private toldOffline = false;
     /** This start's ways tried after its engine failed (failed, nextStep) */
     private tries = noTries();
+    /** This start's picture has moved (a failure of the line's then says the video carries on, not that it starts), and
+     * when it last began to (ms) */
+    private played = false;
+    private movedAt = 0;
+    /** The times a picture got going (a start, or one moving again), and the one whose standing was last told (-1:
+     * none): what stops a picture is told once each time (tell) */
+    private outage = 0;
+    private toldFor = -1;
+    /** A try anew that waits (later): its timer, and the try itself (null: none waits) */
+    private retryTimer = 0;
+    private retryNow: (() => void) | null = null;
+    /** The video cannot be played here and is not handed to YouTube's player (Settings): it stands until OK tries it
+     * again (needsYouTube) */
+    private stopped = false;
     /** A live stream that got no further at its head: YouTube is being asked whether it has ended; when it was last
-     * asked (ms); and how often for this start */
+     * asked (ms); how often for this start; and what the answer "not ended" is acted on with (the failure the ask
+     * began for, or one the engine told meanwhile: the head merely standing gives way to it) */
     private overAsking = false;
     private overAskedAt = 0;
     private overAsks = 0;
+    private overWhy = '';
     private askedAt = 0;
     private moving = false;
     /** The picture height the quality tag was drawn for (0: not yet) */
@@ -365,6 +390,10 @@ export class OwnPlayer {
     private skipped: { [index: number]: boolean } = {};
     /** Where SponsorBlock skipped from last (-1: nothing skipped in this video) */
     private skippedFrom = -1;
+    /** The timer for the next part to skip (armSkip; 0: none set), the part it is for and when it is due (ms) */
+    private skipTimer = 0;
+    private skipNext = -1;
+    private skipDue = 0;
     /** The video a shortcut saved to Watch later ('' none) */
     private savedLater = '';
     /** The subtitles' language before a shortcut turned them off ('' none) */
@@ -458,7 +487,12 @@ export class OwnPlayer {
         onScreen(function () { self.holdChat(); });
         // The line back after a loss: other videos' kept streams may be refused at the TV's new address, so they are
         // fetched anew when played (the playing one's renew as they fail: failed)
-        onLineBack(function () { forgetOtherStreams(self.want ? self.want.id : ''); });
+        onLineBack(function () {
+            forgetOtherStreams(self.want ? self.want.id : '');
+            self.lineBack();
+        });
+        // (the TV saying it is online again, also where no loss was seen: what waits for the line is done now)
+        window.addEventListener('online', function () { self.lineBack(); });
         this.loader = new FillLoader(this.el, true);
         this.osd = new PlayerOsd(this.el, function () { return self.video.paused || !self.moving; }, function () {
             toggleClass(self.subtitleBox, 'vod-subtitles--up', false);
@@ -611,6 +645,10 @@ export class OwnPlayer {
             self.ended();
         });
         this.video.addEventListener('durationchange', function () { self.drawParts(); });
+        // The next part to skip is timed from where it plays and how fast: anew when either changes
+        ['playing', 'pause', 'seeking', 'seeked', 'ratechange'].forEach(function (type) {
+            self.video.addEventListener(type, function () { self.armSkip(); });
+        });
         // The buffer ran dry while playing (not a start, a jump or a seek): a stall, for quality on Auto
         this.video.addEventListener('waiting', function () {
             var v = self.video;
@@ -1018,8 +1056,8 @@ export class OwnPlayer {
             duration: w.to - w.from,
             loaded: bufferedEnd(v.buffered, t) - w.from,
             ended: v.ended,
-            waiting: !this.held && (!this.moving || v.seeking || v.readyState < 3 && !v.paused),
-            paused: this.held || v.paused
+            waiting: !this.held && !this.stopped && (!this.moving || v.seeking || v.readyState < 3 && !v.paused),
+            paused: this.held || this.stopped || v.paused
         };
     }
 
@@ -1043,6 +1081,11 @@ export class OwnPlayer {
             this.upNext.playNow();
             return;
         }
+        // Stopped as one only YouTube's player plays: tried again
+        if (this.stopped) {
+            this.tryAgain();
+            return;
+        }
         this.held = false;
         playVideo(this.video);
         // Still starting (not Up next's video waiting)
@@ -1051,12 +1094,14 @@ export class OwnPlayer {
         }
     }
 
-    /** Plays from t (s; a live stream: from its window's start) */
+    /** Plays from t (s; a live stream: from its window's start), as a phone's seek asks: a jump as the remote's (aim),
+     * within what can be played */
     seekTo(t: number): void {
-        t = Math.max(0, t) + this.window().from;
+        var w = this.window();
+        t = Math.max(0, t) + w.from;
         this.showPaid(false);
         if (this.engine && this.moving) {
-            this.engine.seek(t);
+            this.aim(w.to > w.from ? Math.max(w.from, Math.min(w.to - 1, t)) : t, 0);
         } else if (this.want) {
             // Still starting: restart from t (the engine started from the old position)
             this.want.t = t;
@@ -1464,9 +1509,12 @@ export class OwnPlayer {
         this.osd.setLine(this.chapterRow.open ? KEYS_LINE_ROW : keysLine(this.chapterRow.has));
     }
 
-    /** OK: pause or play. During a jump (pending, or its seek) it jumps now and plays rather than pausing. */
+    /** OK: pause or play. During a jump (pending, or its seek) it jumps now and plays rather than pausing. A video
+     * stopped as one only YouTube's player plays is tried again. */
     private toggle(): void {
-        if (this.target >= 0 || this.landing) {
+        if (this.stopped) {
+            this.tryAgain();
+        } else if (this.target >= 0 || this.landing) {
             this.jumpNow();
             if (this.held) {
                 this.resume();
@@ -1531,6 +1579,24 @@ export class OwnPlayer {
         }
         clearTimeout(this.jumpTimer);
         this.target = -1;
+        this.jumpTo(to);
+        if (!this.watch.shown) {
+            this.showOsd(false);
+        }
+    }
+
+    /** Moves the playhead to `to` (s) now: the one way it is moved within a video, the viewer's jumps (aim, jumpNow:
+     * with their marker, frame and info bar) and the player's own (a part skipped, a repeat's return to the start)
+     * alike. The engine jumps (Engine.jump: onto a keyframe; with quick jumps a seek in a window of its own), the
+     * watches for stalls, freezes and the line's speed start over, and until its picture moves there the jump counts
+     * as landing. past: a part was skipped up to `to` (Engine.jump: never a landing before it); a jump into a part
+     * still to skip is that part's skip at once (one jump, none of the part shown) */
+    private jumpTo(to: number, past?: boolean): void {
+        var into = past ? -1 : segmentAt(this.segments, to, this.skipped);
+        if (into >= 0) {
+            this.skip(into);
+            return;
+        }
         this.stalls.reset();
         this.freezes.reset();
         this.auto.reset(Date.now());
@@ -1543,15 +1609,12 @@ export class OwnPlayer {
         this.showPaid(false);
         if (this.engine) {
             this.jumping = true;
-            this.engine.jump(to, this.video.currentTime);
+            this.engine.jump(to, this.video.currentTime, past);
         }
         // No seek made (already there, or at the live head): nothing to wait for
         if (!this.video.seeking && !this.seekPending()) {
             this.jumping = false;
             this.land();
-        }
-        if (!this.watch.shown) {
-            this.showOsd(false);
         }
     }
 
@@ -1665,12 +1728,10 @@ export class OwnPlayer {
         }
     }
 
-    /** Restart this video (SponsorBlock segments are skipped again) */
+    /** Restart this video (SponsorBlock segments are skipped again): a jump to its start as the remote's (seekTo) */
     private restart(): void {
         this.skipped = {};
-        if (this.engine) {
-            this.engine.seek(0);
-        }
+        this.seekTo(0);
     }
 
     /** Next (remote or phone): the next in the queue, else YouTube's next video */
@@ -1727,13 +1788,15 @@ export class OwnPlayer {
         var next = this.atEnd();
         var wait = this.endWait();
         if (this.loop && this.format) {
-            // Repeat: seek to the start in place (the buffer refills from there); SABR restarts
+            // Repeat: a jump to the start in place (the buffer refills from there), past a part skipped there; SABR
+            // restarts
             this.skipped = {};
+            var from = this.pastSkipped(0);
             if (this.engine instanceof DashEngine) {
-                this.engine.seek(this.pastSkipped(0));
+                this.jumpTo(from, true);
                 playVideo(this.video);
             } else {
-                this.playFormat(this.format, this.pastSkipped(0));
+                this.playFormat(this.format, from);
             }
         } else if (next && !wait) {
             // No wait (Settings): no "Up next"
@@ -1816,6 +1879,7 @@ export class OwnPlayer {
         this.overAsking = false;
         this.overAskedAt = 0;
         this.overAsks = 0;
+        this.overWhy = '';
         this.loop = !!want.loop;
         this.upNext.hide();
         (window as any).__bolli.steps = {};
@@ -2165,23 +2229,24 @@ export class OwnPlayer {
         this.showChat();
     }
 
-    /** Fetch want's streams (source: the other method's or renewed ones, after the engine failed for why; else
-     * playableStreams), then play from want.t. Its requests are asked again while they hang (api/streams.ts patient) as
-     * long as this load is the player's; with no answer at all the streams are asked for again (again: such a load)
-     * while the TV is offline or within NO_STREAMS_MS of the first ask. */
-    private load(source?: (asking: Asking) => Promise<Streams>, why?: string, again?: boolean): void {
+    /** Fetch want's streams (source: renewed ones, or the other method's after a failure why, back then being the
+     * method that played; else playableStreams), then play from want.t. Its requests are asked again while they hang
+     * (api/streams.ts patient) as long as this load is the player's, and at once when the line answers again
+     * (lineBack; it is watched while it is down: watchLine). Streams that do not come for the line are asked
+     * for again until they do; so are those YouTube's trouble keeps back (an HTTP error, no answer on a line that
+     * answers), until that has lasted YOUTUBE_GIVE_UP_MS. YouTube's answer about the video or this player ends the
+     * load (an HTTP 403 on a line that holds after the other method was asked too): the reason told, or YouTube's
+     * player. */
+    private load(source?: Source, why?: string, back?: Source): void {
         var want = this.want as Want;
         var gen = ++this.gen;
         this.askedAt = Date.now();
-        if (!again) {
-            this.firstAskedAt = this.askedAt;
-            this.toldOffline = false;
-        }
         this.moving = false;
         var self = this;
         var asking: Asking = function (sabr, anew) { return self.stillAsking(gen, sabr, anew); };
         this.giveUpLater();
-        (source ? source(asking) : playableStreams(want.id, prefs().sabr, asking)).then(function (s) {
+        this.watchLine();
+        (source ? source.ask(asking) : playableStreams(want.id, prefs().sabr, asking)).then(function (s) {
             if (gen !== self.gen) {
                 return;
             }
@@ -2222,15 +2287,42 @@ export class OwnPlayer {
                 return;
             }
             note('no streams', want.id + ': ' + e.status + (e.reason ? ' ' + e.reason : ''));
-            // No answer at all (the network down, YouTube not answering): asked for again a moment later (at once once
-            // the network is back) while the TV is offline or the first ask is recent; else YouTube's player could not
-            // play it either
-            if (unanswered(e)) {
-                if (navigator.onLine === false || Date.now() - self.firstAskedAt < NO_STREAMS_MS) {
-                    self.loadAgain(gen, source, why);
-                } else {
-                    self.notAnswering();
-                }
+            var failure = streamsFailure(e);
+            // (anything but no answer at all is one: the line is up)
+            if (failure !== 'no answer') {
+                lineAnswered();
+            }
+            var of: Cause = failure ? self.sense(failure) : 'cannot play';
+            // The other method, tried for a failure of the line's or of YouTube's trouble, gives no streams either,
+            // whatever its answer: no reason to leave this player, the method that played is tried anew
+            if (why && back && cause(why, self.line()) !== 'cannot play') {
+                self.tries.retries++;
+                self.retryLater(why, back);
+                return;
+            }
+            // Asked for again: a moment later where no answer came (at once once the line is back), else after a
+            // growing wait
+            var again = function (): void {
+                self.loadAgain(gen, source, why, back, failure === 'no answer' ? NO_STREAMS_CHECK_MS : retryWait(self.tries.retries++));
+            };
+            // The line's: until they come (the start's own watch tells why it waits: giveUpLater)
+            if (of === 'line') {
+                again();
+                return;
+            }
+            // YouTube's trouble on a line that answers: said, and asked again until it has lasted too long
+            var youtubeAt = self.tries.youtubeAt;
+            if (of === 'youtube' && !(youtubeAt && Date.now() - youtubeAt >= YOUTUBE_GIVE_UP_MS)) {
+                self.tell(failure);
+                again();
+                return;
+            }
+            // That, or YouTube's HTTP 403 on a line that holds: the other method once, where this load asked one alone
+            if (failure && source && !why && !self.tries.switched) {
+                self.tries.switched = true;
+                self.tries.kinds = {};
+                forgetStreams(want.id);
+                self.load(by(want.id, !source.sabr, ''), failure, source);
                 return;
             }
             // Removed, not live yet, or refused to the TV client: YouTube's player could not play it either (after a
@@ -2245,19 +2337,15 @@ export class OwnPlayer {
         });
     }
 
-    /** The load gen after no answer at all, again: once the network is back, else NO_STREAMS_CHECK_MS later (if still
-     * the player's) */
-    private loadAgain(gen: number, source: ((asking: Asking) => Promise<Streams>) | undefined, why: string | undefined): void {
+    /** The load gen whose streams did not come, again: wait ms later, or at once when the line answers again (later;
+     * if still the player's) */
+    private loadAgain(gen: number, source: Source | undefined, why: string | undefined, back: Source | undefined, wait: number): void {
         var self = this;
-        var go = function (): void {
-            window.removeEventListener('online', go);
-            clearTimeout(timer);
+        this.later(function () {
             if (gen === self.gen) {
-                self.load(source, why, true);
+                self.load(source, why, back);
             }
-        };
-        var timer = setTimeout(go, NO_STREAMS_CHECK_MS);
-        window.addEventListener('online', go);
+        }, wait);
     }
 
     /** Close and say why video id cannot be played (YouTube's reason, in the app's language; not once another plays) */
@@ -2278,8 +2366,8 @@ export class OwnPlayer {
     private followStream(id: string, ended: Ended, e: NoStreams): void {
         var gen = this.gen;
         var self = this;
-        // A wait of its own for the channel's page (a big reply)
-        this.giveUpLater();
+        // (no start is under way: the channel's page comes, or fails, within its own time)
+        clearTimeout(this.startTimer);
         liveNow(ended).then(function (found) {
             if (gen !== self.gen) {
                 return;
@@ -2297,38 +2385,61 @@ export class OwnPlayer {
         });
     }
 
-    /** Hand over to YouTube's player if not playing START_GIVE_UP_MS after the start (if paused, after play) */
+    /** Watches a start until its picture moves (if paused, after play), looking every START_LOOK_MS; from
+     * START_GIVE_UP_MS on it acts. With no streams yet (they are asked for again meanwhile) it says why it waits (tell).
+     * With streams: media enough for a first picture there for a look already, it is the decoder or the format ('it did
+     * not start': the ladder's other codecs, the other method, YouTube's player); no more media come in all of
+     * START_GIVE_UP_MS, the downloads ('nothing came': tried anew); media still coming, slowly, is waited for (a start
+     * anew would throw away what came) with nothing said, and why is said once a look finds no more of it */
     private giveUpLater(): void {
         var self = this;
         var gen = this.gen;
+        var looks = 0;
+        // The media that had come at the last look (s), the looks since more came, and those in a row with enough
+        var had = 0;
+        var still = 0;
+        var enough = 0;
+        var again = function (): void {
+            self.startTimer = setTimeout(check, START_LOOK_MS) as unknown as number;
+        };
         var check = function (): void {
             // Paused: the picture does not move until play
             if (gen !== self.gen || self.moving || self.held) {
                 return;
             }
-            // No streams yet: YouTube has not answered; they are asked for again meanwhile, so the start waits on (an
-            // offline TV said so once: it plays once the network is back), then ends (YouTube's player could not play it
-            // either); else the other codecs and the other method before YouTube's player
-            if (!self.streams) {
-                var waited = Date.now() - self.firstAskedAt;
-                var offline = navigator.onLine === false;
-                if (offline || waited < NO_STREAMS_MS) {
-                    if (offline && !self.toldOffline) {
-                        self.toldOffline = true;
-                        toast(tr('No internet connection: the video starts once it is back.'), 'info');
-                    }
-                    self.startTimer = setTimeout(check, NO_STREAMS_CHECK_MS) as unknown as number;
-                    return;
+            var due = ++looks * START_LOOK_MS >= START_GIVE_UP_MS;
+            var s = self.streams;
+            if (!s) {
+                if (due) {
+                    self.tell('no answer');
+                } else {
+                    again();
                 }
-                note('gave up', (self.want as Want).id + ': no streams after ' + Math.round(waited / 1000) + ' s');
-                self.notAnswering();
+                return;
+            }
+            var came = seconds(self.video.buffered);
+            still = came > had ? 0 : still + 1;
+            had = came;
+            // (all there is to come, for a start near the end)
+            var left = s.live || !self.format ? 0 : self.format.duration - self.position();
+            enough = came >= START_CAME_S || left > 0 && came >= left - 0.5 ? enough + 1 : 0;
+            if (!due) {
+                again();
+            } else if (enough > 1) {
+                self.failed('it did not start');
+            } else if (still * START_LOOK_MS >= START_GIVE_UP_MS) {
+                self.failed('nothing came');
             } else {
-                // Nothing came at all: the downloads, not the codec (another codec would wait as long again)
-                self.failed(self.video.buffered.length ? 'it did not start' : 'nothing came');
+                // (media still coming is a slow start, nothing to tell: the loading sign shows; told is a start that
+                // got none since the look before)
+                if (still > 0) {
+                    self.tell('nothing came');
+                }
+                again();
             }
         };
         clearTimeout(this.startTimer);
-        this.startTimer = setTimeout(check, START_GIVE_UP_MS) as unknown as number;
+        again();
     }
 
     /** The info bar's loaded stretch: what is buffered on from where it plays (a pending jump's target), over the
@@ -2374,13 +2485,6 @@ export class OwnPlayer {
             note('streams again', (this.want as Want).id + (sabr ? ' (SABR)' : '') + ': no answer yet');
         }
         return true;
-    }
-
-    /** YouTube does not answer: close and say so (no internet only when the TV says it is offline: YouTube can go
-     * unanswered on a working network) */
-    private notAnswering(): void {
-        this.stop();
-        toast(navigator.onLine === false ? tr('No internet connection.') : tr('YouTube is not answering. Try again in a moment.'), undefined, PROBLEM);
     }
 
     /** Play the format from t (stops the previous engine; the position is want.t until the picture moves) */
@@ -2450,7 +2554,15 @@ export class OwnPlayer {
         }
         var other = s && this.format ? this.otherCodec(s) : null;
         var now = Date.now();
+        // (the picture having played on a good while since: its tries anew are counted from none, and YouTube has not
+        // been failing it)
+        if (this.moving && now - this.movedAt >= STEADY_MS) {
+            tries.retries = 0;
+            tries.youtubeAt = 0;
+        }
         var due = renewal(tries, now, lastLost(), RENEW_AGAIN_MS);
+        var line = this.line();
+        this.sense(why);
         var step = nextStep(why, {
             renewing: tries.renewing,
             renewDue: due.due,
@@ -2458,12 +2570,17 @@ export class OwnPlayer {
             inPlace: due.inPlace && !!s && !s.sabr && !!this.engine && !!this.engine.renew,
             codec: !!other,
             switchable: !tries.switched && !!s && !s.only,
-            playing: !!want && !!s
+            playing: !!want && !!s,
+            line: line,
+            retried: tries.retries > 0,
+            youtubeFor: tries.youtubeAt ? Math.max(1, now - tries.youtubeAt) : 0
         });
         if (due.lost && (step === 'renewInPlace' || step === 'renew')) {
             note('renew', why + ': the line was lost since the last renewal');
         }
         took(tries, step, due, now);
+        // The method that played, asked anew (SABR: with the token of a reload its server asked for)
+        var played = want && s ? by(want.id, !!s.sabr, s.sabr && s.sabr.reloadToken || '') : undefined;
         if (step === 'renewInPlace') {
             this.renewInPlace(want);
         } else if (step === 'codec') {
@@ -2474,6 +2591,8 @@ export class OwnPlayer {
             this.playFormat(other as Format, want.t);
         } else if (step === 'fallback') {
             this.fallback(why);
+        } else if (step === 'retry') {
+            this.retryLater(why, played);
         } else if (step !== 'wait') {
             want.t = this.position();
             // Stop the old engine so its failures and buffer do not affect the new start; no picks meanwhile
@@ -2484,38 +2603,179 @@ export class OwnPlayer {
                 // A failed decoder leaves its pipeline broken: the next start opens a fresh one
                 old.stop();
             }
+            // (the kept streams may be what failed, or have expired: fetched anew)
+            forgetStreams(want.id);
             if (step === 'renew') {
-                // Renew via the method that played (SABR: with the token of a reload its server asked for)
-                forgetStreams(want.id);
-                this.load(function (asking) {
-                    return patient(function (fresh) {
-                        return s.sabr ? sabrStreams(want.id, s.sabr.reloadToken, fresh) : streams(want.id, fresh);
-                    }, function () { return asking(!!s.sabr, true); }, stuckFor(!!s.sabr));
-                });
+                this.load(played);
             } else {
                 tries.switched = true;
                 tries.kinds = {};
-                // (the kept ones may be what failed: the other method's are fetched anew)
-                forgetStreams(want.id);
-                this.load(function (asking) {
-                    return patient(function (fresh) {
-                        return s.sabr ? streams(want.id, fresh) : sabrStreams(want.id, '', fresh);
-                    }, function () { return asking(!s.sabr, true); }, stuckFor(!s.sabr));
-                }, why);
+                this.load(by(want.id, !s.sabr, ''), why, played);
             }
+        }
+        // The picture stands for the line or for YouTube's trouble: said once (a renewal on a line that holds is quick:
+        // only once it does not help)
+        if (cause(why, line) !== 'cannot play' && (step === 'retry' || step === 'switch' || step === 'renew' && (line.down || line.justLost))) {
+            this.tell(why);
+        }
+    }
+
+    /** A failure (why) taken note of: what it is of on the line as it is (ladder.ts cause), and with it since when
+     * YouTube alone has been failing the video (noted). Where only a probe tells, it is asked and its answer noted;
+     * until then the failure counts as YouTube's if YouTube has been failing (the probe found the line to answer, and
+     * nothing was lost since), else as the line's */
+    private sense(why: string): Cause {
+        var tries = this.tries;
+        var line = this.line();
+        var of = cause(why, line);
+        if (!unsure(why, line)) {
+            noted(tries, of, Date.now());
+            return of;
+        }
+        // (this start's tries: a later start has its own; no answer: the line is watched from here on)
+        var self = this;
+        probe().then(function (answers) {
+            noted(tries, answers ? 'youtube' : 'line', Date.now());
+            if (!answers && self.tries === tries) {
+                self.watchLine();
+            }
+        });
+        return tries.youtubeAt ? 'youtube' : of;
+    }
+
+    /** The TV's line as it is now (ladder.ts lineAt) */
+    private line(): Line {
+        return lineAt(Date.now(), lineDown() || navigator.onLine === false, lastLost(), lastAnswered(), probed() === false);
+    }
+
+    /** The video waits for its streams (asked for, or a try anew waits: no engine runs whose requests would tell of
+     * the line) while the line is down or the probe got no answer: the line is watched until it answers (networks.ts
+     * awaitLine: a probe every few seconds), which brings them at once (lineBack). Not for a picture that moves, nor
+     * for YouTube's trouble on a line that answers */
+    private watchLine(): void {
+        var line = this.line();
+        if (this.want && !this.streams && !this.stopped && (line.down || line.answers === false)) {
+            awaitLine(true);
+        }
+    }
+
+    /** The picture stands for a failure of the line's or of YouTube's (why): said in a toast, once each time a picture
+     * that had got going stops (not at every try), by what it is of (ladder.ts cause). Where only a probe tells
+     * (networks.ts probe), once its answer is in; not if the picture moves again meanwhile */
+    private tell(why: string): void {
+        var want = this.want;
+        var outage = this.outage;
+        if (!want || this.toldFor === outage) {
+            return;
+        }
+        this.toldFor = outage;
+        var self = this;
+        var id = want.id;
+        var say = function (): void {
+            if (self.want !== want || self.outage !== outage || self.moving) {
+                return;
+            }
+            var of = cause(why, self.line());
+            // (the line holding by now, a refused URL is no wait: the ladder's next step tells)
+            if (of === 'cannot play') {
+                return;
+            }
+            note('standing', id + ': ' + why + ', ' + (of === 'youtube' ? 'YouTube' : 'the line'));
+            self.watchLine();
+            toast(of === 'youtube' ? tr('YouTube is not answering properly: trying again.') :
+                self.played ? tr('The connection dropped: the video carries on once it is back.') : tr('No internet connection: the video starts once it is back.'), 'info');
+        };
+        if (unsure(why, this.line())) {
+            probe().then(say, say);
+        } else {
+            say();
+        }
+    }
+
+    /** The video stands: its engine stopped and its streams let go (a start anew fetches its own and makes its own),
+     * with no start or try under way. The video, where it was, its format and its audio track are kept */
+    private halt(): void {
+        if (this.want) {
+            this.want.t = this.position();
+        }
+        this.gen++;
+        clearTimeout(this.startTimer);
+        clearTimeout(this.retryTimer);
+        this.retryNow = null;
+        this.moving = false;
+        var old = this.engine;
+        this.engine = null;
+        this.streams = null;
+        if (old) {
+            old.stop();
+        }
+    }
+
+    /** The video stands for a failure of the line's or of YouTube's trouble (why): it is kept, and started anew where
+     * it was once its wait is over (ladder.ts retryWait, by the tries made), or at once when the line answers again
+     * (later): with new streams (the old may have expired meanwhile) by source, the method that played (none: as a
+     * first start asks). It fails again: the ladder's next step. Back ends it, as any start */
+    private retryLater(why: string, source?: Source): void {
+        var want = this.want;
+        if (!want) {
+            return;
+        }
+        var self = this;
+        var id = want.id;
+        var wait = retryWait(this.tries.retries - 1);
+        this.halt();
+        var gen = this.gen;
+        note('retry', id + ' at ' + want.t.toFixed(1) + ': ' + why + ', anew in ' + wait / 1000 + ' s');
+        this.later(function () {
+            if (gen === self.gen) {
+                forgetStreams(id);
+                self.load(source);
+            }
+        }, wait);
+    }
+
+    /** go is made wait ms from now, or at once when the line answers again (lineBack: it is watched meanwhile where it
+     * is down, watchLine); one try waits at a time */
+    private later(go: () => void, wait: number): void {
+        var self = this;
+        var once = function (): void {
+            clearTimeout(self.retryTimer);
+            self.retryNow = null;
+            go();
+        };
+        clearTimeout(this.retryTimer);
+        this.retryNow = once;
+        this.retryTimer = setTimeout(once, wait) as unknown as number;
+        this.watchLine();
+    }
+
+    /** The line answers again: the video's streams requests from before are let go, and those still waited for asked
+     * anew (api/streams.ts askAnew: a load whose requests hang asks a new one now); a try anew that waits is made
+     * now */
+    private lineBack(): void {
+        if (this.want) {
+            askAnew(this.want.id);
+        }
+        if (this.retryNow) {
+            this.retryNow();
         }
     }
 
     /** Asks YouTube whether the live stream playing has ended (it gets no further at its head, for why). Ended: the
-     * engine plays out what it has and ends, and the player's own end follows as a video's. Not ended, or no answer:
+     * engine plays out what it has and ends, and the player's own end follows as a video's (at once, if it failed
+     * meanwhile). Not ended, or no answer:
      * a failure takes the ladder's step; the head merely standing is waited out (the engine says so again). One ask
      * at a time; what the engine says meanwhile waits for its answer */
     private liveOver(engine: LiveEngine, why: string): void {
         if (this.overAsking) {
+            if (why !== 'stands') {
+                this.overWhy = why;
+            }
             return;
         }
         var want = this.want as Want;
         var self = this;
+        this.overWhy = why;
         this.overAsking = true;
         this.overAskedAt = Date.now();
         this.overAsks++;
@@ -2524,11 +2784,16 @@ export class OwnPlayer {
             if (self.want !== want || self.engine !== engine) {
                 return;
             }
-            note('live', want.id + (over ? ': the stream has ended' : ': the stream has not ended (' + why + ')'));
+            note('live', want.id + (over ? ': the stream has ended' : ': the stream has not ended (' + self.overWhy + ')'));
             if (over) {
                 engine.finish();
+                // (it failed meanwhile, the decoder or a download: what is left of it cannot play out to its end)
+                if (self.overWhy !== 'stands') {
+                    self.video.pause();
+                    self.ended();
+                }
             } else {
-                self.failed(why, true);
+                self.failed(self.overWhy, true);
             }
         };
         forgetStreams(want.id);
@@ -2603,8 +2868,13 @@ export class OwnPlayer {
     }
 
     /** Hand over to YouTube's player from the current position; where it cannot run (webOS TV 2.x: tv-app.ts) the
-     * player closes as for Back */
+     * player closes as for Back. With Settings › Fall back to YouTube's player off nothing is handed over: the video
+     * stays here, stopped (needsYouTube) */
     private fallback(why: string): void {
+        if (!prefs().fallbackPlayer) {
+            this.needsYouTube(why);
+            return;
+        }
         var want = this.close();
         // Free the TV's decoder for YouTube's player
         releasePipeline(this.video);
@@ -2618,6 +2888,42 @@ export class OwnPlayer {
             toast(tr('Bolli\'s player cannot play this video, and YouTube\'s player does not run on this TV.'), undefined, PROBLEM);
             this.onClosed();
         }
+    }
+
+    /** A video that cannot be played here (why) while YouTube's player is not to take over: nothing closes, the video
+     * stands where it was with its engine stopped, a toast says what it takes, and the info bar stays up with what OK
+     * does now: try it again (tryAgain) */
+    private needsYouTube(why: string): void {
+        var want = this.want;
+        if (!want) {
+            return;
+        }
+        this.halt();
+        awaitLine(false);
+        note('stopped', want.id + ' at ' + want.t.toFixed(1) + ': ' + why + ' (not handed to YouTube\'s player: Settings)');
+        this.stopped = true;
+        this.loaderDone = true;
+        this.loader.hide();
+        toast(tr('This video needs YouTube\'s player. Turn on Settings › Playback › Fall back to YouTube\'s player to play it.'), undefined, PROBLEM);
+        this.osd.setMessage(tr('Press OK to try again.'));
+        this.showOsd(false);
+        this.onChange();
+    }
+
+    /** OK on a video stopped as one only YouTube's player plays: started again where it was, as a first start (every
+     * way open to it again) */
+    private tryAgain(): void {
+        var want = this.want;
+        if (!want) {
+            return;
+        }
+        note('again', want.id + ' at ' + want.t.toFixed(1));
+        this.stopped = false;
+        this.osd.setMessage('');
+        this.tries = noTries();
+        forgetStreams(want.id);
+        this.load();
+        this.onChange();
     }
 
     /** Release the video: stop the engine (its pipeline kept for the next), clear data and timers. Returns the video
@@ -2665,9 +2971,17 @@ export class OwnPlayer {
         this.watch.seek.set(null);
         this.skipped = {};
         this.skippedFrom = -1;
+        clearTimeout(this.skipTimer);
+        this.skipTimer = 0;
         this.setCaption(null);
         clearTimeout(this.jumpTimer);
         clearTimeout(this.startTimer);
+        clearTimeout(this.retryTimer);
+        this.retryNow = null;
+        awaitLine(false);
+        this.stopped = false;
+        this.played = false;
+        this.outage++;
         clearInterval(this.stallTimer);
         this.chat.stop();
         if (this.chatSettings) {
@@ -3318,6 +3632,10 @@ export class OwnPlayer {
         // past where a reused pipeline waits (OFF_START_S)
         if (!this.moving && v.currentTime > OFF_START_S && !v.paused && !v.seeking && v.readyState >= 3) {
             this.moving = true;
+            // (what stops it from here on is told anew)
+            this.played = true;
+            this.movedAt = Date.now();
+            this.outage++;
             // Cancel the give-up timer, else a video ending soon after (with Up next's loaded in its place) would count
             // as not started and fall back to YouTube's player
             clearTimeout(this.startTimer);
@@ -3327,7 +3645,7 @@ export class OwnPlayer {
                 learnMethod(!!this.streams.sabr);
             }
             noteZap(want.id, this.step('moving'));
-            this.onStarted();
+            this.onStarted(want.id, want.channel);
             var gen = this.gen;
             setTimeout(function () {
                 if (gen === self.gen && self.moving) {
@@ -3405,28 +3723,88 @@ export class OwnPlayer {
         }
         this.subtitleView.show(this.track ? this.track.textAt(v.currentTime) : null);
         this.stats.tick();
-        // Only once the picture moves: a start skips segments itself, and before that the time may be stale
-        var at = this.moving ? segmentAt(this.segments, v.currentTime, this.skipped) : -1;
+        // A part the playhead is in (its timer missed it, or a jump landed in it), only once the picture moves: a start
+        // skips segments itself, and before that the time may be stale; nor while a jump waits in the engine (it plays
+        // on where it was until then: the jump is not given up for a part there). Then the timer for the next one
+        var at = this.moving && !this.seekPending() ? segmentAt(this.segments, v.currentTime, this.skipped) : -1;
         if (at >= 0 && this.engine) {
-            var end = this.skipFrom(at);
-            // A segment to the very end (an outro): end the video now rather than seek to its last frame
-            if (length > 0 && end >= length - END_SKIP_S) {
-                v.pause();
-                if (this.report) {
-                    this.report.at(length);
-                }
-                this.ended();
-            } else {
-                this.engine.seek(end);
+            this.skip(at);
+        }
+        this.armSkip();
+    }
+
+    /** Whether the playhead runs on by itself in this video (its picture moves, not paused, no jump aimed or on its
+     * way; not Up next's video in its place): where it will be can be told from where it is */
+    private runsOn(): boolean {
+        var v = this.video;
+        return !!this.want && this.moving && !!this.engine && !(this.primed && this.primed.kind === 'next') && !v.paused && !v.seeking && this.target < 0 &&
+            !this.seekPending();
+    }
+
+    /** SponsorBlock's parts are skipped as the playhead reaches them, not at the time update after (a quarter second
+     * of the part played by then): a timer for the next one's start, from where it plays and at its speed, looked at
+     * anew at each time update (the playhead's own word), pause, seek and change of speed, and set anew when that
+     * moves it (by SKIP_NEAR_S or more: not a new timer four times a second). Run, it skips if the playhead is there
+     * (SKIP_NEAR_S), else it is set anew (the picture stood meanwhile). The time update's own check (tick) stays for a
+     * part the playhead is already in */
+    private armSkip(): void {
+        var self = this;
+        var v = this.video;
+        var list = this.segments;
+        var t = v.currentTime;
+        var next = -1;
+        var runs = this.runsOn();
+        for (var i = 0; runs && i < list.length; i++) {
+            if (!this.skipped[i] && list[i].start > t && (next < 0 || list[i].start < list[next].start)) {
+                next = i;
             }
+        }
+        var due = next < 0 ? 0 : Date.now() + (list[next].start - t) * 1000 / (v.playbackRate || 1);
+        if (this.skipTimer && next === this.skipNext && Math.abs(due - this.skipDue) < SKIP_NEAR_S * 1000) {
+            return;
+        }
+        clearTimeout(this.skipTimer);
+        this.skipTimer = 0;
+        this.skipNext = next;
+        this.skipDue = due;
+        if (next < 0) {
+            return;
+        }
+        this.skipTimer = setTimeout(function () {
+            self.skipTimer = 0;
+            var now = v.currentTime;
+            if (self.runsOn() && self.segments === list && !self.skipped[next] && now >= list[next].start - SKIP_NEAR_S && now < list[next].end) {
+                self.skip(next);
+            } else {
+                self.armSkip();
+            }
+        }, due - Date.now()) as unknown as number;
+    }
+
+    /** Skips part at (SponsorBlock's) now: its notice, the parts that follow it at once with it (skipFrom), and a jump
+     * past its end as any jump goes (jumpTo: with quick jumps onto the first keyframe at or after the end, so none of
+     * the part plays). A part to the very end (an outro) ends the video now rather than jump to its last frame */
+    private skip(at: number): void {
+        var v = this.video;
+        var length = this.windowLength() || lengthOf(v);
+        var end = this.skipFrom(at);
+        if (length > 0 && end >= length - END_SKIP_S) {
+            v.pause();
+            if (this.report) {
+                this.report.at(length);
+            }
+            this.ended();
+        } else {
+            this.jumpTo(end, true);
         }
     }
 
     /** From the picture's start: a picture that keeps standing while it should play, its buffer at the playhead not
-     * growing (a server or network that hangs, answers without the media it needs, a decoder that hangs with the buffer
-     * full; not a link merely too slow for the quality, whose buffer grows; not paused, not ended, not live) reloads the
-     * video at the same spot, as the fallback ladder says (standing while the line is down does not count). Frozen
-     * with FROZEN_AHEAD_S buffered ahead (a decoder that hangs), it is nudged on NUDGE_S first (Freezes) */
+     * growing (a server or network that hangs, answers without the media it needs; not a link merely too slow for the
+     * quality, whose buffer grows; not paused, not ended, not live) fails as 'stalled': reloaded at the same spot, as
+     * the fallback ladder says (standing while the line is down does not count). Frozen with FROZEN_AHEAD_S buffered
+     * ahead (a decoder that hangs: no matter of the connection), it is nudged on NUDGE_S first (Freezes), then fails
+     * as 'frozen': the ladder's steps for a video that does not play here */
     private watchStalls(): void {
         var self = this;
         var v = this.video;
@@ -3457,9 +3835,11 @@ export class OwnPlayer {
                 note('nudged', 'frozen at ' + t.toFixed(2) + ', buffered ' + ranges(v.buffered));
                 v.currentTime = t + NUDGE_S;
             } else if (freeze === 'reload' || self.stalls.note(stood, Date.now(), lineDown())) {
-                note('stalled', 'at ' + t.toFixed(1));
+                // (frozen with media buffered ahead: the decoder, no matter of the connection)
+                var how = freeze === 'reload' ? 'frozen' : 'stalled';
+                note(how, 'at ' + t.toFixed(1));
                 self.freezes.reset();
-                self.failed('stalled');
+                self.failed(how);
             } else {
                 self.autoStep();
             }
@@ -3479,6 +3859,31 @@ export class OwnPlayer {
             this.start(this.away);
         }
     }
+}
+
+/** A video's streams by one method (sabr, else as a guest), and how they are asked for (load) */
+interface Source {
+    sabr: boolean;
+    ask: (asking: Asking) => Promise<Streams>;
+}
+
+/** Video id's streams asked anew by one method (sabr, with a reload's token if any; else as a guest), again while the
+ * request hangs, as long as asking says they are wanted */
+function by(id: string, sabr: boolean, token: string): Source {
+    return { sabr: sabr, ask: function (asking) {
+        return patient(function (fresh) {
+            return sabr ? sabrStreams(id, token, fresh) : streams(id, fresh);
+        }, function () { return asking(sabr, true); }, stuckFor(sabr));
+    } };
+}
+
+/** How much media is buffered in all (s) */
+function seconds(buffered: TimeRanges): number {
+    var all = 0;
+    for (var i = 0; i < buffered.length; i++) {
+        all += buffered.end(i) - buffered.start(i);
+    }
+    return all;
 }
 
 /** The engine for a video's streams: a live stream's segments, SABR (the account's streams), else each format's own

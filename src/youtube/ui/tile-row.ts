@@ -84,6 +84,9 @@ export interface TileRowOptions {
     noTitle?: boolean;
     /** Left/Right stop at the ends instead of wrapping (a grid line) */
     noWrap?: boolean;
+    /** The row never slides: all its tiles are in view (a grid line, which reaches nearer the screen's edge than a
+     * sliding row stops at: the last tile of a line would else slide it, and the grid's lines stand unevenly) */
+    still?: boolean;
     /** Spacing (default: LAYOUT) */
     layout?: TileLayout;
     /** A line under the heading, and a round icon before it (sized by the theme: bd-row-subtitle, bd-row-icon) */
@@ -114,6 +117,8 @@ var RETRY_MS = 20000;
 var ROOM_ABOVE = 12;
 /** How far the focus ring reaches beyond the picture's box on each side (the theme's bd-ring-edge border) */
 var RING = 6;
+/** The focused tile's usual place in a row that slides: this many tiles from the margin */
+var USUAL = 1;
 
 /** Height of one row, heading included (noTitle: a grid line, without) */
 export function rowHeight(shape: TileShape, noTitle?: boolean, layout?: TileLayout): number {
@@ -161,6 +166,9 @@ export class TileRow {
     private active = false;
     /** The tile at the left margin */
     private first = 0;
+    /** How many tiles from the margin the row keeps its focused tile as it slides: its usual place (USUAL; a wide
+     * row's at the margin), or where a tile reached from the row above or below stands (focusUnder) */
+    private home: number;
     /** Drawn tiles: from drawnFrom up to, not including, drawnTo */
     private drawnFrom = 0;
     private drawnTo = 0;
@@ -178,6 +186,7 @@ export class TileRow {
         this.shape = options.shape;
         this.step = options.shape.w + this.layout.gap;
         this.screen = Math.ceil(LAYOUT_WIDTH / this.step);
+        this.home = this.usual();
         // Without a heading the row starts higher (bd-row--bare), so it does
         // not clip the top of a focused tile's enlarged frame
         this.el = h('div', (options.noTitle ? 'bd-row bd-row--bare' : 'bd-row') + (options.wideShape ? ' bd-row--wide' : ''));
@@ -350,7 +359,17 @@ export class TileRow {
         if (n < 2 || (this.options.noWrap && (to < 0 || to >= n))) {
             return false;
         }
+        // A tile reached from another row may stand elsewhere than the row's usual place (focusUnder). The row slides
+        // under it there, one tile a press as ever; from the margin, Right steps to the usual place first
+        var usual = this.usual();
+        if (delta > 0 && this.home < usual) {
+            this.home = usual;
+        }
         this.focusAt((to + n) % n);
+        // (walked back towards the row's start: the usual place again from there)
+        if (this.home > usual) {
+            this.home = Math.max(usual, Math.min(this.home, this.focusIndex - this.first));
+        }
         return true;
     }
 
@@ -360,6 +379,34 @@ export class TileRow {
         this.scroll();
         this.update();
         this.markFocus();
+    }
+
+    /** The focused tile's left edge on screen, from the row's own (for focusUnder in the row above or below) */
+    get focusLeft(): number {
+        return this.left(this.focusIndex) - this.first * this.step;
+    }
+
+    /** Focuses the tile that stands at left on screen (another row's focusLeft: the tile straight below or above
+     * that row's), the nearest one in view if none does. The row stays where it is: it does not slide for it, and
+     * keeps that tile there as Left and Right go on from it. A wide row keeps its own tile (at the margin) */
+    focusUnder(left: number): void {
+        var n = this.items.length;
+        if (!n || this.options.wideShape) {
+            return;
+        }
+        // (the tiles in view whole, from the margin)
+        var whole = Math.max(1, Math.floor((LAYOUT_WIDTH - this.layout.pad + this.layout.gap) / this.step));
+        var column = Math.max(0, Math.min(Math.round((left - this.layout.pad) / this.step), whole - 1));
+        var index = Math.min(this.first + column, n - 1);
+        // (never before the margin: a row whose tiles became fewer than it had slid)
+        this.home = Math.max(0, index - this.first);
+        this.focusAt(index);
+    }
+
+    /** Where a row keeps its focused tile by itself: second from the margin, the tile before it in view (a wide
+     * row's at the margin) */
+    private usual(): number {
+        return this.options.wideShape ? 0 : USUAL;
     }
 
     /** Sets a tile's label ('' removes it); an unbuilt tile gets it when built */
@@ -578,16 +625,15 @@ export class TileRow {
         }
     }
 
-    /** Keeps the focused tile in view with the one before it. A tile always
-     * starts at the margin; at the end the row stops once the last tile fits.
-     * Tiles past the margin fade out instead of hanging off the screen edge
-     * (only those crossing it change). */
+    /** Keeps the focused tile in view with the one before it (at its home: elsewhere for a tile reached from another
+     * row, at the margin in a wide row). A tile always starts at the margin; at the end the row stops once the last
+     * tile fits. Tiles past the margin fade out instead of hanging off the screen edge (only those crossing it
+     * change). */
     private scroll(): void {
         var room = LAYOUT_WIDTH - 2 * this.layout.pad;
         var wide = this.options.wideShape;
         var max = Math.max(0, this.items.length * this.step - this.layout.gap - room + (wide ? wide.w - this.shape.w : 0));
-        // A wide row puts the focused tile at the margin
-        var first = Math.max(0, this.focusIndex - (wide ? 0 : 1));
+        var first = this.options.still ? 0 : Math.max(0, this.focusIndex - this.home);
         while (first > 0 && (first - 1) * this.step >= max) {
             first--;
         }

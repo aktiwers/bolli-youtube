@@ -1,5 +1,6 @@
 // Subscriptions screen, laid out like YouTube's phone app: a row of round channel pictures at the top (YouTube's
-// first-listed channels, then others with new videos, marked by a dot; "All" at the end lists every channel A-Z),
+// first-listed channels, then others with new videos, marked by a dot until the channel is looked at: its page
+// opened or its newest video started, api/looked.ts; "All" at the end lists every channel A-Z),
 // filter pills below (All, Today, Videos, Live: filtered locally, no new request), then the videos
 // (views/videos.ts FeedView; a filtered pill shows a grid). OK on a channel opens its page (main.ts
 // openSubChannel). Up from the first row focuses the pills, then the channels; further down the header slides
@@ -11,8 +12,10 @@ import { KEY } from '../core/keys.js';
 import { takesPointer, toPart } from '../core/pointer.js';
 import { View } from '../core/view.js';
 import { Rows, SubChannel, Video, withinADay } from '../api/feed.js';
+import { channelKey, forgetLooks, looked, settle } from '../api/looked.js';
 import { Pills } from '../ui/pills.js';
 import { metrics } from '../ui/theme.js';
+import { watchedAt } from './tiles.js';
 import { FeedHost, FeedOptions, FeedTexts, FeedView } from './videos.js';
 
 /** Focus resting this long on a channel prefetches its page. YouTube's reply takes 0.7-1 s, so a longer delay leaves
@@ -20,6 +23,8 @@ import { FeedHost, FeedOptions, FeedTexts, FeedView } from './videos.js';
 var REST_MS = 300;
 /** Most channels in the row (YouTube's first-listed ones, then others with new videos) */
 var ROW_MAX = 30;
+/** Rows older than this do not say which video is a channel's newest (a newer one may be missing from them) */
+var NEWEST_MS = 60 * 60 * 1000;
 /** The pills and the filter each applies to the rows */
 var PILLS: { label: string; keep: ((v: Video) => boolean) | null }[] = [
     { label: tr('All'), keep: null },
@@ -41,13 +46,21 @@ export class SubscriptionsView extends FeedHost implements View {
     private pillEls: HTMLElement[] = [];
     /** The chosen pill */
     private pill = 0;
-    /** The channels in the row, in order, and the rest timer for prefetching the focused one */
+    /** The channels in the row, in order, each one's dot (shown while it has new videos not looked at), and the rest
+     * timer for prefetching the focused one */
     private rowChannels: SubChannel[] = [];
+    private dots: HTMLElement[] = [];
     private restTimer = 0;
     private at: Place = 'rows';
     private focused = true;
-    /** The rows as YouTube returned them (the pills filter these) */
+    /** The rows as YouTube returned them (the pills filter these), and when it was asked for them (0: kept from an
+     * earlier start) */
     private all: Rows | null = null;
+    private askedAt = 0;
+    /** In those rows: each channel's newest video by the channel's name, and the one channel of each name (its key;
+     * '' where two share it) */
+    private newest: { [channel: string]: Video } = {};
+    private named: { [title: string]: string } = {};
     /** Key of the channels shown; a newer list waits until the screen is out of sight */
     private shownChannels = '';
     private waiting: SubChannel[] | null = null;
@@ -83,7 +96,7 @@ export class SubscriptionsView extends FeedHost implements View {
             if (!k) {
                 return k;
             }
-            self.take(k.rows);
+            self.take(k.rows, 0);
             self.fromKept = true;
             // Another account's: drop the channels along with the rows
             var other = function (): void {
@@ -105,9 +118,10 @@ export class SubscriptionsView extends FeedHost implements View {
         };
         this.feed = new FeedView(function () {
             var gen = self.gen;
+            var asked = Date.now();
             return load().then(function (rows) {
                 if (rows && gen === self.gen) {
-                    self.take(rows);
+                    self.take(rows, asked);
                 }
                 return rows && self.filtered(rows);
             });
@@ -251,11 +265,66 @@ export class SubscriptionsView extends FeedHost implements View {
         return { title: '', next: '', shelves: [{ title: '', videos: videos, grid: true }] };
     }
 
-    /** The channels from YouTube: drawn now if none are shown, else once the screen is out of sight */
+    /** The channels from YouTube: drawn now if none are shown, else once the screen is out of sight (the row does not
+     * change under the viewer); the dots of the ones shown follow the new list at once */
     private channels(list: SubChannel[]): void {
         this.waiting = list;
         if (!this.shownChannels || !this.shown) {
             this.putChannels();
+        } else {
+            this.drawDots();
+        }
+    }
+
+    /** A channel's page was opened (api/looked.ts visited): its dot goes, here at once and at YouTube */
+    looks(): void {
+        if (this.all) {
+            settle(this.all.channels || [], this.askedAt);
+            this.drawDots();
+        }
+    }
+
+    /** A video started playing: the newest of its channel (the first of that channel's in the rows, which are newest
+     * first) counts as the channel looked at. By the channel's name, the rows not having its id: not where two
+     * subscribed channels share it; and only by rows YouTube sent of late (in older ones, or those kept from an
+     * earlier start, a newer video may be missing: its dot would go unseen) */
+    sawVideo(id: string, channel: string): void {
+        var list = this.all && this.all.channels || [];
+        var key = this.named[channel];
+        var newest = this.newest[channel];
+        if (!key || !newest || newest.id !== id || !this.askedAt || Date.now() - this.askedAt > NEWEST_MS) {
+            return;
+        }
+        // (a channel is in the list twice, among the first ones and in A-Z: looked tells YouTube once, settle takes
+        // the dot from both)
+        list.filter(function (c) { return channelKey(c) === key; }).forEach(looked);
+        settle(list, this.askedAt);
+        this.drawDots();
+    }
+
+    /** c as the newest list has it: the row drawn may be of the list before, whose channels do not say whether a
+     * page is to be fetched anew */
+    private current(c: SubChannel): SubChannel {
+        var key = channelKey(c);
+        var list = this.all && this.all.channels || [];
+        for (var i = 0; i < list.length; i++) {
+            if (channelKey(list[i]) === key) {
+                return list[i];
+            }
+        }
+        return c;
+    }
+
+    /** Shows each drawn channel's dot as the newest list has it */
+    private drawDots(): void {
+        var dotted: { [key: string]: boolean } = {};
+        (this.waiting || this.all && this.all.channels || []).forEach(function (c) {
+            if (c.fresh && !c.seen) {
+                dotted[channelKey(c)] = true;
+            }
+        });
+        for (var i = 0; i < this.dots.length; i++) {
+            this.dots[i].style.display = dotted[channelKey(this.rowChannels[i])] ? '' : 'none';
         }
     }
 
@@ -265,9 +334,16 @@ export class SubscriptionsView extends FeedHost implements View {
         if (!list) {
             return;
         }
-        var row = list.filter(function (c) { return c.recent; }).concat(list.filter(function (c) { return !c.recent && c.fresh; })).slice(0, ROW_MAX);
-        var key = row.map(function (c) { return c.title + (c.fresh ? '*' : '') + (c.channel ? c.channel.browseId : ''); }).join('|');
+        // (YouTube lists its first channels again in A-Z: once each here)
+        var first: { [key: string]: boolean } = {};
+        var row = list.filter(function (c) { return c.recent; });
+        row.forEach(function (c) { first[channelKey(c)] = true; });
+        row = row.concat(list.filter(function (c) { return !c.recent && c.fresh && !first[channelKey(c)]; })).slice(0, ROW_MAX);
+        var key = row.map(function (c) { return c.title + (c.channel ? c.channel.browseId : ''); }).join('|');
         if (key === this.shownChannels) {
+            // The same channels in the same order: only their dots may differ
+            this.rowChannels = row;
+            this.drawDots();
             return;
         }
         this.shownChannels = key;
@@ -276,6 +352,7 @@ export class SubscriptionsView extends FeedHost implements View {
         var at = this.channelPills.at;
         this.strip.innerHTML = '';
         this.channelPills.clear();
+        this.dots = [];
         row.forEach(function (c) {
             var el = h('div', 'by-subs-channel');
             var picture = h('img', 'by-subs-picture') as HTMLImageElement;
@@ -286,15 +363,16 @@ export class SubscriptionsView extends FeedHost implements View {
                 picture.setAttribute('data-src', c.picture);
             }
             el.appendChild(picture);
-            if (c.fresh) {
-                el.appendChild(h('div', 'by-subs-dot'));
-            }
+            // (always there, shown by drawDots: a channel looked at loses it without the row being drawn anew)
+            self.dots.push(el.appendChild(h('div', 'by-subs-dot')) as HTMLElement);
             el.appendChild(h('div', 'by-subs-name', c.title));
-            self.strip.appendChild(self.channelPills.add(el, function () { self.openChannel(c); }));
+            self.strip.appendChild(self.channelPills.add(el, function () { self.openChannel(self.current(c)); }));
         });
         var all = h('div', 'by-subs-channel by-subs-all');
         setText(all, tr('All'));
-        this.strip.appendChild(this.channelPills.add(all, function () { self.openAll(list); }));
+        // (the newest list: the row may be of the one before)
+        this.strip.appendChild(this.channelPills.add(all, function () { self.openAll(self.all && self.all.channels || list); }));
+        this.drawDots();
         this.channelPills.focus(Math.min(at, this.channelPills.count - 1));
         this.channelPills.setFocused(this.focused && this.at === 'channels');
         this.scroll();
@@ -307,7 +385,7 @@ export class SubscriptionsView extends FeedHost implements View {
         this.restTimer = setTimeout(function () {
             var c = self.at === 'channels' && self.focused ? self.rowChannels[self.channelPills.at] : null;
             if (c) {
-                self.ahead(c);
+                self.ahead(self.current(c));
             }
         }, REST_MS) as unknown as number;
     }
@@ -324,19 +402,35 @@ export class SubscriptionsView extends FeedHost implements View {
         this.feed.reload();
     }
 
-    /** Takes rows from YouTube (or the cache): the pills filter them, their channels fill the row */
-    private take(rows: Rows): void {
+    /** Takes rows from YouTube (or the cache): the pills filter them, their channels fill the row. asked: when
+     * YouTube was asked for them (0: kept from an earlier start); a channel looked at since has no dot in them
+     * (api/looked.ts), nor one whose newest video in them was started */
+    private take(rows: Rows, asked: number): void {
         this.all = rows;
+        this.askedAt = asked;
         this.fromKept = false;
-        this.channels(rows.channels || []);
+        var list = rows.channels || [];
+        settle(list, asked);
+        var newest = this.newest = newestOf(rows);
+        var named = this.named = oneNamed(list);
+        list.forEach(function (c) {
+            var v = named[c.title] === channelKey(c) ? newest[c.title] : null;
+            // (YouTube's share of it watched, on any device; or started here with History off)
+            c.seen = !!v && ((v.progress || 0) > 0 || watchedAt(v.id) >= 0);
+        });
+        this.channels(list);
     }
 
-    /** Drops rows and channels (they belonged to another account) */
+    /** Drops rows and channels (they belonged to another account), with what that account looked at */
     private forget(): void {
         this.all = this.waiting = null;
+        this.newest = {};
+        this.named = {};
+        forgetLooks();
         this.fromKept = false;
         this.shownChannels = '';
         this.rowChannels = [];
+        this.dots = [];
         this.strip.innerHTML = '';
         this.channelPills.clear();
         if (this.at === 'channels') {
@@ -353,4 +447,27 @@ export class SubscriptionsView extends FeedHost implements View {
         translate(this.head, 0, inHead ? 0 : -down);
         toggleClass(this.el, 'by-subs--rows', !inHead);
     }
+}
+
+/** Each channel's newest video in rows, by the channel's name: its first there, the rows being newest first */
+function newestOf(rows: Rows): { [channel: string]: Video } {
+    var newest: { [channel: string]: Video } = Object.create(null);
+    rows.shelves.forEach(function (s) {
+        s.videos.forEach(function (v) {
+            if (v.channel && !v.page && !newest[v.channel]) {
+                newest[v.channel] = v;
+            }
+        });
+    });
+    return newest;
+}
+
+/** The key (api/looked.ts channelKey) of the one channel of each name in list; '' for a name two channels share */
+function oneNamed(list: SubChannel[]): { [title: string]: string } {
+    var named: { [title: string]: string } = Object.create(null);
+    list.forEach(function (c) {
+        var key = channelKey(c);
+        named[c.title] = named[c.title] === undefined || named[c.title] === key ? key : '';
+    });
+    return named;
 }

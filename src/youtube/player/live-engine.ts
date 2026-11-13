@@ -23,6 +23,7 @@
 // several segments' time is told as the failure 'stands' (again each such while); the player asks YouTube whether
 // the stream has ended and, if so, calls finish: the stream is over from then on, plays out what it has and ends.
 
+import { fakedRequest } from '../core/fake-net.js';
 import { clock, progress } from '../core/time.js';
 import { tr } from '../core/i18n.js';
 import { Format, Live } from '../api/streams.js';
@@ -207,31 +208,21 @@ export class LiveEngine implements Engine {
         return true;
     }
 
-    /** Jumps from from towards to (s) by whole segments, within the window (from a jump still landing: from its
-     * segment). The viewer's: no longer following live */
+    /** Jumps from from (the playhead) to `to` (s, both on the playhead's scale) by whole segments, within the window;
+     * also during a landing the way is measured from the playhead's segment (where a jump on its way goes is part of
+     * `to`: seekTarget). The viewer's (the remote's jumps, a phone's seek, a restart): no longer following live */
     jump(to: number, from: number): void {
         this.following = false;
-        var at = this.landing >= 0 ? this.landing : this.segmentAt(from);
-        if (at < 0) {
-            return;
+        var at = this.segmentAt(from);
+        if (at >= 0) {
+            this.goTo(at + Math.round((to - from) / this.live.segment));
         }
-        this.goTo(at + Math.round((to - from) / this.live.segment));
     }
 
     /** Where a jump still landing goes, on the playhead's scale (s; -1: none) */
     seekTarget(): number {
         var at = this.segmentAt(this.video.currentTime);
         return this.landing >= 0 && at >= 0 ? this.video.currentTime + (this.landing - at) * this.live.segment : -1;
-    }
-
-    /** To t on the playhead's scale (from the playhead's segment, also during a landing: t is measured from there). The
-     * viewer's (a phone's seek, a restart): no longer following live */
-    seek(t: number): void {
-        this.following = false;
-        var at = this.segmentAt(this.video.currentTime);
-        if (at >= 0) {
-            this.goTo(at + Math.round((t - this.video.currentTime) / this.live.segment));
-        }
     }
 
     /** (a live stream is not loaded ahead) */
@@ -587,10 +578,20 @@ export class LiveEngine implements Engine {
         this.pump();
     }
 
-    /** A segment to come has not come for several segments' time: told as 'stands', and again after as long */
+    /** A segment to come has not come for several segments' time: told as 'stands', and again after as long. Only
+     * while a request for one is out: a jump back drops it (restart), and a viewer who then pauses asks nothing more,
+     * so nothing would end the wait */
     private checkStands(): void {
         var after = Math.max(STANDS_SEGMENTS * this.live.segment, STANDS_MIN_S) * 1000;
-        if (this.stopped || this.live.over || !this.waitingSince || Date.now() - this.waitingSince < after) {
+        if (this.stopped || this.live.over || !this.waitingSince) {
+            return;
+        }
+        var head = this.head;
+        if (!this.tracks.some(function (t) { return t.busy && t.sq > head; })) {
+            this.waitingSince = 0;
+            return;
+        }
+        if (Date.now() - this.waitingSince < after) {
             return;
         }
         this.waitingSince = Date.now();
@@ -661,7 +662,7 @@ export class LiveEngine implements Engine {
  * stuck network */
 function fetchSegment(url: string, sq: number, started?: (xhr: XMLHttpRequest) => void, made?: boolean): Promise<Got> {
     return new Promise<Got>(function (resolve, reject) {
-        var xhr = new XMLHttpRequest();
+        var xhr = fakedRequest() || new XMLHttpRequest();
         var used = onNetwork(url);
         xhr.open('GET', used + (sq >= 0 ? '&sq=' + sq : ''), true);
         xhr.responseType = 'arraybuffer';

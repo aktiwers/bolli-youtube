@@ -16,9 +16,10 @@
 // seek. What is buffered past the window is removed first (never during a seek: waitSeek) and loaded again once the picture
 // moves there.
 
+import { fakedRequest } from '../core/fake-net.js';
 import { Format } from '../api/streams.js';
 import { framesFrom, parseCues, parseSidx, Segment, trackScale } from './containers.js';
-import { BEHIND_MB, BEHIND_S, bufferedEnd, Engine, hopHole, jumpTarget, KEYFRAME_IN, LIFT_END_S, LIFT_MS, LIFT_S, MB, QUICK_MIN_S, QUICK_SPEED, QUICK_WAIT_MS, RETRIES, roomAhead, seekNudged, Skip, SPEED_BYTES, STILL_AHEAD, TICK_MS, TIMEOUT_MS, WINDOW_S, windowFrom } from './engine.js';
+import { BEHIND_MB, BEHIND_S, bufferedEnd, decodeLoad, Engine, hopHole, jumpTarget, KEYFRAME_IN, LIFT_END_S, LIFT_MS, LIFT_S, MB, QUICK_MIN_S, QUICK_SPEED, QUICK_WAIT_MS, RETRIES, roomAhead, seekNudged, Skip, skipLanding, SPEED_BYTES, STILL_AHEAD, TICK_MS, TIMEOUT_MS, WINDOW_S, windowFrom } from './engine.js';
 import { onLost, onNetwork } from './networks.js';
 import { keepPipeline, openPipeline, Pipeline, setLength, setLengthSoon, spoilingFail } from './pipeline.js';
 
@@ -85,7 +86,7 @@ export function joinedSkips(skips: Skip[]): Skip[] {
 }
 
 /** Where loading goes on instead of media segment i: past a skip it lies in (from SKIP_IN_S into the skip, after the
- * playhead at now), at the segment the jump lands in; else i */
+ * playhead at now), at the segment the skip ends in (the jump past it lands there: DashEngine.skipsAhead); else i */
 export function pastSkip(segments: Segment[], i: number, skips: Skip[], now: number): number {
     var seg = segments[i];
     for (var k = 0; seg && seg.start > now && k < skips.length; k++) {
@@ -145,7 +146,7 @@ export function segmentAt(segments: Segment[], t: number): number {
  * status (0: no answer or aborted, 'timeout'), or 'moved' when no answer or no data came and the video's next network
  * is left for the next request */
 function fetchBytes(url: string, from: number, to: number): { xhr: XMLHttpRequest; done: Promise<ArrayBuffer> } {
-    var xhr = new XMLHttpRequest();
+    var xhr = fakedRequest() || new XMLHttpRequest();
     var used = onNetwork(url);
     var done = new Promise<ArrayBuffer>(function (resolve, reject) {
         // Range as a URL parameter, as YouTube's player does: no Range header, so no CORS preflight
@@ -407,6 +408,9 @@ export class DashEngine implements Engine {
     private stuckTimer = 0;
     /** At most this far ahead (s; 0: AHEAD): hold */
     private most = 0;
+    /** The video's segment starts (starts), and the segments they are of */
+    private startsFor: Segment[] | null = null;
+    private startsKept: number[] = [];
     /** The start's window: the length the TV is told until the video plays (s; 0: none), the real length, and where
      * the window ended once lifted */
     private window = 0;
@@ -475,8 +479,9 @@ export class DashEngine implements Engine {
         return true;
     }
 
-    /** Seeks to t (s): now, or once no buffer is updating (settle), then in a window of its own (windowFor). A window
-     * up is lifted first, but a seek's whose seek is still on its way in settle: that seek may be let end first (waitSeek) */
+    /** Seeks to t (s), the step inside a jump (the player jumps: jump): now, or once no buffer is updating (settle),
+     * then in a window of its own (windowFor). A window up is lifted first, but a seek's whose seek is still on its way
+     * in settle: that seek may be let end first (waitSeek) */
     seek(t: number): void {
         if (!(this.landed >= 0 && this.video.seeking)) {
             this.widen();
@@ -707,18 +712,38 @@ export class DashEngine implements Engine {
         return speed < QUICK_SPEED * (s[to].to - s[from].from + 1) * 8 / (s[to].end - s[from].start);
     }
 
-    /** Jumps from from towards to (s): to the nearest keyframe (a video segment's start) on that side of from */
-    jump(to: number, from: number): void {
-        this.seek(jumpTarget((this.tracks.length ? this.tracks[0].segments : []).map(function (s) { return s.start; }), to, from));
+    /** Jumps from from towards to (s): to the nearest keyframe (a video segment's start) on that side of from; past (a
+     * part skipped up to `to`): with quick jumps to the first keyframe at or after `to`, without them to `to` itself */
+    jump(to: number, from: number, past?: boolean): void {
+        var starts = this.starts();
+        this.seek(!past ? jumpTarget(starts, to, from) : this.quick ? skipLanding(starts, to, this.heavy(), from) : to);
+    }
+
+    /** The video's segment starts (its keyframes, s), kept while its segments are the same */
+    private starts(): number[] {
+        var segments = this.tracks.length ? this.tracks[0].segments : null;
+        if (segments !== this.startsFor) {
+            this.startsFor = segments;
+            this.startsKept = (segments || []).map(function (s) { return s.start; });
+        }
+        return this.startsKept;
+    }
+
+    /** How heavy the playing video is for the TV's decoder (engine.ts decodeLoad) */
+    private heavy(): number {
+        var f = this.tracks.length ? this.tracks[0].format : null;
+        return f ? decodeLoad(f.width, f.height, f.fps) : 0;
     }
 
     seekTarget(): number {
         return this.pending;
     }
 
-    /** The real length while the TV is told a window's (a seek's, and a start's until its picture has moved) */
+    /** The real length while the TV is told a window's (a seek's, and a start's until its picture has moved) or
+     * still has a lifted one's */
     realLength(): number {
-        return this.window ? this.length : 0;
+        // (a lifted window's end stays the element's length until its buffers are idle: pipeline.ts setLengthSoon)
+        return this.window || this.length > 0 && this.video.duration < this.length - 0.5 ? this.length : 0;
     }
 
     /** Plays the formats from startAt (s); preview: prefetched heads are only read, left for the player's start */
@@ -1412,7 +1437,7 @@ export class DashEngine implements Engine {
         // The playhead, or the target of the start's seek (a start from a resume point, not from 0)
         var now = this.pending >= 0 && !waited ? this.pending : this.video.currentTime;
         var segments = track.segments;
-        var skips = joinedSkips(this.skips());
+        var skips = this.skipsAhead();
         // Between segments, on past media the player will skip (its jump lands in loaded media) and past segments the
         // buffer holds whole already (a jump back came up to the range it left ahead; not in a switch or a start's cut,
         // which append over what is there), in a seek's window up to its end (before a range it kept: the segment
@@ -1538,6 +1563,25 @@ export class DashEngine implements Engine {
      * show the picture (a keyframe took the first request): what it asks next is small again, there the sooner */
     private short(track: Track, now: number): boolean {
         return track === this.tracks[0] && this.window > 0 && bufferedEnd((track.sb as SourceBuffer).buffered, now, 0.1) - now < FIRST_S;
+    }
+
+    /** The parts the player will skip, as loading goes past them (joined). With quick jumps each ends where the jump
+     * past it lands (jump, engine.ts skipLanding): on the keyframe after its end, the video segment the part ends in
+     * is not played, so not loaded; on its own end or the keyframe just before it, that segment is. Without them the
+     * jump lands on the part's own end */
+    private skipsAhead(): Skip[] {
+        var skips = joinedSkips(this.skips());
+        if (this.quick && this.tracks.length) {
+            var starts = this.starts();
+            var load = this.heavy();
+            for (var k = 0; k < skips.length; k++) {
+                var lands = skipLanding(starts, skips[k].end, load);
+                if (lands > skips[k].end) {
+                    skips[k].end = Math.max(skips[k].end, lands - KEYFRAME_IN);
+                }
+            }
+        }
+        return skips;
     }
 
     /** Bytes loaded (or asked for) ahead of the playhead at now, not counting the media of skips left out */

@@ -8,6 +8,7 @@ import { prefs, reloadPrefs, setPref } from './api/prefs.js';
 import { forgetStreams, sabrStreams, streams, takeLiveAsOver } from './api/streams.js';
 import { identities, innertube, innertubeAs } from './api/youtube.js';
 import { Cast } from './cast.js';
+import { fakeNet } from './core/fake-net.js';
 import { OwnPlayer, startFormats } from './player/own-player.js';
 import { pipelineStats } from './player/pipeline.js';
 import { TvApp } from './player/tv-app.js';
@@ -39,6 +40,11 @@ export function debugHooks(app: DebugApp): void {
     };
     // liveAsOver(on): live streams asked for from now on play as one that has ended does (api/streams.ts)
     debug.liveAsOver = takeLiveAsOver;
+    // fakeNet(mode): the player's requests from now on answered as a failing line or YouTube would (core/fake-net.ts):
+    // 'offline' (no answer for media, streams and the line's probe), 'youtube' (media and streams HTTP 503, the probe
+    // asked for real), '403' (the same with HTTP 403), 'refuse' (the streams refused as for a video only YouTube's
+    // player plays); '' (or anything else): all real again. Returns the mode set
+    debug.fakeNet = fakeNet;
     // own: the app's player; tv: YouTube's TV app hidden in this one (player/tv-app.ts)
     debug.own = app.own;
     debug.tv = app.tv;

@@ -1,16 +1,20 @@
 // Asks the version check service (cloud/version-check) whether a newer version of the app is out: at most once a
-// calendar day, some time after the app has started and never under a video. The request names the app's version,
-// webOS or Android, how many days ago this device last got an answer (0: never) and whether its notice is on; from
-// that number the service counts the devices in use over any span of days, and nothing in it tells one device from
-// another. The date of the last answered check stays here, in the app's storage. A newer version shows in Settings ›
-// About (newerVersion) and is told at most once a week, for as long as it is out. The setting (Check for new
-// versions) has three choices: 'notify' is all of that, 'quiet' asks and shows but tells nothing, 'off' asks nothing
-// and knows of nothing newer. While CHECK_URL is empty all of this does nothing. A check that fails says nothing and
-// is made again after the next start, or when the app comes back on screen (checkAgain): an app left running for
-// days is so counted on each of its days, and told of a newer version. webOS TV 1.x-2.x asks over plain http
-// (checkAddress): its engine does not know who issued the service's certificate, so https fails there.
+// day of UTC's calendar (the service's days: by the device's own, two of its checks could land on one of them), some
+// time after the app has started and never under a video. The request names the app's version, webOS or Android and
+// its version where known (osVersion), how many days ago this device last got an answer (0: never) and whether its
+// notice is on; from that number the service counts the devices in use over any span of days, and nothing in it
+// tells one device from another. The date of the last answered check stays here, in the app's storage, with the
+// version that asked: an app updated later that day asks once more and names that version, so that the service
+// counts the device on its new version, and once. A newer version shows in Settings › About (newerVersion) and is
+// told at most once a week, for as long as it is out. The setting (Check for new versions) has three choices:
+// 'notify' is all of that, 'quiet' asks and shows but tells nothing, 'off' asks nothing and knows of nothing newer.
+// While CHECK_URL is empty all of this does nothing. A check that fails says nothing and is made again after the
+// next start, or when the app comes back on screen (checkAgain): an app left running for days is so counted on each
+// of its days, and told of a newer version. webOS TV 1.x-2.x asks over plain http (checkAddress): its engine does
+// not know who issued the service's certificate, so https fails there.
 
 import { getJson } from '../core/http.js';
+import { lunaAsk } from '../core/luna.js';
 import { android, oldEngine } from '../core/platform.js';
 import { load, save } from '../core/store.js';
 import { pad2 } from '../core/time.js';
@@ -34,14 +38,22 @@ var DAY = /^(\d{4})-(\d\d)-(\d\d)$/;
 var GAP_MAX = 1100;
 /** A notice of a newer version comes no sooner than this many days after the one before it */
 var NOTICE_DAYS = 7;
+/** A system's version as a check names it: one to four numbers, no longer than this */
+var OS_VERSION = /^[0-9]+(\.[0-9]+){0,3}$/;
+var OS_VERSION_LENGTH = 15;
+/** webOS's own word on its version (sdkVersion: "3.9.0"), and how long a check waits for it */
+var SYSTEM_INFO = 'luna://com.webos.service.tv.systemproperty/getSystemInfo';
+var SYSTEM_MS = 2000;
 
-/** What is kept: the date of the last answered check (the device's own, YYYY-MM-DD; '' none yet), the latest version
- * it named ('' none), the newer version the viewer was last told of ('' none) and the date of that notice ('' none) */
+/** What is kept: the date of the last answered check (UTC's, YYYY-MM-DD; '' none yet), the latest version
+ * it named ('' none), the newer version the viewer was last told of ('' none), the date of that notice ('' none) and
+ * the app's version that check was sent with ('' unknown: a build from before it kept none) */
 interface Kept {
     day: string;
     latest: string;
     told: string;
     toldDay: string;
+    sentWith: string;
 }
 
 /** The latest version as the service named it in this run ('' none; null: not asked yet): known also where the
@@ -51,11 +63,13 @@ var named: string | null = null;
 var asking = false;
 /** Looks again half a minute from now (set by checkVersion; null before it, and in a build without an address) */
 var again: (() => void) | null = null;
+/** The system's version as this run's first check learned it (osVersion); null: not asked yet */
+var system: Promise<string> | null = null;
 
 function kept(): Kept {
     var k = load<Kept>(KEY);
     return { day: String(k && k.day || ''), latest: String(k && k.latest || ''), told: String(k && k.told || ''),
-        toldDay: String(k && k.toldDay || '') };
+        toldDay: String(k && k.toldDay || ''), sentWith: String(k && k.sentWith || '') };
 }
 
 /** The running app's version, as main.ts wrote it on the page */
@@ -80,9 +94,41 @@ function checkAddress(): string {
     return oldEngine() ? at.replace(/^https:/, 'http:') : at;
 }
 
-/** The device's own date of an instant: YYYY-MM-DD */
+/** said if it is a system's version as a check may name it, else '' */
+function systemVersion(said: unknown): string {
+    return typeof said === 'string' && said.length <= OS_VERSION_LENGTH && OS_VERSION.test(said) ? said : '';
+}
+
+/** The version of webOS or Android for a check to name ('': unknown, the check names none). Android: its release, as
+ * the shell says it (a shell from before that says none). webOS: the platform's own word, waited for no longer than
+ * SYSTEM_MS; without one, and on webOS TV 1.x-2.x, which is not asked, what the browser's name carries after webOS/
+ * (mostly nothing). Asked once a run, when its first check goes out. Never fails. */
+function osVersion(): Promise<string> {
+    system = system || new Promise<unknown>(function (resolve) {
+        var shell = android();
+        if (shell || oldEngine()) {
+            resolve(shell && shell.osVersion ? shell.osVersion() : '');
+            return;
+        }
+        var known = function (reply?: { [key: string]: unknown }): void {
+            clearTimeout(late);
+            resolve(reply && reply.sdkVersion);
+        };
+        var late = setTimeout(known, SYSTEM_MS);
+        lunaAsk(SYSTEM_INFO, { keys: ['sdkVersion'] }).then(known, function () { known(); });
+    }).then(function (said) {
+        // (the Android app's browser names an LG TV: nothing to read there)
+        var named = android() ? null : /web[o0]s\/([0-9.]+)/i.exec(navigator.userAgent);
+        return systemVersion(said) || systemVersion(named && named[1]);
+    }, function () {
+        return '';
+    });
+    return system;
+}
+
+/** UTC's date of an instant, as the service counts its days: YYYY-MM-DD */
 export function dayOf(now: Date): string {
-    return now.getFullYear() + '-' + pad2(now.getMonth() + 1) + '-' + pad2(now.getDate());
+    return now.getUTCFullYear() + '-' + pad2(now.getUTCMonth() + 1) + '-' + pad2(now.getUTCDate());
 }
 
 /** A date (YYYY-MM-DD) as a count of days, from its year, month and day alone: a day of 23 or 25 hours is one day
@@ -129,18 +175,34 @@ export function newerVersion(): string {
 }
 
 /** Asks the service if a check is due: there is an address, checking is not off, version (the running app's) is one
- * of three numbers, no check was answered yet on now's date and none is on its way. True once the service has answered
- * (the date and its latest version kept); false when nothing was asked or no proper answer came (nothing kept, so the
- * next start asks again). Never fails. */
+ * of three numbers, none is on its way, and no check was answered yet on now's date, or one was, by another version
+ * of the app: updated since, the app asks once more and names that version (from), which tells the service that this
+ * is the device it counted before. A check kept without its version is of a build from before that: nothing more is
+ * asked that day. True once the service has answered (the date, the asking version and its latest version kept);
+ * false when nothing was asked or no proper answer came (nothing kept, so the next start asks again). An update's
+ * check is kept as sent the moment it goes, and stays so where it may have arrived (no answer in time, the app
+ * closed meanwhile): the service takes each one it gets as a move from that version, so one it counted must not come
+ * twice. One that plainly did not arrive (no line, or the service answering that it failed) is asked again. Never
+ * fails. */
 export function checkNow(version: string, now: Date): Promise<boolean> {
     var today = dayOf(now);
-    var last = kept().day;
-    if (!address || prefs().versionCheck === 'off' || !VERSION.test(version) || last === today || asking) {
+    var last = kept();
+    var from = last.day === today ? last.sentWith : '';
+    if (!address || prefs().versionCheck === 'off' || !VERSION.test(version) || asking ||
+        last.day === today && (!VERSION.test(from) || from === version)) {
         return Promise.resolve(false);
     }
     asking = true;
-    return getJson<{ latest?: unknown }>(checkAddress() + '/v1/check?app=youtube&v=' + version + '&os=' + (android() ? 'android' : 'webos') +
-        '&g=' + gapOf(last, today) + '&n=' + (prefs().versionCheck === 'notify' ? 1 : 0), TIMEOUT_MS).then(function (reply) {
+    var check = checkAddress() + '/v1/check?app=youtube&v=' + version + '&os=' + (android() ? 'android' : 'webos');
+    var rest = '&g=' + gapOf(last.day, today) + '&n=' + (prefs().versionCheck === 'notify' ? 1 : 0) + (from ? '&from=' + from : '');
+    return osVersion().then(function (os) {
+        if (from) {
+            var sent = kept();
+            sent.sentWith = version;
+            save(KEY, sent);
+        }
+        return getJson<{ latest?: unknown }>(check + (os ? '&ov=' + os : '') + rest, TIMEOUT_MS);
+    }).then(function (reply) {
         asking = false;
         if (!reply || typeof reply.latest !== 'string') {
             return false;
@@ -149,10 +211,18 @@ export function checkNow(version: string, now: Date): Promise<boolean> {
         var was = kept();
         was.day = today;
         was.latest = named;
+        was.sentWith = version;
         save(KEY, was);
         return true;
-    }, function () {
+    }, function (e: { status?: number; message?: string }) {
         asking = false;
+        // (the service said it failed, or the request got nowhere: nothing was counted, the update's check is due
+        // again. One that got no answer in time may have been)
+        if (from && e && (e.status || e.message !== 'timeout')) {
+            var was = kept();
+            was.sentWith = from;
+            save(KEY, was);
+        }
         return false;
     });
 }

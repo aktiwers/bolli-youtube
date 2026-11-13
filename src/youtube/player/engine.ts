@@ -10,8 +10,12 @@ import { Format } from '../api/streams.js';
 export interface Engine {
     /** preview: a tile's preview (an engine may then use what was fetched ahead differently) */
     load(video: Format, audio: Format, startAt: number, preview?: boolean): void;
-    seek(t: number): void;
-    jump(to: number, from: number): void;
+    /** Moves the playhead from from towards to (s), the one way the player moves it within a video (an engine's own
+     * seek is the step inside): onto a keyframe (a video segment's start), the nearest to `to` on that side of from.
+     * past: a part was skipped up to `to`: with quick jumps onto the keyframe `to` lies just after (a part ends on
+     * a cut), else to `to` itself, or onto the first keyframe after it where that leaves out no more than the exact
+     * landing would have the picture stand longer (skipLanding); without them to `to` itself, a plain seek */
+    jump(to: number, from: number, past?: boolean): void;
     /** Where a seek not yet run goes (s; -1: none): SABR moves the playhead only once the media there is in */
     seekTarget?(): number;
     /** Stops; the pipeline is kept, paused, for the next video (player/pipeline.ts) */
@@ -34,7 +38,8 @@ export interface Engine {
      * before) */
     quick?: boolean;
     /** The video's real length (s) while the engine tells the TV a shorter one (a seek's window, a start's until its
-     * picture has moved), else 0: the element's length is the window's end meanwhile */
+     * picture has moved) and until the TV has the real one again, else 0: the element's length is the window's end
+     * meanwhile */
     realLength?(): number;
 }
 
@@ -118,6 +123,70 @@ export function jumpTarget(starts: number[], to: number, from: number, within?: 
         }
     }
     return best < 0 ? to : best + KEYFRAME_IN;
+}
+
+/** A jump past a skipped part leaves out at most this much of what follows the part (s) */
+export var LOSS_MAX_S = 2;
+/** A part that ends this little after a keyframe ends on that keyframe (s): a sponsor read ends on a cut, YouTube
+ * puts a keyframe on a cut, and the part's end is marked a moment after it (of 14 sponsor parts in ten videos, 6
+ * ended 0.03-0.22 s after a keyframe, the next nearest 0.44 s; by chance it would be under one) */
+export var EARLY_S = 0.3;
+/** A landing between keyframes has this TV decode from the one before it, the picture standing longer than for a
+ * landing on a keyframe: by STAND_S and STAND_PER_S for each second of video between them, and with a heavy video
+ * (decodeLoad 1) by STAND_MORE_S and STAND_PER_MORE_S more (measured, 2-4.5 s after the keyframe: 1.0-2.6 s longer at
+ * 2160p and 60 fps, 0.5-0.7 s at 1080p and 60 fps, 0.1-0.2 s at 2160p and 24-25 fps) */
+var STAND_S = 0.27;
+var STAND_MORE_S = 0.53;
+var STAND_PER_S = 0.01;
+var STAND_PER_MORE_S = 0.24;
+var PIXELS_MOST = 3840 * 2160;
+var FPS_MOST = 60;
+
+/** How heavy a video is for this TV's decoder, 0-1, against 2160p at 60 fps: by its pixels, and by its frame rate
+ * twice over (as measured: 60 fps costs far more than its frames alone; a width not known: 16:9; a rate not known:
+ * 30) */
+export function decodeLoad(width: number, height: number, fps: number): number {
+    var rate = Math.min(1, (fps || 30) / FPS_MOST);
+    return Math.min(1, (width || height * 16 / 9) * height / PIXELS_MOST) * rate * rate;
+}
+
+/** Where a jump past a part skipped up to t lands, between the keyframe before t (s; -1: not known) and the first one
+ * at or after it (s; -1: none follows), each KEYFRAME_IN in:
+ * - on the keyframe before, if t is at most EARLY_S after it (the cut the part ends on) and it lies ahead of where
+ *   the jump comes from (from, s; left out: any);
+ * - else on t itself, the TV decoding up to it;
+ * - unless the keyframe after is the sooner way on: landing there leaves out no more video than the picture would
+ *   stand longer for t (load: the video's decodeLoad), and LOSS_MAX_S at most */
+export function landingBetween(before: number, after: number, t: number, load: number, from?: number): number {
+    var lost = after < 0 ? Infinity : after - t;
+    if (lost <= KEYFRAME_IN) {
+        return after + KEYFRAME_IN;
+    }
+    if (before >= 0 && t - before <= EARLY_S && before + KEYFRAME_IN > (from === undefined ? -1 : from)) {
+        return before + KEYFRAME_IN;
+    }
+    var longer = before < 0 ? 0 : STAND_S + STAND_MORE_S * load + (STAND_PER_S + STAND_PER_MORE_S * load) * (t - before);
+    return lost <= LOSS_MAX_S && lost <= longer ? after + KEYFRAME_IN : t;
+}
+
+/** Where a jump past a part skipped up to t lands by the video's segment starts (keyframes, s): landingBetween the
+ * one before t and the first at or after it (one that t is at most KEYFRAME_IN into counts as after; from: where the
+ * jump comes from); t itself at the video's own start (nothing lies before its first frame: a repeat returns to 0 as
+ * a start plays from it) */
+export function skipLanding(starts: number[], t: number, load: number, from?: number): number {
+    var before = -1;
+    var after = -1;
+    for (var i = 0; i < starts.length; i++) {
+        var s = starts[i];
+        if (s >= t - KEYFRAME_IN) {
+            if (after < 0 || s < after) {
+                after = s;
+            }
+        } else if (s > before) {
+            before = s;
+        }
+    }
+    return after === 0 ? Math.max(0, t) : landingBetween(before, after, t, load, from);
 }
 
 /** The end of the buffered part that t is in (within slack), else t */

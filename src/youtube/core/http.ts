@@ -30,13 +30,27 @@ export function postForm<T>(url: string, fields: { [name: string]: string }): Pr
         .then(function (text) { return parse<T>(text, url); });
 }
 
-/** POST JSON, JSON back */
-export function postJson<T>(url: string, body: unknown, headers?: { [name: string]: string }): Promise<T> {
+/** POST JSON, JSON back. as: a name the request can be aborted by while it is on its way (abortSent) */
+export function postJson<T>(url: string, body: unknown, headers?: { [name: string]: string }, as?: string): Promise<T> {
     var all: { [name: string]: string } = { 'Content-Type': 'application/json', Accept: 'application/json' };
     for (var name in headers) {
         all[name] = headers[name];
     }
-    return send('POST', url, JSON.stringify(body), all).then(function (text) { return parse<T>(text, url); });
+    return send('POST', url, JSON.stringify(body), all, undefined, as).then(function (text) { return parse<T>(text, url); });
+}
+
+/** The requests on their way that were sent under a name */
+var named: { as: string; xhr: XMLHttpRequest }[] = [];
+/** What an aborted request (abortSent) rejects with: an HttpError of this message */
+export var ABORTED = 'aborted';
+
+/** Aborts the requests on their way that were sent as name (postJson): each rejects with an HttpError ABORTED */
+export function abortSent(name: string): void {
+    var mine = named.filter(function (n) { return n.as === name; });
+    named = named.filter(function (n) { return n.as !== name; });
+    for (var i = 0; i < mine.length; i++) {
+        mine[i].xhr.abort();
+    }
 }
 
 /** POST JSON, the reply as text (for reading a part of a big reply without parsing it all) */
@@ -112,27 +126,38 @@ export function parse<T>(text: string, url: string): T {
     }
 }
 
-function send(method: string, url: string, body: string | null, headers?: { [name: string]: string }, timeoutMs?: number): Promise<string> {
+function send(method: string, url: string, body: string | null, headers?: { [name: string]: string }, timeoutMs?: number, as?: string): Promise<string> {
     return new Promise<string>(function (resolve, reject) {
         var xhr = new XMLHttpRequest();
+        // (no longer on its way: not one abortSent finds)
+        var over = function (): void {
+            if (as) {
+                named = named.filter(function (n) { return n.xhr !== xhr; });
+            }
+        };
+        var unanswered = function (message: string): void {
+            over();
+            reject({ status: 0, url: url, message: message, body: '' } as HttpError);
+        };
         xhr.open(method, url, true);
         xhr.timeout = timeoutMs || 10000;
         for (var name in headers) {
             xhr.setRequestHeader(name, headers[name]);
         }
         xhr.onload = function () {
+            over();
             if (xhr.status >= 200 && xhr.status < 300) {
                 resolve(xhr.responseText);
             } else {
                 reject({ status: xhr.status, url: url, message: 'HTTP ' + xhr.status, body: xhr.responseText } as HttpError);
             }
         };
-        xhr.onerror = function () {
-            reject({ status: 0, url: url, message: 'network error', body: '' } as HttpError);
-        };
-        xhr.ontimeout = function () {
-            reject({ status: 0, url: url, message: 'timeout', body: '' } as HttpError);
-        };
+        xhr.onerror = function () { unanswered('network error'); };
+        xhr.ontimeout = function () { unanswered('timeout'); };
+        xhr.onabort = function () { unanswered(ABORTED); };
+        if (as) {
+            named.push({ as: as, xhr: xhr });
+        }
         xhr.send(body);
     });
 }

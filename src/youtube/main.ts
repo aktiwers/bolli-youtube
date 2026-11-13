@@ -28,6 +28,7 @@ import { Channel, channelAhead, channelKept, isChannel, keptChannel } from './ap
 import { dearrowFetch, dearrowOn, saveDearrow, Wanted } from './api/dearrow.js';
 import { first, get, home, keepable, keptPage, mayAskPageAhead, page, Page, pageAhead as fetchPageAhead, pageKept, PageButton, PlaylistInfo, Rows, searchAhead as fetchSearchAhead, sized, SubChannel, subscriptions, tabAhead, tapAhead, text, toastOf, Video } from './api/feed.js';
 import { freshGuideNames, guideNames } from './api/guide.js';
+import { visited } from './api/looked.js';
 import { forgetKept, pruneKept } from './api/kept-pages.js';
 import { prepareNames } from './api/languages.js';
 import { prefs, Shortcut, ShortcutTarget } from './api/prefs.js';
@@ -255,7 +256,19 @@ function openSubChannel(c: SubChannel): void {
         openPage(c.channel, { title: c.title, picture: c.picture, fresh: c.fresh });
         return;
     }
+    // (its list in Subscriptions is the page opened: asking for it tells YouTube)
+    lookedAt(c.page, true);
     openVideos(c.title, c.page);
+}
+
+/** A channel was looked at (its page p opened; told: the page is its list in Subscriptions, which tells YouTube by
+ * itself): Subscriptions' dot for it goes (api/looked.ts), in the list that screen holds now and in the next ones */
+function lookedAt(p: Page, told?: boolean): void {
+    visited(p, told);
+    var subs = sections.subscriptions as SubscriptionsView | undefined;
+    if (subs) {
+        subs.looks();
+    }
 }
 
 /** A channel's latest videos (its page in Subscriptions, or its Videos page) as a grid */
@@ -566,6 +579,9 @@ function takeOut(view: Screen): void {
 /** Opens a page over the current screen (Back closes it): a channel page (UC…, not a sub page; known: name and avatar
  * to show at once) or any other. The one built ahead (buildAhead) shows at once. */
 function openPage(p: Page, known?: KnownChannel): void {
+    if (isChannel(p)) {
+        lookedAt(p);
+    }
     var ready = built && built.key === builtKey(p) ? built.view : null;
     if (ready) {
         built = null;
@@ -2097,7 +2113,14 @@ tv.onStart = function () {
     own.release();
 };
 // The app's player started a video: the covered screen's old rows are refetched (YouTube's player: when it shows)
-own.onStarted = renewRows;
+own.onStarted = function (id, channel) {
+    renewRows();
+    // The newest video of a subscribed channel started: the channel's dot in Subscriptions goes
+    var subs = sections.subscriptions as SubscriptionsView | undefined;
+    if (subs) {
+        subs.sawVideo(id, channel);
+    }
+};
 own.onPageAhead = pageAhead;
 // A video's comments shown: offered to a phone signed in to the same account, as YouTube's TV app does
 own.onComments = function (id) { cast.commentsHandoff(id); };

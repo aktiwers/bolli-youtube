@@ -10,10 +10,15 @@ import { oldEngine } from '../core/platform.js';
 /** The download's limits: its time (the decode's check included) and its size */
 export var TIME_MS = 10000;
 export var MAX_BYTES = 2 * 1024 * 1024;
+/** A picture's sides at most (pixels): a few megabytes of file can hold hundreds of megabytes of picture, more than
+ * the TV lets a page have. A bigger one is not decoded at all */
+export var MAX_SIDE = 4096;
 /** Why a picture was not taken (the rejection's message): its address holds no PNG, JPEG or WebP picture the engine
- * shows (a page, another file); it is over MAX_BYTES; anything else (no answer, slow) has another text */
+ * shows (a page, another file); it is over MAX_BYTES; a side of it is over MAX_SIDE; anything else (no answer, slow)
+ * has another text */
 export var NOT_PICTURE = 'not a picture';
 export var TOO_BIG = 'too big';
+export var TOO_LARGE = 'too large';
 
 /** A picture as downloaded: its data URL ('': only its address is known to load) and the decoded picture */
 export interface Fetched {
@@ -53,6 +58,48 @@ export function dataUrl(b: Uint8Array): string {
     return 'data:image/' + type + ';base64,' + btoa(binary);
 }
 
+/** A PNG's, JPEG's or WebP's width and height as its first bytes say them (null: not found there) */
+export function sizeOf(b: Uint8Array): { w: number; h: number } | null {
+    var be16 = function (i: number): number { return b[i] << 8 | b[i + 1]; };
+    if (b[0] === 0x89 && b[1] === 0x50) {
+        // PNG: its header chunk comes first
+        return b.length >= 24 && ascii(b, 12, 16) === 'IHDR' ?
+            { w: (b[16] << 24 | b[17] << 16 | b[18] << 8 | b[19]) >>> 0, h: (b[20] << 24 | b[21] << 16 | b[22] << 8 | b[23]) >>> 0 } : null;
+    }
+    if (b[0] === 0xff && b[1] === 0xd8) {
+        // JPEG: the frame's header among the segments before the picture's data
+        var i = 2;
+        while (i + 8 < b.length) {
+            var m = b[i + 1];
+            if (b[i] !== 0xff || m === 0xff) {
+                i++;
+            } else if (m === 0xda) {
+                return null;
+            } else if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) {
+                return { w: be16(i + 7), h: be16(i + 5) };
+            } else {
+                // (a marker alone: the start, a restart; else a segment with its length)
+                i += m === 0xd8 || m === 0x01 || m >= 0xd0 && m <= 0xd7 ? 2 : 2 + be16(i + 2);
+            }
+        }
+        return null;
+    }
+    if (ascii(b, 0, 4) === 'RIFF' && ascii(b, 8, 12) === 'WEBP' && b.length >= 30) {
+        // WebP: by its first chunk (extended, lossless, lossy)
+        var kind = ascii(b, 12, 16);
+        if (kind === 'VP8X') {
+            return { w: 1 + (b[24] | b[25] << 8 | b[26] << 16), h: 1 + (b[27] | b[28] << 8 | b[29] << 16) };
+        }
+        if (kind === 'VP8L' && b[20] === 0x2f) {
+            return { w: 1 + (b[21] | (b[22] & 0x3f) << 8), h: 1 + (b[22] >> 6 | b[23] << 2 | (b[24] & 0x0f) << 10) };
+        }
+        if (kind === 'VP8 ' && b[23] === 0x9d && b[24] === 0x01 && b[25] === 0x2a) {
+            return { w: (b[26] | b[27] << 8) & 0x3fff, h: (b[28] | b[29] << 8) & 0x3fff };
+        }
+    }
+    return null;
+}
+
 function ascii(b: Uint8Array, from: number, to: number): string {
     var s = '';
     for (var i = from; i < to && i < b.length; i++) {
@@ -64,7 +111,8 @@ function ascii(b: Uint8Array, from: number, to: number): string {
 /** Downloads the picture at url (in the background: at most TIME_MS and MAX_BYTES) and checks that the engine shows
  * it; resolves with it as a data URL, or with data '' when orAddress and the host refuses the app a read of the bytes
  * but the picture loads by its address. Rejects with NOT_PICTURE when the address holds no picture the engine shows
- * (a page, another kind of file), TOO_BIG over the size, another message when slow or failed. */
+ * (a page, another kind of file), TOO_BIG over the size in bytes, TOO_LARGE over MAX_SIDE (by its first bytes, so it
+ * is never decoded; one loaded by its address, once it is known), another message when slow or failed. */
 export function fetchPicture(url: string, orAddress: boolean): Promise<Fetched> {
     return new Promise<Fetched>(function (resolve, reject) {
         var done = false;
@@ -83,17 +131,30 @@ export function fetchPicture(url: string, orAddress: boolean): Promise<Fetched> 
         var timer = setTimeout(function () { end(null); }, TIME_MS);
         var fail = function () { end(null); };
         var notPicture = function () { end(null, NOT_PICTURE); };
+        var take = function (data: string, img: HTMLImageElement): void {
+            if (img.naturalWidth > MAX_SIDE || img.naturalHeight > MAX_SIDE) {
+                end(null, TOO_LARGE);
+            } else {
+                end({ data: data, img: img });
+            }
+        };
         getBytes(url, TIME_MS, MAX_BYTES).then(function (bytes) {
-            var data = dataUrl(new Uint8Array(bytes));
+            var b = new Uint8Array(bytes);
+            var data = dataUrl(b);
             if (!data) {
                 notPicture();
                 return;
             }
-            loaded(data).then(function (img) { end({ data: data, img: img }); }, notPicture);
+            var size = sizeOf(b);
+            if (size && (size.w > MAX_SIDE || size.h > MAX_SIDE)) {
+                end(null, TOO_LARGE);
+                return;
+            }
+            loaded(data).then(function (img) { take(data, img); }, notPicture);
         }, function (e: { status: number; message: string }) {
             // No answer at all, as when the host refuses the app a read (or is down): by its address if it loads there
             if (orAddress && e && e.status === 0 && e.message === 'network error') {
-                loaded(url).then(function (img) { end({ data: '', img: img }); }, fail);
+                loaded(url).then(function (img) { take('', img); }, fail);
             } else {
                 end(null, e && e.message === 'too big' ? TOO_BIG : undefined);
             }

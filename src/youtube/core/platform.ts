@@ -27,6 +27,9 @@ export interface AndroidShell {
     /** The device's maker, model and Android version. Missing in shells
      * built before it */
     device?(): string;
+    /** Android's release version alone: "14". Missing in shells built
+     * before it */
+    osVersion?(): string;
     /** The logos the app can show on the home screen, their ids (ui/logo.ts)
      * with commas between ('' none). Missing in shells built before it */
     homeLogos?(): string;

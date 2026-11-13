@@ -68,11 +68,16 @@ export function hasHomeScreen(): boolean {
 }
 
 /** The built-in logos the Android app can show on the home screen, by id (none on webOS, or in a shell built before
- * it had an entry for each) */
+ * it had an entry for each). Asked of the shell once: they are the manifest's entries, the same for the whole run,
+ * and Settings asks for them at every key */
+var logos: string[] | null = null;
 function androidLogos(): string[] {
-    var shell = android();
-    var ids = shell && shell.homeLogos ? shell.homeLogos() : '';
-    return ids ? ids.split(',') : [];
+    if (!logos) {
+        var shell = android();
+        var ids = shell && shell.homeLogos ? shell.homeLogos() : '';
+        logos = ids ? ids.split(',') : [];
+    }
+    return logos;
 }
 
 /** Whether the Android app can change its logo on the home screen (Settings then offers that logo alone) */

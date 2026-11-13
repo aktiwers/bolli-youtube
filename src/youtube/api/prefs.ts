@@ -22,6 +22,7 @@
 // shortcuts: the remote's spare buttons (api/shortcuts.ts, Settings › Shortcuts: views/shortcuts.ts).
 // screenOff: how the screen goes black while the sound plays on (ui/screen-off.ts).
 // versionCheck: whether the app asks once a day if a newer version is out, and tells it (api/version-check.ts).
+// fallbackPlayer: a video the app's player cannot play at all goes to YouTube's player (player/own-player.ts fallback).
 
 import { KEY as BUTTON } from '../core/keys.js';
 import { load, save } from '../core/store.js';
@@ -159,6 +160,9 @@ export interface Prefs {
     /** The version check (api/version-check.ts): 'notify' (once a day the app asks whether a newer version is out,
      * and tells of one), 'quiet' (it asks, and tells nothing) or 'off' (it asks nothing) */
     versionCheck: string;
+    /** A video the app's player cannot play at all (its format, the decoder, a refusal: never the connection) is handed
+     * to YouTube's player; off: it stays in the app's player, which says so (player/own-player.ts fallback) */
+    fallbackPlayer: boolean;
 }
 
 /** A button's shortcut (api/shortcuts.ts): key (its key code), where it works ('everywhere', 'screens': not in the
@@ -239,7 +243,7 @@ var DEFAULTS: Prefs = { skip: ['sponsor', 'selfpromo', 'interaction', 'intro', '
     listLayout: 'stage', listPreview: 'sound', listAutoplay: true, listNumbers: 'charts', listDetails: true, listButtons: ['play', 'shuffle', 'repeat', 'save', 'shortcut'],
     listCarryOn: true, listKeep: true, listNext: 0, listDown: 'row', listSide: 'over', videoClock: 'off', chaptersPause: true, quickJumps: true, pureBlack: false, logo: 'red', homeIcon: 'red', homeName: '', homeColor: '', dearrow: '',
     dearrowOptions: ['thumbnails', 'frames', 'tidy'], keyboardRecent: [], shortcuts: SHORTCUTS,
-    screenOff: 'iris', castWakes: false, screenWake: 'any', versionCheck: 'notify' };
+    screenOff: 'iris', castWakes: false, screenWake: 'any', versionCheck: 'notify', fallbackPlayer: true };
 
 /** Read once (they are read on every key) and updated by setPref. Only changed settings are stored, so a new
  * default still applies to the rest. */

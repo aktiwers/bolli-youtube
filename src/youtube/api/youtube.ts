@@ -995,10 +995,10 @@ export function postYouTubeText(url: string, body: unknown, headers: { [name: st
     return oldEngine() ? fromPage(url, body, headers, false) : postText(url, body, headers);
 }
 
-/** A JSON POST to YouTube's API, its reply read: core/http.ts's postJson, but on webOS TV 2.x's engine from the
- * youtube.com page (fromPage) */
-export function postYouTubeJson<T>(url: string, body: unknown, headers: { [name: string]: string }): Promise<T> {
-    return oldEngine() ? fromPage(url, body, headers, true).then(function (text) { return parse<T>(text, url); }) : postJson<T>(url, body, headers);
+/** A JSON POST to YouTube's API, its reply read: core/http.ts's postJson (as: the name it can be aborted by), but on
+ * webOS TV 2.x's engine from the youtube.com page (fromPage: not aborted, it runs out its time) */
+export function postYouTubeJson<T>(url: string, body: unknown, headers: { [name: string]: string }, as?: string): Promise<T> {
+    return oldEngine() ? fromPage(url, body, headers, true).then(function (text) { return parse<T>(text, url); }) : postJson<T>(url, body, headers, as);
 }
 
 /** A JSON POST as core/http.ts makes it (json: a JSON reply asked), but from the youtube.com page: webOS TV 2.x's

@@ -55,6 +55,8 @@ public class MainActivity extends Activity {
     private volatile String wantedLogo;
     /** Speech recognition is up over the app: the app is not left */
     private boolean listening;
+    /** The viewer is leaving the app by their own doing (onUserLeaveHint), until it is back in front */
+    private boolean leaving;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -115,15 +117,26 @@ public class MainActivity extends Activity {
         super.onResume();
         // (back from whatever was over the app, speech recognition too)
         listening = false;
+        leaving = false;
         web.onResume();
+    }
+
+    @Override
+    protected void onUserLeaveHint() {
+        super.onUserLeaveHint();
+        // (Home, or another app started from this one: the viewer's own doing)
+        leaving = true;
     }
 
     @Override
     protected void onStop() {
         super.onStop();
-        // Off the screen (Home, out of the app, another app): the home screen's entry is switched now. Switched while
-        // the app shows, Android would end the task started from the entry that goes off, and close the app
-        if (!listening) {
+        // Off the screen because the viewer left it (Home, out of the app, another app): the home screen's entry is
+        // switched now. Switched while the app shows, Android would end the task started from the entry that goes
+        // off, and close the app; so neither under the screen saver or in standby, where the app is still the one in
+        // front and would be gone at the wake-up. The page asks for its logo at every start, so a switch not made now
+        // is made when the viewer next leaves
+        if (!listening && (leaving || isFinishing())) {
             showHomeLogo();
         }
     }
@@ -387,6 +400,12 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public String device() {
             return Build.MANUFACTURER + " " + Build.MODEL + ", Android " + Build.VERSION.RELEASE;
+        }
+
+        /** Android's release version alone ("14"), as the version check names it */
+        @JavascriptInterface
+        public String osVersion() {
+            return Build.VERSION.RELEASE;
         }
 
         /** The logos the home screen can show the app with: their ids, commas between ("": this app has one entry) */

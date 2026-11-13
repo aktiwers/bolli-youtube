@@ -19,7 +19,7 @@ import { h, keepCentred, setShown, setSrc, setText, toggleClass, translate } fro
 import { language, LANGUAGES, setLanguage, tr } from '../core/i18n.js';
 import { KEY } from '../core/keys.js';
 import { holding, takesPointer } from '../core/pointer.js';
-import { android } from '../core/platform.js';
+import { android, oldEngine } from '../core/platform.js';
 import { View } from '../core/view.js';
 import { AccountGroup, AccountSetting, historySettings } from '../api/account-settings.js';
 import { Ask } from '../api/feed.js';
@@ -41,7 +41,7 @@ import { TextPage } from '../ui/text-page.js';
 import { CAPTION_STYLES } from '../player/captions.js';
 import { ChatSettings, chatSummary } from '../player/chat-settings.js';
 import { Question } from '../ui/question.js';
-import { NOT_PICTURE, TOO_BIG } from '../ui/pictures.js';
+import { NOT_PICTURE, TOO_BIG, TOO_LARGE } from '../ui/pictures.js';
 import { PROBLEM, toast } from '../ui/toast.js';
 import { screenOff } from '../ui/screen-off.js';
 import { applyBlack, applyTheme, themes } from '../ui/theme.js';
@@ -231,7 +231,7 @@ function screenWaking(): Setting {
  * all a check sends. The app's own logo, as About's */
 function versionCheck(): Setting {
     return pref(tr('Check for new versions'), tr('Once a day the app asks whether a newer version is out'), logoFile(LOGOS[0]), 'versionCheck', [
-        { value: 'notify', name: tr('Notify me'), note: tr('a notice at most once a week while a newer version is out. The app sends its version, webOS or Android, and how many days ago it last asked: nothing about you or your TV') },
+        { value: 'notify', name: tr('Notify me'), note: tr('a notice at most once a week while a newer version is out. The app sends its version, the webOS or Android version, and how many days ago it last asked: nothing about you or your TV') },
         { value: 'quiet', name: tr('No notice'), note: tr('the app still asks once a day, and says that the notice is off. A newer version shows only in Settings › About') },
         { value: 'off', name: tr('Off'), note: tr('the app asks nothing') }
     ]);
@@ -433,16 +433,33 @@ function refused(e: Error, url: string): string {
     var why = e && e.message;
     return why === NOT_PICTURE ? tr('That address is not a picture. Use the address of a PNG, JPEG or WebP picture.') :
         why === TOO_BIG ? tr('That picture is too big (2 MB at most).') :
+        why === TOO_LARGE ? tr('That picture is too large (4096 × 4096 pixels at most).') :
         why === NO_FILE ? tr('This TV does not let the app save a logo for the home screen') :
         why === NOT_KEPT || why === FULL ? tr('The app has no room left on the TV to keep the picture') :
         tr('Could not load {1}.', url.replace(/^https?:\/\//, '').split('/')[0]);
 }
 
 /** A picture's address as typed, made whole: '' for none (nothing typed after the scheme), https:// put before one
- * typed without a scheme */
+ * typed without a scheme. A whole address pasted after the https:// the page begins with has two schemes: the last
+ * one is its own */
 export function addressTyped(text: string): string {
-    var rest = text.replace(/^https?:\/\//i, '');
-    return !rest ? '' : /^https?:\/\//i.test(text) ? text : 'https://' + rest;
+    var typed = text.replace(/\s+/g, '');
+    var schemes = /^(?:https?:\/\/)+/i.exec(typed);
+    var rest = schemes ? typed.slice(schemes[0].length) : typed;
+    return !rest ? '' : (schemes ? /https?:\/\/$/i.exec(schemes[0]) as string[] : ['https://'])[0] + rest;
+}
+
+/** What tells a tile's picture from another one's without holding all of it: an address whole, a picture's data by
+ * its length, its end and letters all through it */
+function markOf(picture: string): string {
+    if (picture.length <= 300) {
+        return picture;
+    }
+    var mark = picture.length + ' ' + picture.slice(-40) + ' ';
+    for (var i = 0; i < 40; i++) {
+        mark += picture.charAt(Math.floor(i * picture.length / 40));
+    }
+    return mark;
 }
 
 /** A category of settings; a text among them is a small heading over those after it */
@@ -513,7 +530,12 @@ function bolli(pages: StartPage[], more: () => void, chat: () => void, keys: () 
                 ]),
             pref(tr('Streams by SABR'), tr('How Bolli\'s player gets the videos'), pic('parent_code'), 'sabr',
                 onOff(tr('as YouTube\'s TV app does (signed in, by SABR), as a guest when that fails'), tr('as a guest, signed in (by SABR) only when YouTube asks, as for an age check')))
-        ] },
+        ].concat(oldEngine() ? [] : [
+            // (not where YouTube's player does not run: webOS TV 2.x's engine)
+            pref(tr('Fall back to YouTube\'s player'), tr('When Bolli\'s player cannot play a video at all, as with a format this TV cannot decode'), pic('parent_code'), 'fallbackPlayer',
+                onOff(tr('YouTube\'s player plays it instead. A bad connection never hands over: Bolli waits for it'),
+                    tr('Bolli\'s player says that the video needs YouTube\'s player and stays on it: OK tries again')))
+        ]) },
         { title: tr('Language & subtitles'), settings: [
             appLanguage(restart),
             subtitles(more),
@@ -886,9 +908,10 @@ export class SettingsView implements View {
         var page = this.openPage();
         if (page) {
             page.onKey(code);
-            // Closed: the note and the line under its name say how it is set now
+            // Closed: the note and the line under its name say how it is set now. A grid's focus stays on the tile
+            // the page was opened from (the one that adds a picture: its download moves it once it is in)
             if (!page.shown) {
-                this.drawPanel();
+                this.drawPanel(!!this.drawn && !!this.drawn.grid);
                 this.changed();
             }
             return true;
@@ -1304,7 +1327,7 @@ export class SettingsView implements View {
         }
         this.choices = s.choices ? s.choices.list() : [];
         // (a grid's tiles stay while its choices are the same: their pictures are not built and decoded again)
-        var tiles = s.grid ? s.label + ' ' + this.choices.map(function (c) { return c.value + ' ' + (c.picture || '').length; }).join('|') : '';
+        var tiles = s.grid ? s.label + ' ' + this.choices.map(function (c) { return c.value + ' ' + markOf(c.picture || ''); }).join('|') : '';
         if (!tiles || tiles !== this.tilesOf) {
             this.tilesOf = tiles;
             this.buttonsBox.innerHTML = '';

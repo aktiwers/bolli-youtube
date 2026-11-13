@@ -38,6 +38,12 @@ export class RowStack {
     /** Extra rows drawn (and keeping images) above and below beyond DRAWN_*, for short rows with several on screen
      * (setReach) */
     private more = 0;
+    /** The place the focus keeps going up and down (moveStraight: a tile's left edge on screen), and the row and
+     * tile it last went to by it, with where that tile stood then */
+    private under = 0;
+    private underRow: TileRow | null = null;
+    private underIndex = -1;
+    private underLeft = 0;
 
     /** focusTop: where the screen places the focused row (rows below the
      * screen's bottom wait for the slide); omitted: no row waits */
@@ -201,6 +207,27 @@ export class RowStack {
             return false;
         }
         this.focusRow(to);
+        return true;
+    }
+
+    /** Up/Down onto the tile straight above or below the focused one, as the rows stand on screen: each row keeps
+     * its own place along its tiles and does not slide for it (a row left at its start, say, has its first tile
+     * under the one before the tile left, not under it). False past the first or last row */
+    moveStraight(delta: number): boolean {
+        var from = this.row;
+        // (a tile this put the focus on stands for the place kept, which a short row cannot give: on from it, that
+        // place again; any other tile gives its own, as does that tile once Left and Right have slid its row)
+        if (from && (from !== this.underRow || from.index !== this.underIndex || from.focusLeft !== this.underLeft)) {
+            this.under = from.focusLeft;
+        }
+        if (!this.move(delta)) {
+            return false;
+        }
+        var row = this.row as TileRow;
+        row.focusUnder(this.under);
+        this.underRow = row;
+        this.underIndex = row.index;
+        this.underLeft = row.focusLeft;
         return true;
     }
 

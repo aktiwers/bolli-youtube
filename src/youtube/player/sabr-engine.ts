@@ -28,10 +28,11 @@
 // the length told; it lifts once the picture moves (land). The audio segment across its end, sent again, goes in from
 // the cut on only (resume).
 
+import { fakedRequest } from '../core/fake-net.js';
 import { base64Bytes, BufferedRange, FormatId, SabrAnswer, SabrReader, sabrRequest, SabrSegment } from '../api/sabr.js';
 import { Format, Sabr } from '../api/streams.js';
 import { youtubePage } from '../api/youtube.js';
-import { BEHIND_MB, BEHIND_S, bufferedEnd, Engine, hopHole, jumpTarget, KEYFRAME_IN, LIFT_END_S, LIFT_MS, LIFT_S, MB, QUICK_MIN_S, QUICK_SPEED, QUICK_WAIT_MS, RETRIES, roomAhead, seekNudged, SPEED_BYTES, STILL_AHEAD, TICK_MS, TIMEOUT_MS, windowFrom } from './engine.js';
+import { BEHIND_MB, BEHIND_S, bufferedEnd, decodeLoad, Engine, hopHole, jumpTarget, KEYFRAME_IN, landingBetween, LIFT_END_S, LIFT_MS, LIFT_S, MB, QUICK_MIN_S, QUICK_SPEED, QUICK_WAIT_MS, RETRIES, roomAhead, seekNudged, SPEED_BYTES, STILL_AHEAD, TICK_MS, TIMEOUT_MS, windowFrom } from './engine.js';
 import { framesFrom, trackScale, wholeFrames } from './containers.js';
 import { lineAnswered, networkFailed, onNetwork, stallWatch } from './networks.js';
 import { keepPipeline, openPipeline, Pipeline, setLength, setLengthSoon, spoilingFail } from './pipeline.js';
@@ -180,6 +181,20 @@ class Track {
     }
 }
 
+/** Where a jump from `from` (s; -1: a start) past a part skipped up to t (s) lands by the video segment there (its
+ * start and end, ms; last: the video's last one, no keyframe follows): KEYFRAME_IN into the segment if t is at most
+ * that far into it; else by engine.ts landingBetween its keyframe and the next one's (load: the format's
+ * decodeLoad) */
+function startFrom(startMs: number, endMs: number, last: boolean, t: number, load: number, from: number): number {
+    var start = startMs / 1000;
+    return t <= start + KEYFRAME_IN ? start + KEYFRAME_IN : landingBetween(start, last ? -1 : endMs / 1000, t, load, from);
+}
+
+/** How heavy a format is for the TV's decoder (engine.ts decodeLoad) */
+function heavy(f: Format): number {
+    return decodeLoad(f.width, f.height, f.fps);
+}
+
 /** Marks a track's piece of a media segment as in the buffer */
 function markAppended(track: Track, seg: SabrSegment): void {
     track.pieces.forEach(function (p) {
@@ -208,10 +223,12 @@ export class SabrEngine implements Engine {
     /** A seek waiting for the metadata, idle buffers and both tracks covering it (-1: none); snap: a resume start or a
      * jump to where no segment is known, moved to the video keyframe there once its first segment header arrives (the
      * TV decodes from the keyframe anyway, at ~2.3x: landing on it saves that); snapFrom: the jump's origin (-1: a
-     * resume start), a forward jump snapping only to a keyframe still ahead of it */
+     * resume start), a forward jump snapping only to a keyframe still ahead of it; snapPast: a jump past a skipped
+     * part, landing by the segment the answer brings there (startFrom) */
     private pending = -1;
     private snap = false;
     private snapFrom = -1;
+    private snapPast = false;
     private stuckTimer = 0;
     /** The window up (s; 0: none): a start's, or a seek's (narrow); the real length, the audio segment across it, where
      * it ended (-1: the audio's append window reset) */
@@ -337,13 +354,15 @@ export class SabrEngine implements Engine {
         });
     }
 
-    /** Seeks to t (s) once the metadata is in, no buffer is updating and both tracks cover it (requested from there) */
+    /** Seeks to t (s), the step inside a jump (the player jumps: jump), once the metadata is in, no buffer is updating
+     * and both tracks cover it (requested from there) */
     seek(t: number): void {
         this.go(t, -1);
     }
 
-    /** Seeks to t; from: a jump's origin when it is to snap to the keyframe its first answer brings (else -1) */
-    private go(t: number, from: number): void {
+    /** Seeks to t; from: a jump's origin when it is to snap to the keyframe its first answer brings (else -1), past:
+     * to the first one at or after t (snapPast) */
+    private go(t: number, from: number, past?: boolean): void {
         if (!this.tracks.length) {
             return;
         }
@@ -360,27 +379,42 @@ export class SabrEngine implements Engine {
         }
         this.snap = from >= 0;
         this.snapFrom = from;
+        this.snapPast = !!past;
         this.restart(t);
         this.settle();
         this.pump();
     }
 
     /** Jumps to about `to` (s) from `from`: to a nearby known segment start, else to the keyframe of the segment its
-     * first answer brings (snap) */
-    jump(to: number, from: number): void {
-        if (this.tracks.length) {
-            var target = jumpTarget(this.tracks[0].pieces.map(function (p) { return p.startMs / 1000; }), to, from, SNAP_S);
-            this.go(target, target === to && !this.tracks[0].covers(to) ? from : -1);
+     * first answer brings (snap). past (a part skipped up to `to`): with quick jumps by the segment known there
+     * (startFrom: its start if `to` is just after that, else `to` itself or the next one's start, whichever is the
+     * sooner way on), and with none known there, by the segment the first answer brings (snapPast); without quick
+     * jumps to `to` itself */
+    jump(to: number, from: number, past?: boolean): void {
+        var video = this.tracks[0];
+        if (!video) {
+            return;
         }
+        if (past) {
+            var piece = this.quick ? video.pieces[video.at(to)] : null;
+            // (snapped only where an answer is to come: not past all there is)
+            var snap = this.quick && !piece && !video.covers(to);
+            this.go(piece ? startFrom(piece.startMs, piece.endMs, video.last > 0 && piece.num >= video.last, to, heavy(video.format), from) : to, snap ? from : -1, snap);
+            return;
+        }
+        var target = jumpTarget(video.pieces.map(function (p) { return p.startMs / 1000; }), to, from, SNAP_S);
+        this.go(target, target === to && !video.covers(to) ? from : -1);
     }
 
     seekTarget(): number {
         return this.pending;
     }
 
-    /** The real length while the TV is told a window's (a seek's, and a start's until its picture has moved) */
+    /** The real length while the TV is told a window's (a seek's, and a start's until its picture has moved) or
+     * still has a lifted one's */
     realLength(): number {
-        return this.window ? this.length : 0;
+        // (a lifted window's end stays the element's length until its buffers are idle: pipeline.ts setLengthSoon)
+        return this.window || this.length > 0 && this.video.duration < this.length - 0.5 ? this.length : 0;
     }
 
     /** A seek waits behind an earlier seek's window still up (its segments past that window are held back) */
@@ -541,7 +575,7 @@ export class SabrEngine implements Engine {
             }
             try {
                 // Sent from youtube.com's page, as its own player does
-                var xhr = track.xhr = new (w as unknown as { XMLHttpRequest: typeof XMLHttpRequest }).XMLHttpRequest();
+                var xhr = track.xhr = fakedRequest() || new (w as unknown as { XMLHttpRequest: typeof XMLHttpRequest }).XMLHttpRequest();
                 xhr.open('POST', url, true);
                 var asked = Date.now();
                 var read = 0;
@@ -735,7 +769,9 @@ export class SabrEngine implements Engine {
             // A jump's within SNAP_S (as a known start: jumpTarget), on its side of where it came from
             var jumped = this.snapFrom >= 0;
             var side = !jumped || (this.pending > this.snapFrom ? start > this.snapFrom + 1 : start < this.snapFrom - 1);
-            if (this.pending >= 0 && start <= this.pending && this.pending - start < (jumped ? SNAP_S : 10) && side) {
+            if (this.snapPast && this.pending >= 0) {
+                this.pending = startFrom(h.startMs, h.startMs + h.durationMs, track.last > 0 && h.num >= track.last, this.pending, heavy(track.format), this.snapFrom);
+            } else if (this.pending >= 0 && start <= this.pending && this.pending - start < (jumped ? SNAP_S : 10) && side) {
                 this.pending = start + KEYFRAME_IN;
             }
             this.snapped();

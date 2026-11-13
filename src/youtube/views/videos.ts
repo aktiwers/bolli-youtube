@@ -48,6 +48,8 @@ var BUTTON_ICONS: { [iconType: string]: string } = {
 
 /** Rows this old are refreshed behind the ones shown (Subscriptions sooner: main.ts) */
 var REFRESH_MS = 30 * 60 * 1000;
+/** Rows fetched at most this long ago were fetched just now (drawFresh); a kept page's are older */
+var ANEW_MS = 5000;
 
 /** A screen passed through on the rail fetches its first rows only after showing this long */
 var REST_MS = 300;
@@ -281,6 +283,10 @@ export class FeedView implements View {
     private headingText: HTMLElement;
     private tabsEl: HTMLElement;
     private tabs: Tab[] = [];
+    /** The rows another tab brought (openTab), until they are drawn: not kept again as a page's would be */
+    private tabRows: Rows | null = null;
+    /** The rows being drawn were fetched just now (drawFresh) */
+    private anew = false;
     private tabPills = new Pills('by-tab--focused');
     /** YouTube's message shown instead of rows (null: none) and its buttons (focused while it shows) */
     private nudge: Nudge | null = null;
@@ -656,7 +662,8 @@ export class FeedView implements View {
                 return true;
             case KEY.UP:
             case KEY.DOWN:
-                if (!this.stack.move(code === KEY.UP ? -1 : 1)) {
+                // (rows: the tile straight above or below; a grid's lines keep their column, below)
+                if (!(this.grid ? this.stack.move(code === KEY.UP ? -1 : 1) : this.stack.moveStraight(code === KEY.UP ? -1 : 1))) {
                     // Up from a grid's first line: its tabs or buttons; from the first row: the search bar
                     if (code === KEY.UP && this.grid && this.tabPills.count) {
                         this.focusTabs(true);
@@ -1074,11 +1081,13 @@ export class FeedView implements View {
             return;
         }
         var title = this.headingText.textContent || '';
-        var tabs = this.tabs.map(function (t) { return { title: t.title, chosen: t === tab, token: t.token }; });
+        var tabs = this.tabs.map(function (t) { return { title: t.title, chosen: t === tab, icon: t.icon, token: t.token }; });
+        var self = this;
         this.reloadAs(function () {
             return (keptTabs(tab) ? keptTab(tab.token) : more(tab.token)).then(function (rows) {
                 rows.title = title;
                 rows.tabs = tabs;
+                self.tabRows = rows;
                 return rows;
             });
         });
@@ -1282,7 +1291,10 @@ export class FeedView implements View {
     /** Draws fresh rows in place of the current ones */
     private drawFresh(rows: Rows | null, at?: number): void {
         this.unchecked = null;
+        // (rows just fetched, not a kept page's: their shown tab's tiles take the kept ones' place)
+        this.anew = !at || Date.now() - at < ANEW_MS;
         this.draw(rows);
+        this.anew = false;
         this.fetchedAt = at || Date.now();
         mark('rows');
         rowsDrawn();
@@ -1426,11 +1438,13 @@ export class FeedView implements View {
         self.col = 0;
         setText(self.headingText, rows ? word(rows.title) : '');
         self.tabs = rows && rows.tabs || [];
-        // (the shown tab's tiles kept under its token: back to it from another tab asks nothing)
+        // (the shown tab's tiles kept under its token: back to it from another tab asks nothing. Those a page brought:
+        // a tab's own are kept as they came, and keeping them again would keep them young for good)
         var chosen = self.tabs.length >= 2 ? self.tabs.filter(function (t) { return t.chosen; })[0] : null;
-        if (rows && chosen && keptTabs(chosen)) {
-            keepTab(chosen.token, rows);
+        if (rows && rows !== self.tabRows && chosen && keptTabs(chosen)) {
+            keepTab(chosen.token, rows, self.anew);
         }
+        self.tabRows = null;
         self.buildTabs();
         self.buttons = list ? listButtons(rows && rows.buttons || [], rows && rows.playlistId || undefined) : rows && rows.buttons || [];
         self.drawButtons();

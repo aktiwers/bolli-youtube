@@ -54,11 +54,11 @@ export function watchedAt(id: string): number {
 }
 
 /** Untitled lines of perLine tiles (a grid), their tiles built as they come into view (325 subscribed channels built
- * all at once took the TV ~175 ms) */
+ * all at once took the TV ~175 ms). The lines stand still: a grid's tiles are one under the other */
 export function gridLines(items: TileItem[], perLine: number, shape: TileShape, layout: TileLayout): TileRow[] {
     var lines: TileRow[] = [];
     for (var i = 0; i < items.length; i += perLine) {
-        lines.push(new TileRow({ title: '', shape: shape, layout: layout, items: items.slice(i, i + perLine), noTitle: true, noWrap: true, lazy: true }));
+        lines.push(new TileRow({ title: '', shape: shape, layout: layout, items: items.slice(i, i + perLine), noTitle: true, noWrap: true, still: true, lazy: true }));
     }
     return lines;
 }

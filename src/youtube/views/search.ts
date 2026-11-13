@@ -316,13 +316,13 @@ export class SearchView implements View {
                 this.paging.ahead(this.stack, true);
                 return true;
             case KEY.UP:
-                if (!this.stack.move(-1)) {
+                if (!this.stack.moveStraight(-1)) {
                     this.go('keys');
                 }
                 this.mark();
                 return true;
             case KEY.DOWN:
-                if (this.stack.move(1)) {
+                if (this.stack.moveStraight(1)) {
                     this.mark();
                 }
                 this.paging.ahead(this.stack, false);
