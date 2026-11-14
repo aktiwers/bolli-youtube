@@ -5,6 +5,7 @@
 // a seek that sticks is nudged on.
 
 import { Format } from '../api/streams.js';
+import { note, ranges } from './play-log.js';
 
 /** What the player needs from an engine */
 export interface Engine {
@@ -109,6 +110,8 @@ export var KEYFRAME_IN = 0.05;
 /** A hole this short just ahead of the playhead is hopped over (s); a seek still not done after SEEK_STUCK_MS is
  * nudged on NUDGE_S */
 var HOLE_S = 1;
+/** A playhead this near its range's end (s) stands before what follows it (hopHole) */
+var HOLE_NEAR_S = 0.1;
 var SEEK_STUCK_MS = 5000;
 var NUDGE_S = 0.1;
 
@@ -200,23 +203,38 @@ export function bufferedEnd(b: TimeRanges, t: number, slack?: number): number {
     return t;
 }
 
+/** Where the media goes on after a hole the playhead at t stands before (-1: none): t is in no range and one starts
+ * within HOLE_S of it, or the range t is in ends within HOLE_NEAR_S and the next starts within HOLE_S of t. The TV's
+ * pipeline waits at a hole for good (seen 2026-11-14 at a song's start: its sound buffered 0.0-0.0 and 0.0-5.2, the
+ * playhead in the first sliver, the picture never moving until the start was given up 15 s later) */
+export function holeAfter(b: TimeRanges, t: number): number {
+    for (var i = 0; i < b.length; i++) {
+        var start = b.start(i);
+        if (start > t) {
+            return start - t <= HOLE_S ? start : -1;
+        }
+        // (media ahead in t's own range: no hole to pass)
+        if (b.end(i) - t > HOLE_NEAR_S) {
+            return -1;
+        }
+    }
+    return -1;
+}
+
 /** A video's length when it is known (else 0) */
 export function lengthOf(v: HTMLVideoElement): number {
     return v.duration > 0 && isFinite(v.duration) ? v.duration : 0;
 }
 
-/** Moves a stalled playhead over a short hole just before buffered data */
+/** Moves a stalled playhead over a short hole just before buffered data (holeAfter: also from a sliver of a range that
+ * ends right before it), written in the play log to the ms (a hole of a few ms does not show in tenths) */
 export function hopHole(v: HTMLVideoElement): void {
     var t = v.currentTime;
-    var b = v.buffered;
-    for (var i = 0; i < b.length; i++) {
-        if (b.start(i) <= t && t < b.end(i)) {
-            return;
-        }
-        if (b.start(i) > t && b.start(i) - t < HOLE_S) {
-            v.currentTime = b.start(i) + 0.01;
-            return;
-        }
+    var to = holeAfter(v.buffered, t);
+    if (to >= 0) {
+        v.currentTime = to + 0.01;
+        // (what is buffered is as it was: the hop only moved the playhead)
+        note('hole', 'at ' + t.toFixed(3) + ', buffered ' + ranges(v.buffered, 3) + ': on to ' + v.currentTime.toFixed(3));
     }
 }
 

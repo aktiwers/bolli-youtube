@@ -803,7 +803,11 @@ var TILE_STYLES: { [style: string]: string } = { TILE_STYLE_YTLR_SQUARE: 'square
  * walk: try/catch keeps old V8 from optimising the function it is in */
 function tileVideo(key: string, x: any): Video | null {
     try {
-        return key === 'tileRenderer' ? fromTile(x) : fromLockup(x);
+        var v = key === 'tileRenderer' ? fromTile(x) : fromLockup(x);
+        // A video YouTube no longer shows (made private, deleted): its tile has no title, only "No views" and a picture
+        // that is not there (seen 2026-11-14 in a playlist and a phone's queue): left out, as YouTube's phone app does,
+        // in every row, page and list alike
+        return v && !v.page && !v.title ? null : v;
     } catch (e) {
         return null;
     }

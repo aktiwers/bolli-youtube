@@ -262,6 +262,16 @@
 .by-loader-image { display: block; }
 .by-loader.by-loader--snap .by-loader-box, .by-loader.by-loader--snap .by-loader-inner { -webkit-transition: none; }
 
+/* A song's music screen over its picture (player/own-player.ts showMusic, coverOf): a blur of the cover (a small
+   canvas made from it, stretched: no filter), darkened; the cover in the middle (a canvas of its size); its title
+   and artist under it */
+.by-player-music { position: absolute; left: 0; top: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+.by-player-music-blur { position: absolute; left: 0; top: -280px; width: 1280px; height: 1280px; }
+.by-player-music-shade { position: absolute; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, .45); }
+.by-player-music-cover { position: absolute; left: 50%; top: 168px; width: 256px; height: 256px; margin-left: -128px; border-radius: 8px; }
+.by-player-music-title, .by-player-music-artist { position: absolute; left: 120px; right: 120px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.by-player-music-title { top: 448px; font-size: 26px; line-height: 34px; font-weight: 500; color: #fff; }
+.by-player-music-artist { top: 486px; font-size: 20px; line-height: 28px; color: #c8c8c8; }
 /* A tile's preview (player/preview.ts) in the player's own video (by-player--peek): the player clipped to the tile,
    its video filling it (wider videos cropped), the rest of the player hidden and transparent, a ring over the
    video's corners beside the player (themes: by-peek-ring) */

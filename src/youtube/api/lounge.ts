@@ -7,6 +7,10 @@
 // messages go one numbered request at a time. A phone's pairing code (from its
 // cast, via LG's DIAL server) is registered as soon as the channel opens, before
 // the phone gives up. Requests go from the hidden youtube.com page; no sign-in.
+// YouTube Music's phone app casts to this same screen (its launch: theme "cl",
+// topic "music"), but joins only when the channel says cst=m (as
+// yt-cast-receiver's; without it the phone pairs, then gives up: seen on your
+// TV 2026-11-14).
 
 import { load, save } from '../core/store.js';
 import { answer, jsonEnd, randomText, uuid, youtubePage } from './youtube.js';
@@ -17,6 +21,8 @@ var KEY = 'youtube.lounge';
 /** As YouTube's TV app: its app id and capabilities (without them no commands come) */
 var APP = 'lb-v4';
 var CAPABILITIES = 'dsp,mic,dpa';
+/** Without it YouTube Music's phone app does not join (yt-cast-receiver sends it too) */
+var CST = 'm';
 var NAME = 'Bolli YouTube';
 /** Token renewal interval when YouTube does not give one */
 var TOKEN_REFRESH_MS = 13 * 24 * 3600 * 1000;
@@ -211,7 +217,7 @@ export class Lounge {
     /** The bind URL with the parameters every channel request carries, plus extra */
     private params(extra: { [name: string]: string }): string {
         var p: { [name: string]: string } = {
-            device: 'LOUNGE_SCREEN', id: this.kept.deviceId, name: NAME, app: APP, theme: 'cl', capabilities: CAPABILITIES,
+            device: 'LOUNGE_SCREEN', id: this.kept.deviceId, name: NAME, app: APP, theme: 'cl', cst: CST, capabilities: CAPABILITIES,
             mdxVersion: '2', loungeIdToken: this.kept.token, VER: '8', v: '2', t: '1', zx: randomText(12, 'abcdefghijklmnopqrstuvwxyz0123456789')
         };
         for (var name in extra) {

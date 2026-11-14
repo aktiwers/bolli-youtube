@@ -22,6 +22,7 @@ import { framesFrom, parseCues, parseSidx, Segment, trackScale } from './contain
 import { BEHIND_MB, BEHIND_S, bufferedEnd, decodeLoad, Engine, hopHole, jumpTarget, KEYFRAME_IN, LIFT_END_S, LIFT_MS, LIFT_S, MB, QUICK_MIN_S, QUICK_SPEED, QUICK_WAIT_MS, RETRIES, roomAhead, seekNudged, Skip, skipLanding, SPEED_BYTES, STILL_AHEAD, TICK_MS, TIMEOUT_MS, WINDOW_S, windowFrom } from './engine.js';
 import { onLost, onNetwork } from './networks.js';
 import { keepPipeline, openPipeline, Pipeline, setLength, setLengthSoon, spoilingFail } from './pipeline.js';
+import { note, ranges } from './play-log.js';
 
 /** Buffer up to this far ahead of the playhead (s; and up to AHEAD_MB per track); BEHIND_S, BEHIND_MB are kept behind
  * it, so a jump back stays buffered */
@@ -173,8 +174,16 @@ function fetchBytes(url: string, from: number, to: number): { xhr: XMLHttpReques
     return { xhr: xhr, done: done };
 }
 
+/** A start's first appends per track are written in the play log (where each piece came from, its append window,
+ * and what is buffered after it, to the ms), not a preview's: the hole in a start's sound (seen on the TV 2026-11-14)
+ * was in the sound's first piece itself; kept to see whether every start has it */
+var TRACE_APPENDS = 2;
+
 class Track {
     sb: SourceBuffer | null = null;
+    /** The start's appends written in the play log so far, and whether the one under way is (TRACE_APPENDS) */
+    traced = 0;
+    tracing = false;
     segments: Segment[] = [];
     /** The init section (appended first, then released), and how many bytes of the first segment came with it */
     init: ArrayBuffer | null = null;
@@ -754,6 +763,10 @@ export class DashEngine implements Engine {
         var self = this;
         var tracks = [new Track(video), new Track(audio)];
         this.tracks = tracks;
+        // (a preview's appends are not written: TRACE_APPENDS)
+        if (preview) {
+            tracks.forEach(function (t) { t.traced = TRACE_APPENDS; });
+        }
         // Fetch the heads while Media Source opens
         var heads = Promise.all(tracks.map(function (track) {
             var f = track.format;
@@ -1159,6 +1172,10 @@ export class DashEngine implements Engine {
             }
             pipe.onUpdate = function (i) {
                 var track = self.tracks[i];
+                if (track && track.tracing) {
+                    track.tracing = false;
+                    note('appended', (i ? 'audio' : 'video') + ' #' + track.traced + ' now ' + ranges((track.sb as SourceBuffer).buffered, 3));
+                }
                 if (track) {
                     self.settle();
                     self.hop();
@@ -1720,10 +1737,19 @@ export class DashEngine implements Engine {
                 track.open = false;
                 sb.appendWindowEnd = Infinity;
             }
+            if (track.traced < TRACE_APPENDS) {
+                track.traced++;
+                track.tracing = true;
+                note('append', (this.tracks.indexOf(track) ? 'audio' : 'video') + ' #' + track.traced + ': segment ' + track.next + ' byte ' +
+                    track.pos + ', ' + data.byteLength + ' B, window ' + sb.appendWindowStart.toFixed(3) + '-' +
+                    (sb.appendWindowEnd === Infinity ? 'open' : sb.appendWindowEnd.toFixed(3)) + ', had ' + ranges(sb.buffered, 3));
+            }
             sb.appendBuffer(data);
             track.waiting = null;
             track.full = false;
         } catch (e) {
+            // (no append under way to write after)
+            track.tracing = false;
             if ((e as Error).name !== 'QuotaExceededError') {
                 this.onFail('media');
                 return;

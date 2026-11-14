@@ -16,6 +16,7 @@
 // drives it through its public methods and onChange.
 
 import { h, LAYOUT_HEIGHT, LAYOUT_WIDTH, setPicture, setShown, setText, toggleClass } from '../core/dom.js';
+import { drawn, onCanvas } from '../ui/pictures.js';
 import { language, tr } from '../core/i18n.js';
 import { KEY, KEYS_GAP } from '../core/keys.js';
 import { dragsPointer, onPointerMove, takesPointer, Taken as Clicked } from '../core/pointer.js';
@@ -36,7 +37,7 @@ import { keyName, wakeKey } from '../api/shortcuts.js';
 import { Replays, replays } from '../api/replays.js';
 import { Segment, segmentAt, segments, skippedText } from '../api/sponsorblock.js';
 import { WatchReport } from '../api/stats.js';
-import { aboutTheVideo, askAnew, Asking, AudioTrack, AUTO_LINES, base, Caption, captionIn, captionList, codecName, learnMethod, forgetOtherStreams, forgetStreams, Format, kindOf, noneCanPlay, NoStreams, patient, pickFormat, playableStreams, preferred, reasonInLanguage, sabrStreams, Storyboard, storyboardFrame, streams, Streams, streamsFailure, stuckFor, unanswered } from '../api/streams.js';
+import { aboutTheVideo, askAnew, Asking, AudioTrack, linesFor, musicArtists, musicTrack, base, Caption, captionIn, captionList, codecName, learnMethod, forgetOtherStreams, forgetStreams, Format, kindOf, noneCanPlay, NoStreams, patient, pickFormat, playableStreams, preferred, reasonInLanguage, sabrStreams, Storyboard, storyboardFrame, streams, Streams, streamsFailure, stuckFor, unanswered } from '../api/streams.js';
 import { watchLaterAdd } from '../api/menu.js';
 import { channelPicture, run, watchInfo, WatchInfo } from '../api/watch.js';
 import { FillLoader } from '../ui/fill-loader.js';
@@ -95,13 +96,18 @@ var SAME_SHAPE = 0.02;
 var FRAMES_AHEAD_MS = 4000;
 /** A start is looked at every START_LOOK_MS until its picture moves; one not playing START_GIVE_UP_MS after OK is
  * told why (the line, YouTube: it waits on) or takes the ladder's next step (giveUpLater). Media for a first picture
- * has come once START_CAME_S of it are buffered (this TV wants about 5 s from where it starts; a start's window holds
- * 9.5). Streams that got no answer are asked for again NO_STREAMS_CHECK_MS later (api/streams.ts patient asks
+ * has come once START_CAME_S of it are buffered (this TV wants about 5 s from where it starts), or all of the start's
+ * window (its length segment by segment: 5.12 s seen). Streams that got no answer are asked for again NO_STREAMS_CHECK_MS later (api/streams.ts patient asks
  * meanwhile), until they come or the viewer leaves */
 var START_GIVE_UP_MS = 15000;
 var START_LOOK_MS = 5000;
 var START_CAME_S = 6;
 var NO_STREAMS_CHECK_MS = 5000;
+/** The music screen's cover (px across, as it shows), and its blur: the cover halved down to BLUR_PX across, then
+ * doubled back up to BLUR_SHOWN_PX (coverOf) */
+var COVER_PX = 256;
+var BLUR_PX = 64;
+var BLUR_SHOWN_PX = 256;
 /** The picture having moved this long, a failure's tries anew are counted from none again (ladder.ts retryWait), as
  * is the time YouTube has been failing it */
 var STEADY_MS = 60000;
@@ -271,6 +277,14 @@ export class OwnPlayer {
     /** A video's thumbnail over the video until it moves: the ended one's while Up next's video loads hidden, a
      * start's (Settings › Start picture), a preview's tile picture (showPoster, peekStart) */
     private poster: HTMLImageElement;
+    /** A song's music screen over its picture (showMusic): the blur of its cover, the cover, title and artist */
+    private music: HTMLElement;
+    private musicBlur: HTMLCanvasElement;
+    private musicCover: HTMLCanvasElement;
+    private musicTitle: HTMLElement;
+    private musicArtist: HTMLElement;
+    /** The video the music screen shows ('' none) */
+    private musicFor = '';
     /** A start's frame where it starts, from the storyboard (Settings › Start picture) */
     private frame: HTMLElement;
     /** The poster or the frame fading out over the video, and the timer that waits for that (uncoverOnMove); the
@@ -476,13 +490,21 @@ export class OwnPlayer {
         this.frame = h('div', 'by-player-frame');
         setShown(this.frame, false);
         this.el.appendChild(this.frame);
+        this.music = h('div', 'by-player-music');
+        this.musicBlur = this.music.appendChild(h('canvas', 'by-player-music-blur')) as HTMLCanvasElement;
+        this.music.appendChild(h('div', 'by-player-music-shade'));
+        this.musicCover = this.music.appendChild(h('canvas', 'by-player-music-cover')) as HTMLCanvasElement;
+        this.musicTitle = this.music.appendChild(h('div', 'by-player-music-title')) as HTMLElement;
+        this.musicArtist = this.music.appendChild(h('div', 'by-player-music-artist')) as HTMLElement;
+        setShown(this.music, false);
+        this.el.appendChild(this.music);
         this.ring = h('div', 'by-peek-ring');
         this.subtitleBox = h('div', 'vod-subtitles');
         this.el.appendChild(this.subtitleBox);
         this.subtitleView = new SubtitleView(this.subtitleBox);
         var self = this;
         // (beside the picture, the video and the cover over it narrow beside it; above the controls while they show)
-        this.pictures = [this.video, this.poster, this.frame];
+        this.pictures = [this.video, this.poster, this.frame, this.music];
         this.chat = new ChatView(this.el, this.subtitleBox, this.pictures, function () { return self.osd ? self.osd.top() : 0; });
         // Screen off: the chat waits (nothing asked of YouTube in the dark), and catches up as it wakes
         onScreen(function () { self.holdChat(); });
@@ -1873,6 +1895,10 @@ export class OwnPlayer {
         }
         this.reset(!!taken);
         this.aheadTold = false;
+        // (the last song's music screen does not stay over this video's start)
+        if (this.musicFor && this.musicFor !== want.id) {
+            this.showMusic(null, '');
+        }
         this.want = want;
         this.away = null;
         this.left = null;
@@ -2127,6 +2153,62 @@ export class OwnPlayer {
         }, 50) as unknown as number;
     }
 
+    /** A song's art track (its picture is its cover standing still) shows as YouTube's TV app shows one: the cover in
+     * the middle, its title and artist under it, over a blur of the cover (coverOf). Other videos: hidden */
+    private showMusic(s: Streams | null, id: string): void {
+        // (a player made without its page: nothing to show it in)
+        if (!this.music) {
+            return;
+        }
+        var on = !!s && musicTrack(s);
+        var to = on ? id : '';
+        if (to !== this.musicFor) {
+            // The last song's cover and blur go at once, their pixels let go; this one's come with its picture
+            this.musicCover.width = this.musicBlur.width = 0;
+            this.musicFor = to;
+            if (on) {
+                setText(this.musicTitle, (s as Streams).title);
+                setText(this.musicArtist, musicArtists(s as Streams));
+                this.coverOf(id);
+            }
+        }
+        setShown(this.music, on);
+    }
+
+    /** The music screen's cover and its blur, both from video id's hqdefault picture (the one its tiles show: mostly
+     * in the cache; YouTube has it for every video; its cover 270 px across, more than the 256 shown). The cover: the
+     * middle square of the picture's 16:9 band (YouTube puts it there, its sides in a colour of its own), drawn on a
+     * canvas the cover's size, so the picture itself is let go. The blur: the cover halved down to BLUR_PX (each step
+     * averages, so the picture's compression blocks go, which the 120-px thumbnail stretched showed, 2026-11-14), then
+     * doubled back up to BLUR_SHOWN_PX (each step smooths the edges between the small pixels), which the screen
+     * stretches. Some 10 ms once per song on the TV; nothing while it plays (no filter: a full-screen blur is costly on
+     * the TV) */
+    private coverOf(id: string): void {
+        var self = this;
+        var img = new Image();
+        img.onload = function () {
+            if (self.musicFor !== id) {
+                return;
+            }
+            var w = img.naturalWidth;
+            var side = Math.round(w * 9 / 16);
+            var cover = self.musicCover;
+            cover.width = cover.height = COVER_PX;
+            (cover.getContext('2d') as CanvasRenderingContext2D).drawImage(img, (w - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, COVER_PX, COVER_PX);
+            var small = drawn(cover, BLUR_PX, BLUR_PX);
+            for (var n = BLUR_PX * 2; n < BLUR_SHOWN_PX; n *= 2) {
+                var bigger = onCanvas(small, n, n);
+                small.width = 0;
+                small = bigger;
+            }
+            var blur = self.musicBlur;
+            blur.width = blur.height = BLUR_SHOWN_PX;
+            (blur.getContext('2d') as CanvasRenderingContext2D).drawImage(small, 0, 0, BLUR_SHOWN_PX, BLUR_SHOWN_PX);
+            small.width = 0;
+        };
+        img.src = 'https://i.ytimg.com/vi/' + id + '/hqdefault.jpg';
+    }
+
     /** The pictures over the video gone, and let go too (a decoded picture kept through the video costs the TV's short
      * memory) */
     private hidePoster(): void {
@@ -2205,6 +2287,8 @@ export class OwnPlayer {
     /** Show the title and channel from the streams; the description only on the watch page (Down), as in YouTube's
      * player */
     private showDetails(s: Streams, want: Want): void {
+        // (a song's music screen, also for a video taken over: a preview, one loaded ahead)
+        this.showMusic(s, want.id);
         // The speed it plays at (a live stream's normal: the speed chosen comes back for a video after it)
         this.video.defaultPlaybackRate = this.video.playbackRate = this.playbackSpeed;
         // The most replayed graph (a live stream has none)
@@ -2424,8 +2508,10 @@ export class OwnPlayer {
             var came = seconds(self.video.buffered);
             still = came > had ? 0 : still + 1;
             had = came;
-            // (all there is to come, for a start near the end)
-            var left = s.live || !self.format ? 0 : self.format.duration - self.position();
+            // (all there is to come: for a start near the end, or in a start's window, which ends where the TV is told
+            // the video ends: a short window holds less than START_CAME_S, and a start standing with all of it loaded is
+            // the TV's, not a download's; seen 2026-11-14, a window of 5.12 s, wrongly told as YouTube not answering)
+            var left = s.live || !self.format ? 0 : (self.windowLength() > 0 ? lengthOf(self.video) : self.format.duration) - self.position();
             enough = came >= START_CAME_S || left > 0 && came >= left - 0.5 ? enough + 1 : 0;
             if (!due) {
                 again();
@@ -2822,7 +2908,7 @@ export class OwnPlayer {
         return pickFormat(s.videos.filter(function (f) {
             var kind = kindOf(f.mime);
             return kind !== playing && !tried[kind];
-        }), prefs().quality || AUTO_LINES);
+        }), linesFor(s));
     }
 
     /** New URLs for the formats playing (both tracks may fail, so requested once). If the formats differ or are
@@ -3028,6 +3114,7 @@ export class OwnPlayer {
     /** Release and hide (Back, the end, fallback, the background); returns the video it played, or null */
     private close(keep?: boolean): Want | null {
         var was = this.reset(keep);
+        this.showMusic(null, '');
         this.listPanel.close();
         // Previews play in the same video, at normal speed
         this.setSpeed(1);
@@ -3461,7 +3548,8 @@ export class OwnPlayer {
             return;
         }
         var kind = kindOf(f.mime);
-        var list = s.videos.filter(function (v) { return kindOf(v.mime) === kind && v.height <= AUTO_LINES; });
+        var lines = linesFor(s);
+        var list = s.videos.filter(function (v) { return kindOf(v.mime) === kind && v.height <= lines; });
         var at = list.indexOf(f);
         if (at < 0) {
             return;
@@ -3981,7 +4069,8 @@ export interface Playing {
  * Settings codec where the video has it, and the original audio (stable volume if on); null: none playable */
 export function startFormats(s: Streams): { video: Format; audio: Format } | null {
     // At equal height and frame rate, the kept pipeline's codec, so it is reused (player/pipeline.ts)
-    var video = pickFormat(preferred(s.videos), prefs().quality || AUTO_LINES, pictureKind());
+    // (a song's art track: no higher than its music screen needs)
+    var video = pickFormat(preferred(s.videos), linesFor(s), pictureKind());
     var track = s.audios[0];
     return video && track ? { video: video, audio: audioOf(track) } : null;
 }

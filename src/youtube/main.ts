@@ -162,6 +162,8 @@ var BUILD_REST_MS = 300;
  * building wait for the slide's end, else they cut into it (seen on the TV 2026-11-14: the first opening lost ~0.27 s
  * of frames in gaps of 0.05-0.13 s, 0.17-0.64 s after Left; later ones, with the neighbours built, ~0.05 s) */
 var RAIL_OPEN_MS = 260;
+/** When the rail last opened (its slide's start: an Up or Down soon after it waits for the slide too) */
+var railOpenedAt = 0;
 var neighboursTimer = 0;
 var buildTimer = 0;
 var clockTimer = 0;
@@ -378,6 +380,16 @@ function section(id: string): Screen {
 
 /** Home's focused row has big tiles: where the theme has them and Settings › Look says so (off by default: each Up or
  * Down then lays two rows anew, which halves Home's frames on the TV) */
+/** Settings › Look › Bigger focused row on Home changed since Home was made: it goes, to be made anew from its stored
+ * rows (beside the rail's focus: buildNeighbour, as the rail rests; else when it is shown) */
+function homeFresh(): void {
+    var made = sections.home as FeedView | undefined;
+    if (made && made.big !== homeBig()) {
+        discard(made);
+        delete sections.home;
+    }
+}
+
 function homeBig(): boolean {
     return metrics().ways.homeBig && prefs().homeBig;
 }
@@ -421,11 +433,8 @@ function switchSection(id: string, rest?: boolean): void {
     current = id;
     pages = pagesOf[id] = pagesOf[id] || [];
     menu.select(id);
-    // (Settings › Look › Bigger focused row on Home changed since Home was made: made anew, from its stored rows)
-    var made = sections.home as FeedView | undefined;
-    if (id === 'home' && made && made.big !== homeBig()) {
-        discard(made);
-        delete sections.home;
+    if (id === 'home') {
+        homeFresh();
     }
     section(id);
     // Entering Search focuses its keyboard, as YouTube (not when a page over it closes)
@@ -540,6 +549,10 @@ function neighboursBy(): void {
     clearTimeout(buildTimer);
     var drew = false;
     neighbours().forEach(function (r) {
+        // (a Home made before its row size changed: built anew here, while the rail rests, not on the key into it)
+        if (r.id === 'home') {
+            homeFresh();
+        }
         var view = screenOf(r.id);
         if (view && view !== screen() && view.standBy && standing.indexOf(view) < 0) {
             if (drew) {
@@ -1490,7 +1503,11 @@ function updateMenu(): void {
     clearTimeout(neighboursTimer);
     if (menuFocused) {
         clearTimeout(standTimer);
-        neighboursTimer = setTimeout(neighboursBy, wasInRail ? NEIGHBOURS_MS : RAIL_OPEN_MS) as unknown as number;
+        var now = Date.now();
+        if (!wasInRail) {
+            railOpenedAt = now;
+        }
+        neighboursTimer = setTimeout(neighboursBy, Math.max(NEIGHBOURS_MS, railOpenedAt + RAIL_OPEN_MS - now)) as unknown as number;
     } else if (wasInRail) {
         letGo(STAND_MS);
     }

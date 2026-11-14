@@ -9,12 +9,17 @@
 // is asked for once, and every view of the list is told when titles came (listen), so none of them asks again.
 // YouTube leaves out of its answer the videos it no longer has (deleted, made private: seen on the TV 2026-11-14, two
 // such places skipped in a stretch of twenty), as the phone's app hides them: a video of the list between the first
-// and last of an answer that is not in it is dropped from the list (the cast drops it from the queue too).
+// and last of an answer that is not in it is dropped from the list (the cast drops it from the queue too). A queue no
+// longer than an answer (WHOLE: YouTube's own count of it) is all in one answer: any of it not sent is gone, at its ends
+// too (YouTube may also send such a video, untitled: api/feed.ts leaves those out as it reads them).
 
 import { PlaylistInfo, thumbnail, Video, videoOf } from './feed.js';
 
 /** The videos around the one playing whose titles are asked for at the cast (half before, half after it) */
 export var MAX_FILLED = 500;
+/** A queue of at most this many videos (YouTube's count) comes whole in one answer (about twenty are sent around the
+ * video asked for) */
+var WHOLE = 15;
 /** Failures in a row that end the asking at the cast (a list whose videos YouTube does not answer for) */
 var FAILS_MAX = 3;
 /** How far on from the first video without a title the one asked for is: YouTube sends some nine to each side of it
@@ -151,7 +156,7 @@ export function fillAll(list: PlaylistInfo, at: number): () => void {
  * one of the list's own that is not known yet only, and those of the list YouTube skipped between the first and last it
  * sent left out (true: something changed). The list's videos are a new array then (a panel drawn from the old one
  * keeps it), its count the videos left. */
-export function titled(list: PlaylistInfo, queue: { title: string; videos: Video[] }): boolean {
+export function titled(list: PlaylistInfo, queue: { title: string; total?: number; videos: Video[] }): boolean {
     var sent: { [id: string]: Video } = {};
     queue.videos.forEach(function (v) { sent[v.id] = v; });
     // Where the answer lies in the list: each sent video's place, a video the list has more than once at its place
@@ -178,11 +183,13 @@ export function titled(list: PlaylistInfo, queue: { title: string; videos: Video
     // (videos are left out only within a stretch no longer than the answer and as many again: anything wider is a
     // misreading, and nothing is dropped)
     var drop = first >= 0 && last - first + 1 <= queue.videos.length * 2;
+    // (the whole queue in this answer: those not in it are gone wherever they are)
+    var whole = first >= 0 && !!queue.total && queue.total <= WHOLE;
     var changed = false;
     var videos: Video[] = [];
     list.videos.forEach(function (v, i) {
         var now = sent[v.id];
-        if (!now && drop && i > first && i < last) {
+        if (!now && (whole || drop && i > first && i < last)) {
             changed = true;
         } else if (now && now.title && !v.title) {
             changed = true;

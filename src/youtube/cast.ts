@@ -7,7 +7,10 @@
 // the video or its state changes (it counts the time itself). The screen
 // is registered with the DIAL server (additional data), so phones can join
 // while the app runs without a new cast. The lounge opens once the first
-// screen shows, or at once for a cast.
+// screen shows, or at once for a cast. A cast from YouTube Music's phone app
+// (topic "music" in its launch) plays as any: YouTube's own app on the TV gets
+// none while Bolli is the TV's YouTube (passing them on to it was tried on
+// 2026-11-14: the phone, paired with Bolli, comes back to it first).
 
 import { KEY } from './core/keys.js';
 import { tr } from './core/i18n.js';

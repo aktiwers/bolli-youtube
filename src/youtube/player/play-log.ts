@@ -20,11 +20,12 @@ export function note(what: string, detail?: string): void {
     }
 }
 
-/** A buffer's ranges, as "0.0-9.1 12.0-15.5" ('-' none) */
-export function ranges(b: TimeRanges): string {
+/** A buffer's ranges, as "0.0-9.1 12.0-15.5" ('-' none), to digits decimals (1 unless said) */
+export function ranges(b: TimeRanges, digits?: number): string {
+    var d = digits || 1;
     var out: string[] = [];
     for (var i = 0; i < b.length; i++) {
-        out.push(b.start(i).toFixed(1) + '-' + b.end(i).toFixed(1));
+        out.push(b.start(i).toFixed(d) + '-' + b.end(i).toFixed(d));
     }
     return out.join(' ') || '-';
 }

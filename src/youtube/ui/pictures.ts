@@ -162,12 +162,12 @@ export function fetchPicture(url: string, orAddress: boolean): Promise<Fetched> 
     });
 }
 
-/** The picture drawn w x h on a new canvas: through halves while it is more than twice that size (one step from big
- * to small is rough) */
-export function drawn(img: HTMLImageElement, w: number, h: number): HTMLCanvasElement {
+/** The picture (or a canvas) drawn w x h on a new canvas: through halves while it is more than twice that size (one
+ * step from big to small is rough) */
+export function drawn(img: HTMLImageElement | HTMLCanvasElement, w: number, h: number): HTMLCanvasElement {
     var source: HTMLImageElement | HTMLCanvasElement = img;
-    var sw = img.naturalWidth;
-    var sh = img.naturalHeight;
+    var sw = (img as HTMLImageElement).naturalWidth || img.width;
+    var sh = (img as HTMLImageElement).naturalHeight || img.height;
     while (sw > w * 2 && sh > h * 2) {
         sw = Math.ceil(sw / 2);
         sh = Math.ceil(sh / 2);
@@ -176,7 +176,8 @@ export function drawn(img: HTMLImageElement, w: number, h: number): HTMLCanvasEl
     return onCanvas(source, w, h);
 }
 
-function onCanvas(source: HTMLImageElement | HTMLCanvasElement, w: number, h: number): HTMLCanvasElement {
+/** source drawn w x h on a new canvas */
+export function onCanvas(source: HTMLImageElement | HTMLCanvasElement, w: number, h: number): HTMLCanvasElement {
     var canvas = document.createElement('canvas');
     canvas.width = w;
     canvas.height = h;

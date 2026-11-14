@@ -333,12 +333,18 @@ export class TvApp {
      * would show a black screen until the open is given up, so it is given up at once, back to the page it came from,
      * with YouTube's reason (in the app's language, as YouTube's app asks). A film's offer (Buy or rent) is its screen;
      * a sign-in YouTube's app asks for, and a live stream not live yet, are left to it */
+    /** YouTube's app was started on the wanted video and is still warming up on it (it opens it meanwhile, as an
+     * opening does) */
+    private startedOnIt(): boolean {
+        return this.phase === 'warming' && !!this.want && this.want.id === this.startedFor;
+    }
+
     private playability(p: Playability): void {
         var want = this.want;
         // (opening it; or started on it from cold, still warming: YouTube's app asks for it then, seen on the TV
         // 2026-11-14, its answer a few seconds after the start)
-        var asking = this.phase === 'opening' || this.phase === 'warming' && !!want && want.id === this.startedFor;
-        if (!asking || !want || want.film || p.id && p.id !== want.id || (p.status !== 'UNPLAYABLE' && p.status !== 'ERROR')) {
+        if (!want || !(this.phase === 'opening' || this.startedOnIt()) || want.film || p.id && p.id !== want.id ||
+            (p.status !== 'UNPLAYABLE' && p.status !== 'ERROR')) {
             return;
         }
         note('youtube refused', want.id + ': ' + p.status + ' ' + p.reason);
@@ -712,7 +718,7 @@ export class TvApp {
         var poll = setInterval(function () {
             var want = self.want;
             var w = self.tvWindow();
-            if (self.phase !== 'warming' || !want || want.id !== self.startedFor) {
+            if (!want || !self.startedOnIt()) {
                 clearInterval(poll);
                 return;
             }
