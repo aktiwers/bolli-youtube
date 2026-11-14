@@ -1,13 +1,16 @@
 // Themes. Views build neutral markup (bd-* and by-* class names); a theme is
 //  - a stylesheet (colours, fonts, focus look) in
-//    apps/bolli-youtube/themes/<id>.css, on top of the base themes/base.css, and
-//  - metrics: the sizes views lay out, scroll and request thumbnails with.
+//    apps/bolli-youtube/themes/<id>.css, on top of the base themes/base.css,
+//  - metrics: the sizes views lay out, scroll and request thumbnails with, and
+//  - layouts: which of the layouts the app has built its screens use (the viewer's own choice in Settings goes
+//    before the theme's).
 // Chrome 38 has no CSS variables, so a theme is a whole stylesheet,
 // switched by replacing <link id="theme-css">. Sizes are in 1280x720
 // layout units (index.html zooms to the screen).
 
 import { toggleClass } from '../core/dom.js';
 import { tr } from '../core/i18n.js';
+import { prefs } from '../api/prefs.js';
 import { TileLayout, TileShape } from './tile-row.js';
 
 export interface Metrics {
@@ -18,6 +21,12 @@ export interface Metrics {
     /** Subscriptions: first row's top under the channels and pills; channel spacing */
     subscriptionsTop: number;
     subscriptionsStep: number;
+    /** Subscriptions' videos, as YouTube's TV app lays them out: the grid's lines `pitch` apart, the row above them
+     * (YouTube's first shelf) with its tiles `head` under its name. With the channels at the side: a focused line's
+     * tiles land at `top` (a channel's list, under its taller heading: `channelTop`), the row's name `nameUp` above
+     * that; the videos stand `shift` further right while the column shows; the column's items are `item` high, its
+     * "A-Z" label `label`, and `view` of it is in sight */
+    subs: { pitch: number; head: number; top: number; channelTop: number; nameUp: number; shift: number; item: number; label: number; view: number };
     /** Library: first row's top under the cards; card spacing */
     libraryTop: number;
     libraryStep: number;
@@ -104,10 +113,20 @@ export function word(s: string): string {
     return mine !== undefined ? tr(mine) : s;
 }
 
+/** Where Subscriptions shows its channels: a column at the side (YouTube's TV app) or a row at the top (its phone
+ * app; views/subscriptions.ts) */
+export type SubsLayout = 'side' | 'top';
+
+/** The layouts a theme has its screens in, of those the app has built */
+export interface Layouts {
+    subscriptions: SubsLayout;
+}
+
 export interface Theme {
     id: string;
     name: string;
     metrics: Metrics;
+    layouts: Layouts;
 }
 
 var registry: { [id: string]: Theme } = {};
@@ -147,4 +166,14 @@ export function metrics(): Metrics {
         throw new Error('no theme applied');
     }
     return current.metrics;
+}
+
+/** Where Subscriptions shows its channels: the viewer's choice (Settings › Look; prefs.subsLayout), else the current
+ * theme's */
+export function subsLayout(): SubsLayout {
+    if (!current) {
+        throw new Error('no theme applied');
+    }
+    var own = prefs().subsLayout;
+    return own === 'side' || own === 'top' ? own : current.layouts.subscriptions;
 }

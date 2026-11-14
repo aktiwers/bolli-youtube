@@ -45,6 +45,13 @@ export class ListQueue {
         return !!this.to(this.ids.indexOf(id));
     }
 
+    /** Only the videos in kept stay (others gone from the list: deleted), the one playing in any case, still playing */
+    keep(kept: { [id: string]: boolean }): void {
+        var now = this.at >= 0 ? this.ids[this.at] : '';
+        this.ids = this.ids.filter(function (id) { return kept[id] || id === now; });
+        this.at = now ? this.ids.indexOf(now) : this.at;
+    }
+
     /** More videos at the end (a playlist's next part; those queued already are left out) */
     add(ids: string[]): void {
         var have: { [id: string]: boolean } = {};

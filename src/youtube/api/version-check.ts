@@ -11,7 +11,11 @@
 // While CHECK_URL is empty all of this does nothing. A check that fails says nothing and is made again after the
 // next start, or when the app comes back on screen (checkAgain): an app left running for days is so counted on each
 // of its days, and told of a newer version. webOS TV 1.x-2.x asks over plain http (checkAddress): its engine does
-// not know who issued the service's certificate, so https fails there.
+// not know who issued the service's certificate, so https fails there. So it does on a later TV whose software was
+// never renewed (LG's webOS 4.0 emulator, its certificates of May 2018: "ERR_INSECURE_RESPONSE" at every start): a
+// check over https that gets nowhere, at once, on a device that says it is online is asked once more over plain http,
+// once a run; when that is answered, the device asks over http from then on (kept with the app's version: an update
+// tries https again), one request a day as everywhere.
 
 import { getJson } from '../core/http.js';
 import { lunaAsk } from '../core/luna.js';
@@ -54,6 +58,8 @@ interface Kept {
     told: string;
     toldDay: string;
     sentWith: string;
+    /** The app's version whose check was answered over plain http after https got nowhere (not kept where none) */
+    plain?: string;
 }
 
 /** The latest version as the service named it in this run ('' none; null: not asked yet): known also where the
@@ -65,11 +71,18 @@ var asking = false;
 var again: (() => void) | null = null;
 /** The system's version as this run's first check learned it (osVersion); null: not asked yet */
 var system: Promise<string> | null = null;
+/** Plain http was tried this run after https got nowhere (once a run: a service that is down is not asked twice at
+ * every look) */
+var triedPlain = false;
 
 function kept(): Kept {
     var k = load<Kept>(KEY);
-    return { day: String(k && k.day || ''), latest: String(k && k.latest || ''), told: String(k && k.told || ''),
+    var all: Kept = { day: String(k && k.day || ''), latest: String(k && k.latest || ''), told: String(k && k.told || ''),
         toldDay: String(k && k.toldDay || ''), sentWith: String(k && k.sentWith || '') };
+    if (k && k.plain) {
+        all.plain = String(k.plain);
+    }
+    return all;
 }
 
 /** The running app's version, as main.ts wrote it on the page */
@@ -87,11 +100,11 @@ export function checkAt(url: string): void {
     address = url;
 }
 
-/** Where a check is asked: the address without a slash at its end, over plain http on webOS TV 1.x-2.x's engine
- * (the request names nothing of the viewer, and the answer is a version number alone) */
-function checkAddress(): string {
+/** Where a check is asked: the address without a slash at its end, over plain http on webOS TV 1.x-2.x's engine and
+ * where plain says so (the request names nothing of the viewer, and the answer is a version number alone) */
+function checkAddress(plain?: boolean): string {
     var at = address.replace(/\/+$/, '');
-    return oldEngine() ? at.replace(/^https:/, 'http:') : at;
+    return oldEngine() || plain ? at.replace(/^https:/, 'http:') : at;
 }
 
 /** said if it is a system's version as a check may name it, else '' */
@@ -193,15 +206,31 @@ export function checkNow(version: string, now: Date): Promise<boolean> {
         return Promise.resolve(false);
     }
     asking = true;
-    var check = checkAddress() + '/v1/check?app=youtube&v=' + version + '&os=' + (android() ? 'android' : 'webos');
+    var check = '/v1/check?app=youtube&v=' + version + '&os=' + (android() ? 'android' : 'webos');
     var rest = '&g=' + gapOf(last.day, today) + '&n=' + (prefs().versionCheck === 'notify' ? 1 : 0) + (from ? '&from=' + from : '');
+    // (https got nowhere for this version of the app before, and http was answered: http at once)
+    var plain = last.plain === version;
     return osVersion().then(function (os) {
         if (from) {
             var sent = kept();
             sent.sentWith = version;
             save(KEY, sent);
         }
-        return getJson<{ latest?: unknown }>(check + (os ? '&ov=' + os : '') + rest, TIMEOUT_MS);
+        var ask = function (byHttp: boolean): Promise<{ latest?: unknown }> {
+            return getJson<{ latest?: unknown }>(checkAddress(byHttp) + check + (os ? '&ov=' + os : '') + rest, TIMEOUT_MS);
+        };
+        return ask(plain).then(null, function (e: { status?: number; message?: string }) {
+            // Nothing reached the service (no answer at all, and not for want of time) though the device says it is
+            // online: most likely its certificates are too old to know the service's. Once more over plain http
+            if (plain || triedPlain || oldEngine() || !/^https:/.test(address) || !e || e.status || e.message !== 'network error' || navigator.onLine === false) {
+                throw e;
+            }
+            triedPlain = true;
+            return ask(true).then(function (reply) {
+                plain = true;
+                return reply;
+            });
+        });
     }).then(function (reply) {
         asking = false;
         if (!reply || typeof reply.latest !== 'string') {
@@ -212,6 +241,11 @@ export function checkNow(version: string, now: Date): Promise<boolean> {
         was.day = today;
         was.latest = named;
         was.sentWith = version;
+        if (plain) {
+            was.plain = version;
+        } else {
+            delete was.plain;
+        }
         save(KEY, was);
         return true;
     }, function (e: { status?: number; message?: string }) {

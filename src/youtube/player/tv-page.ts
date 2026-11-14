@@ -3,6 +3,14 @@
 // it lives by that page's rules: ES5, no imports, no closures over this app's
 // names; it talks to the app by postMessage and the page's __bolliPage.
 
+/** YouTube's answer on whether a video plays, as its app read it and pageHooks sends it: the video's id ('' not
+ * said), its status (OK, UNPLAYABLE, ERROR, LOGIN_REQUIRED, …) and reason in the app's language ('' none) */
+export interface Playability {
+    id: string;
+    status: string;
+    reason: string;
+}
+
 /** A media event's video state, as pageHooks sends it */
 export interface MediaState {
     t: number;
@@ -46,6 +54,16 @@ export function pageHooks(opening: boolean): void {
     var parse = JSON.parse;
     JSON.parse = function (this: any): any {
         var r = parse.apply(this, arguments as any);
+        // YouTube's answer for a video (its player's request) when it is not a yes: told to the app (a refusal ends the
+        // wait at once: tv-app.ts)
+        var playable = r && typeof r === 'object' ? r.playabilityStatus : null;
+        if (playable && typeof playable.status === 'string' && playable.status !== 'OK') {
+            var screen = playable.errorScreen || {};
+            var offer = screen.playerLegacyDesktopYpcOfferRenderer || {};
+            var said = screen.playerErrorMessageRenderer && screen.playerErrorMessageRenderer.reason;
+            var text = playable.reason || offer.offerDescription || (said && (said.simpleText || (said.runs || []).map(function (run: any) { return run.text; }).join(''))) || '';
+            send('playability', { id: r.videoDetails && r.videoDetails.videoId || '', status: playable.status, reason: typeof text === 'string' ? text : '' });
+        }
         if (r && typeof r === 'object') {
             if (r.adPlacements) {
                 delete r.adPlacements;

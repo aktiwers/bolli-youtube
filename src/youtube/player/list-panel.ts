@@ -7,11 +7,14 @@
 // with the focus in it too. Keys it has no use for are the
 // player's. Its videos are the rows' tiles' (their pictures, titles and labels: views/tiles.ts), only those near the
 // focus drawn (one comes and one goes as it moves); it hides after HIDE_MS without a key while the video plays. A video
-// the focus rests on for REST_MS is loaded ahead, as the watch page's related videos are.
+// the focus rests on for REST_MS is loaded ahead, as the watch page's related videos are. A list whose videos come
+// without titles (a phone's queue) gets those of the lines drawn once the focus rests TITLES_MS, and draws them as
+// they come.
 
 import { h, setPicture, setShown, setText, toggleClass, translate } from '../core/dom.js';
 import { tr } from '../core/i18n.js';
 import { KEY, KEYS_GAP } from '../core/keys.js';
+import { nearestUntitled } from '../api/cast-list.js';
 import { placeIn, PlaylistInfo, Video } from '../api/feed.js';
 import { prefs } from '../api/prefs.js';
 import { TileItem } from '../ui/tile-row.js';
@@ -27,6 +30,8 @@ var AFTER = 6;
 var SIDE_WIDTH = 420;
 var HIDE_MS = 10000;
 var REST_MS = 1500;
+/** The focus at rest this long: the titles of the lines drawn are asked for (not at each key of a held one) */
+var TITLES_MS = 250;
 
 /** What the panel does in the player */
 interface PanelActions {
@@ -65,6 +70,11 @@ export class ListPanel {
     private drawn: { [i: number]: HTMLElement } = {};
     private hideTimer = 0;
     private restTimer = 0;
+    /** The list shown, and the timer that asks for its missing titles */
+    private list: PlaylistInfo | null = null;
+    private titlesTimer = 0;
+    /** Stops being told of titles that came into the list */
+    private unlisten = function (): void { return undefined; };
 
     constructor(parent: HTMLElement, before: Node, private act: PanelActions) {
         this.el = h('div', 'by-list-panel');
@@ -89,6 +99,9 @@ export class ListPanel {
         this.playing = playing;
         this.inside = focused;
         this.toWatch = !!fromWatch;
+        this.list = list;
+        var self = this;
+        this.unlisten = list.listen ? list.listen(function () { self.redraw(); }) : function (): void { return undefined; };
         this.tiles = new VideoTiles();
         this.items = this.tiles.items(list.videos);
         this.at = this.items.map(function (item) { return item.id; }).indexOf(playing);
@@ -112,6 +125,9 @@ export class ListPanel {
         }
         clearTimeout(this.hideTimer);
         clearTimeout(this.restTimer);
+        clearTimeout(this.titlesTimer);
+        this.unlisten();
+        this.list = null;
         if (this.beside) {
             this.act.room(0);
         }
@@ -198,6 +214,63 @@ export class ListPanel {
         var shift = Math.max(0, this.focus - (strip ? 1 : 2)) * (strip ? STRIP_PITCH : SIDE_PITCH);
         translate(this.itemsEl, strip ? -shift : 0, strip ? 0 : -shift);
         this.restSoon();
+        this.titlesSoon(first, last);
+    }
+
+    /** A list whose videos come without titles: once the focus rests, the titles around the drawn line nearest the
+     * focus that has none are asked for; the lines drawn are made again as they come */
+    private titlesSoon(first: number, last: number): void {
+        clearTimeout(this.titlesTimer);
+        var list = this.list;
+        if (!list || !list.titles) {
+            return;
+        }
+        var want = nearestUntitled(this.items, this.focus, first, last);
+        if (want < 0) {
+            return;
+        }
+        var id = this.items[want].id;
+        var titles = list.titles;
+        this.titlesTimer = setTimeout(function () {
+            // (what came is drawn by the list's own telling: listen)
+            titles(id).then(null, function () { return false; });
+        }, TITLES_MS) as unknown as number;
+    }
+
+    /** The list's videos changed (titles came): only the lines drawn whose title changed made again, the focus where it
+     * was (the asking goes on for any drawn line still without one) */
+    private redraw(): void {
+        if (!this.list) {
+            return;
+        }
+        var was = this.items;
+        this.tiles = new VideoTiles();
+        this.items = this.tiles.items(this.list.videos);
+        var strip = this.mode === 'strip';
+        setText(this.name, this.list.title);
+        if (was.length !== this.items.length) {
+            // (videos left out: every line moves; the focus and the one playing stay on their videos)
+            var focused = was[this.focus] ? was[this.focus].id : '';
+            var ids = this.items.map(function (item) { return item.id; });
+            this.at = ids.indexOf(this.playing);
+            this.focus = Math.max(0, Math.min(this.items.length - 1, ids.indexOf(focused) >= 0 ? ids.indexOf(focused) : this.focus));
+            for (var gone in this.drawn) {
+                this.itemsEl.removeChild(this.drawn[+gone]);
+            }
+            this.drawn = {};
+            setText(this.place, placeIn(this.list, this.playing));
+            this.draw();
+            return;
+        }
+        for (var key in this.drawn) {
+            var i = +key;
+            if (!was[i] || !this.items[i] || was[i].title !== this.items[i].title) {
+                var line = this.line(i, strip);
+                toggleClass(line, 'by-list-item--focused', this.inside && i === this.focus);
+                this.itemsEl.replaceChild(line, this.drawn[i]);
+                this.drawn[i] = line;
+            }
+        }
     }
 
     /** The focused video (not the one playing) loaded ahead once the focus rests on it */

@@ -34,8 +34,8 @@ import { choiceButton, choiceTile } from '../ui/choice-button.js';
 import { keyboardFor, recentWith } from '../ui/keyboard-languages.js';
 import { LanguagePicker } from '../ui/language-picker.js';
 import { ADD, customOf, FULL, NOT_KEPT, removeCustomLogo } from '../ui/custom-logos.js';
-import { APP_NAME, COLOR_COLUMNS, hasHomeLogos, hasHomeScreen, homeColor, homeColorChoices, homeIconChoices, homeLogoPicture, homeName, NO_FILE, setHomeColor,
-    setHomeIcon, setHomeName, shownHomeIcon, takeCustomIcon } from '../ui/home-screen.js';
+import { APP_NAME, COLOR_COLUMNS, hasHomeLogos, hasHomeScreen, homeColor, homeColorChoices, homeIconChoices, homeLogoPicture, homeName, NO_CHANNEL, NO_ENTRY, NO_FILE,
+    NO_ROOT, onHomeRefused, setHomeColor, setHomeIcon, setHomeName, shownHomeIcon, takeCustomIcon } from '../ui/home-screen.js';
 import { ACCOUNT, chooseLogo, drawLogo, logoChoices, logoFile, LOGOS, shownLogo, takeAccountLogo, takeCustomLogo } from '../ui/logo.js';
 import { TextPage } from '../ui/text-page.js';
 import { CAPTION_STYLES } from '../player/captions.js';
@@ -44,7 +44,7 @@ import { Question } from '../ui/question.js';
 import { NOT_PICTURE, TOO_BIG, TOO_LARGE } from '../ui/pictures.js';
 import { PROBLEM, toast } from '../ui/toast.js';
 import { screenOff } from '../ui/screen-off.js';
-import { applyBlack, applyTheme, themes } from '../ui/theme.js';
+import { applyBlack, applyTheme, subsLayout, themes } from '../ui/theme.js';
 import { ShortcutHost, ShortcutsPage } from './shortcuts.js';
 
 /** A setting: name, description, picture ('' for none); its choices, or the steps to link a phone (code: shows a TV
@@ -371,6 +371,7 @@ interface Brand {
 /** The columns of a grid of logo tiles */
 var LOGO_COLUMNS = 4;
 
+
 /** A setting whose choices are a grid of logo tiles; choose: what OK on a logo's tile does; add: what takes the
  * address typed after OK on the tile that adds one */
 function logoGrid(label: string, summary: string, choices: () => Choice[], shown: () => Value, choose: (value: string) => void,
@@ -435,6 +436,9 @@ function refused(e: Error, url: string): string {
         why === TOO_BIG ? tr('That picture is too big (2 MB at most).') :
         why === TOO_LARGE ? tr('That picture is too large (4096 × 4096 pixels at most).') :
         why === NO_FILE ? tr('This TV does not let the app save a logo for the home screen') :
+        why === NO_CHANNEL ? tr('This TV does not let the app change its logo, name or colour on the home screen. A rooted TV with the Homebrew Channel does.') :
+        why === NO_ROOT ? tr('This TV does not let the app change its logo, name or colour on the home screen. The Homebrew Channel on it has no root access.') :
+        why === NO_ENTRY ? tr('The TV did not take the change to the home screen.') :
         why === NOT_KEPT || why === FULL ? tr('The app has no room left on the TV to keep the picture') :
         tr('Could not load {1}.', url.replace(/^https?:\/\//, '').split('/')[0]);
 }
@@ -485,7 +489,24 @@ function bolli(pages: StartPage[], more: () => void, chat: () => void, keys: () 
         pref(tr('Background'), tr('The colour behind the app\'s screens'), 'black.png', 'pureBlack', [
             { value: false, name: tr('Dark grey'), note: tr('as YouTube\'s TV app') },
             { value: true, name: tr('Pure black'), note: tr('completely black: on an OLED TV those pixels stay off') }
-        ], function (on) { applyBlack(on === true); })
+        ], function (on) { applyBlack(on === true); }),
+        // The one in force is ticked: the viewer's choice, else the theme's (the screen takes it when it shows next).
+        // Its picture drawn for the app, as Most replayed's
+        pick(tr('Channels in Subscriptions'), tr('Where the Subscriptions screen lists your channels'), 'subscriptions.png', [
+            { value: 'side', name: tr('On the side'), note: tr('a list of all your channels, each one\'s videos beside it, as YouTube\'s TV app') },
+            { value: 'top', name: tr('Up top'), note: tr('round pictures in a row over the videos, with All, Today, Videos and Live under them') }
+        ], subsLayout, function (value) { setPref('subsLayout', String(value)); }),
+        // (the screen takes it when it shows next)
+        pref(tr('Most relevant in Subscriptions'), tr('YouTube\'s own pick of videos, in a row over your subscriptions\' videos'), 'relevant.png', 'subsRelevant', [
+            { value: true, name: tr('On'), note: tr('as YouTube\'s TV app') },
+            { value: false, name: tr('Off'), note: tr('only your subscriptions\' videos, newest first') }
+        ]),
+        // (Home takes it when it shows next; this setting's picture and Most relevant's drawn for the app, as Most
+        // replayed's)
+        pref(tr('Bigger focused row on Home'), tr('The row with the focus has bigger tiles'), 'homebig.png', 'homeBig', [
+            { value: false, name: tr('Off'), note: tr('every row the same size: faster on older TVs') },
+            { value: true, name: tr('On'), note: tr('as YouTube\'s TV app') }
+        ])
     ];
     // Only when there is more than one theme
     if (themes().length > 1) {
@@ -808,6 +829,8 @@ export class SettingsView implements View {
         panel.appendChild(this.body);
         this.el.appendChild(panel);
         var self = this;
+        // (a home screen choice the TV did not take: said in one line, the right side anew with the choice put back)
+        onHomeRefused(function (e) { self.brandChosen(e); });
         bolli(pages, function () { self.moreLanguages(); }, function () { self.openChat(); }, function () { self.openKeys(); }, restart,
             { address: function (take) { self.pictureAddress(take); }, name: function () { self.namePage(); },
                 chosen: function (e) { self.brandChosen(e); } }).forEach(function (c) {
@@ -1070,7 +1093,7 @@ export class SettingsView implements View {
      * added, no key pressed since). */
     private brandChosen(e?: Error, url?: string, toSet?: boolean): void {
         if (e) {
-            toast(refused(e, url || ''), PROBLEM);
+            toast(refused(e, url || ''), undefined, PROBLEM);
         }
         if (this.shown && !this.openPage()) {
             this.drawPanel(!toSet);

@@ -207,6 +207,9 @@ class Track {
     /** A format switch waiting for its buffer (switchTrack): from segment index, cut at from (s); removed: the old
      * format's data from there has been removed */
     switching: { format: Format; segments: Segment[]; init: ArrayBuffer; index: number; from: number; removed?: boolean } | null = null;
+    /** A switch to take where what the track has loaded ends (switchTrack's after): the new format's parts. The pump
+     * takes it at the start of the next segment the old format would load */
+    after: { format: Format; segments: Segment[]; init: ArrayBuffer } | null = null;
     /** Append window start for a switched audio track's first segment (s; -1: none): that segment loaded whole goes in
      * from the cut on only (framesFrom, by the timescale of the init section appended last: an MP4's; 0 a WebM) */
     cut = -1;
@@ -832,9 +835,10 @@ export class DashEngine implements Engine {
     }
 
     /** Switches the video format in place (switchTrack), e.g. when a preview taken over full screen moves to the
-     * full-screen quality; soon: as near as the TV allows (switchSoon) */
-    switchVideo(f: Format, ahead?: number, soon?: boolean): void {
-        this.switchTrack(0, f, ahead, soon);
+     * full-screen quality; soon: as near as the TV allows (switchSoon); after: where what is loaded ends (placeAfter:
+     * a step down with little loaded ahead) */
+    switchVideo(f: Format, ahead?: number, soon?: boolean, after?: boolean): void {
+        this.switchTrack(0, f, ahead, soon, after);
     }
 
     /** Switches the audio format in place (switchTrack): another language, or stable volume on or off */
@@ -849,7 +853,7 @@ export class DashEngine implements Engine {
      * at the exact point (its segments are 10 s, so the append window drops the frames before it). If the new head
      * fails or the end is near, the old format continues. A newer switch of the track replaces a pending one; one
      * back to the format the track has, before the switch away from it has its place, only gives that one up. */
-    private switchTrack(index: number, f: Format, ahead?: number, soon?: boolean): void {
+    private switchTrack(index: number, f: Format, ahead?: number, soon?: boolean, after?: boolean): void {
         var self = this;
         var track = this.tracks[index];
         // (to the format it has, or the one a switch on its way brings: nothing to do)
@@ -858,6 +862,7 @@ export class DashEngine implements Engine {
         }
         var asked = ++track.switchAsked;
         this.unsoon(track);
+        track.after = null;
         if (track.format.url === f.url && !track.switching) {
             track.switchTo = '';
             return;
@@ -865,7 +870,9 @@ export class DashEngine implements Engine {
         track.switchTo = f.url;
         head(f, f.index.end, false).then(function (data) {
             var parts = headParts(f, data, true);
-            if (soon && index === 0) {
+            if (after && index === 0) {
+                self.placeAfter(track, f, parts, asked);
+            } else if (soon && index === 0) {
                 self.switchSoon(track, f, parts, ahead, asked, 0, self.fetchS(chunkOf(f)));
             } else {
                 self.placeSwitch(track, index, f, parts, ahead, asked);
@@ -979,6 +986,50 @@ export class DashEngine implements Engine {
         track.early = first;
         track.switching = { format: f, segments: parts.segments, init: parts.init, index: i, from: from };
         this.pump(track);
+    }
+
+    /** A video switch where what is loaded ends: the new format follows the old one from the start of the next segment
+     * the old one would load, so nothing is removed under the TV's decoder, the picture meets no gap, and of the old
+     * format no more is fetched than the segment it is in. For a step down with little loaded ahead, where the plain
+     * way would first fetch more of the heavier format (its point lies SWITCH_MIN_S ahead) and a start anew blanks the
+     * screen. The pump takes it (takeAfter); a request for that next segment's first bytes, none of them here yet, is
+     * given up for it. */
+    private placeAfter(track: Track, f: Format, parts: { segments: Segment[]; init: ArrayBuffer }, asked: number): void {
+        if (this.stopped || this.tracks[0] !== track || track.switchAsked !== asked) {
+            return;
+        }
+        if (!parts.segments.length) {
+            track.switchTo = '';
+            return;
+        }
+        track.after = { format: f, segments: parts.segments, init: parts.init };
+        if (track.xhr && track.next < track.segments.length && track.pos === track.segments[track.next].from) {
+            track.gen++;
+            track.xhr.abort();
+            track.xhr = null;
+        }
+        this.pump(track);
+    }
+
+    /** Takes a switch that waits for the end of what is loaded (placeAfter), the track standing at a segment's start
+     * with all before it handed to the buffer: the new format from that start (else not now). Where the buffer
+     * holds data past that start (left by a jump back) or the formats are not cut at the same place, the plain way. */
+    private takeAfter(track: Track, sb: SourceBuffer): void {
+        var after = track.after;
+        if (!after || track.switching || track.waiting || track.cut >= 0 || track.windowCut >= 0 || this.window || this.pending >= 0 || this.video.seeking ||
+            track.next >= track.segments.length || track.pos !== track.segments[track.next].from) {
+            return;
+        }
+        track.after = null;
+        var start = track.segments[track.next].start;
+        var i = segmentAt(after.segments, start + 0.01);
+        var parts = { segments: after.segments, init: after.init };
+        if (i >= after.segments.length || Math.abs(after.segments[i].start - start) > 0.05 || bufferedEnd(sb.buffered, start + 0.01, 0.001) > start + 0.05) {
+            this.placeSwitch(track, 0, after.format, parts, undefined, track.switchAsked);
+            return;
+        }
+        // (removed: there is nothing of the old format from there on)
+        track.switching = { format: after.format, segments: after.segments, init: after.init, index: i, from: after.segments[i].start, removed: true };
     }
 
     /** Schedules the switch of track to f (parts: from its head), now or once the buffer reaches the switch point (ahead:
@@ -1386,6 +1437,7 @@ export class DashEngine implements Engine {
                 sb.appendWindowStart = this.cutAt;
             }
         }
+        this.takeAfter(track, sb);
         // A format switch: remove the old format's data from the switch point, then load the new one from there
         // (not during a seek: seeked() applies it at the new place)
         var sw = track.switching;

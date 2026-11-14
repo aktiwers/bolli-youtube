@@ -12,6 +12,14 @@
 // chaptersPause: the video pauses while its chapters are picked from (Up in the app's player).
 // quickJumps: a jump in a video lands in a window of its own, as a start does (player/dash.ts narrow).
 // pureBlack: the screens' background pure black instead of the theme's dark grey (ui/theme.ts applyBlack).
+// subsLayout: where Subscriptions shows its channels: 'side' (a column at the left, as YouTube's TV app), 'top' (round
+// pictures in a row over the videos, as YouTube's phone app; views/subscriptions.ts), or '' (as the theme has it:
+// ui/theme.ts subsLayout gives the one in force).
+// subsRelevant: Subscriptions shows YouTube's own pick of the list ("Most relevant") in a row over it; false: the
+// list alone (views/subscriptions.ts).
+// homeBig: Home's focused row has bigger tiles, as YouTube's TV app (where the theme has them); off by default: each
+// Up or Down then lays two whole rows anew, which halves Home's frames on the TV (2026-11-14: 1.04-1.17 s lost in a
+// walk of 16 keys against 0.47-0.79 s without).
 // logo: the logo the app draws, by its id (ui/logo.ts LOGOS; 'none': no logo).
 // homeIcon, homeName, homeColor: the app's logo, name and tile colour on the TV's home screen (ui/home-screen.ts; webOS).
 // chatMode, chatPosition, chatHeight, chatBottom, chatSide, chatPicture, chatBox, chatSize, chatBackground, chatTimes, chatAvatars, chatFade: where a
@@ -131,6 +139,14 @@ export interface Prefs {
     quickJumps: boolean;
     /** The screens' background pure black (OLED: pixels off) instead of the theme's dark grey (ui/theme.ts) */
     pureBlack: boolean;
+    /** Subscriptions' channels: in a column at the 'side' (YouTube's TV app's layout) or in a row at the 'top' (its phone
+     * app's; views/subscriptions.ts); '': where the theme has them (ui/theme.ts subsLayout) */
+    subsLayout: string;
+    /** Subscriptions shows YouTube's own pick of the list ("Most relevant") in a row over it; false: the list alone
+     * (views/subscriptions.ts) */
+    subsRelevant: boolean;
+    /** Home's focused row has bigger tiles (main.ts homeBig) */
+    homeBig: boolean;
     /** The logo the app draws: a logo's id in ui/logo.ts LOGOS (one no longer listed: the first), the account's
      * picture, a custom one, or none */
     logo: string;
@@ -241,7 +257,7 @@ SHORTCUTS.push({ key: BUTTON.RED, where: 'everywhere', action: 'screenOff' },
     { key: BUTTON.SCREEN_REMOTE, where: 'everywhere', action: 'subscribe' });
 var DEFAULTS: Prefs = { skip: ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'music_offtopic'], theme: 'youtube', startPage: 'home', quality: 0, codec: 'auto', preload: true, history: true, autoplay: true, autoplayWait: 10, stableVolume: false, previews: 'sound', channelVideo: true, captions: '', captionStyle: 'words', captionLanguages: [], startSign: true, startPicture: 'tile', sabr: false, pictures: 'sharpest', replays: true, dislikes: true, liveChat: true, chatMode: 'over', chatPosition: 'right', chatHeight: 'tall', chatBottom: 'ticker', chatSide: 'right', chatPicture: 'fit', chatBox: null, chatSize: 'normal', chatBackground: 'bubbles', chatTimes: false, chatAvatars: false, chatFade: 0,
     listLayout: 'stage', listPreview: 'sound', listAutoplay: true, listNumbers: 'charts', listDetails: true, listButtons: ['play', 'shuffle', 'repeat', 'save', 'shortcut'],
-    listCarryOn: true, listKeep: true, listNext: 0, listDown: 'row', listSide: 'over', videoClock: 'off', chaptersPause: true, quickJumps: true, pureBlack: false, logo: 'red', homeIcon: 'red', homeName: '', homeColor: '', dearrow: '',
+    listCarryOn: true, listKeep: true, listNext: 0, listDown: 'row', listSide: 'over', videoClock: 'off', chaptersPause: true, quickJumps: true, pureBlack: false, subsLayout: '', homeBig: false, subsRelevant: true, logo: 'red', homeIcon: 'red', homeName: '', homeColor: '', dearrow: '',
     dearrowOptions: ['thumbnails', 'frames', 'tidy'], keyboardRecent: [], shortcuts: SHORTCUTS,
     screenOff: 'iris', castWakes: false, screenWake: 'any', versionCheck: 'notify', fallbackPlayer: true };
 

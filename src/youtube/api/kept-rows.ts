@@ -50,6 +50,7 @@ export function keepRows(screen: string, account: string, rows: Rows): void {
         next: rows.next,
         tabs: rows.tabs,
         channels: rows.channels,
+        channelsLabel: rows.channelsLabel,
         nudge: rows.nudge,
         // Shape, subtitle and icon too: else square rows and games' boxes draw as plain ones until the fresh rows arrive
         shelves: rows.shelves.slice(0, SHELVES_KEPT).map(function (s) {

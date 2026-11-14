@@ -25,7 +25,7 @@ import { load, save } from '../core/store.js';
 import { clock } from '../core/time.js';
 import { PlayerOsd } from './osd.js';
 import { SubtitleView } from './subtitles.js';
-import { PROBLEM, skipEdge, toast } from '../ui/toast.js';
+import { cannotPlayText, PROBLEM, skipEdge, toast } from '../ui/toast.js';
 import { onScreen, screenIsOff, screenOff } from '../ui/screen-off.js';
 import { knownAvatar } from '../api/avatars.js';
 import { liveNow } from '../api/channel.js';
@@ -36,7 +36,7 @@ import { keyName, wakeKey } from '../api/shortcuts.js';
 import { Replays, replays } from '../api/replays.js';
 import { Segment, segmentAt, segments, skippedText } from '../api/sponsorblock.js';
 import { WatchReport } from '../api/stats.js';
-import { askAnew, Asking, AudioTrack, AUTO_LINES, base, Caption, captionIn, captionList, codecName, learnMethod, forgetOtherStreams, forgetStreams, Format, kindOf, noneCanPlay, NoStreams, patient, pickFormat, playableStreams, preferred, reasonInLanguage, sabrStreams, Storyboard, storyboardFrame, streams, Streams, streamsFailure, stuckFor, unanswered } from '../api/streams.js';
+import { aboutTheVideo, askAnew, Asking, AudioTrack, AUTO_LINES, base, Caption, captionIn, captionList, codecName, learnMethod, forgetOtherStreams, forgetStreams, Format, kindOf, noneCanPlay, NoStreams, patient, pickFormat, playableStreams, preferred, reasonInLanguage, sabrStreams, Storyboard, storyboardFrame, streams, Streams, streamsFailure, stuckFor, unanswered } from '../api/streams.js';
 import { watchLaterAdd } from '../api/menu.js';
 import { channelPicture, run, watchInfo, WatchInfo } from '../api/watch.js';
 import { FillLoader } from '../ui/fill-loader.js';
@@ -113,8 +113,9 @@ var STEADY_MS = 60000;
 var QUALITY_SWITCH_S = 10;
 /** The same for a preview taken over full screen (its buffer is short: less to play at the preview's quality) */
 var TAKEOVER_SWITCH_S = 8;
-/** Quality on Auto stepping down with less buffered than this (s) starts anew in the lower quality (an in-place switch
- * waits for the engine's SWITCH_MIN_S of the old one: slow where the connection is) */
+/** Quality on Auto stepping down with less buffered than this (s) takes the lower quality where what is loaded ends
+ * (the switch at its usual place waits for the engine's SWITCH_MIN_S of the old one: slow where the connection is;
+ * a start anew there blanks the screen) */
 var AUTO_SWITCH_S = SWITCH_MIN_S + 1;
 /** A video the viewer closed (Back, its channel page) is kept this long to resume as it was */
 var LEFT_MS = 60000;
@@ -1430,12 +1431,14 @@ export class OwnPlayer {
     }
 
     /** The playlist the video plays from as a strip or at the side (Settings › Playlist in the player; at the side when
-     * it says neither), the focus in it (already shown: as it is) */
+     * it says neither), the focus in it; already shown: closed (the shortcut's key toggles it) */
     private showList(): void {
         var list = this.listNow;
-        if (!list) {
+        if (this.listPanel.shown) {
+            this.listPanel.close();
+        } else if (!list) {
             toast(tr('This video does not play from a playlist'), 'playlist');
-        } else if (!this.listPanel.shown) {
+        } else {
             this.watch.hide();
             this.osd.hide();
             this.listPanel.open(prefs().listDown === 'strip' ? 'strip' : 'side', list, (this.want as Want).id, true);
@@ -2332,7 +2335,7 @@ export class OwnPlayer {
             } else if (!why && (noneCanPlay(e) || e.refused)) {
                 self.cannotPlay(want.id, e);
             } else {
-                self.fallback((why ? why + '; then ' : '') + (e.reason || e.status));
+                self.fallback((why ? why + '; then ' : '') + (e.reason || e.status), e);
             }
         });
     }
@@ -2355,7 +2358,8 @@ export class OwnPlayer {
         var self = this;
         reasonInLanguage(id, e).then(function (reason) {
             if (gen === self.gen) {
-                toast(reason ? tr('This video cannot be played: {1}', reason) : tr('This video cannot be played.'), undefined, PROBLEM);
+                // (the player closed, the page it came from shows under it: a long reason stays long enough to read)
+                toast(cannotPlayText(reason), undefined, PROBLEM);
             }
         });
     }
@@ -2490,6 +2494,11 @@ export class OwnPlayer {
     /** Play the format from t (stops the previous engine; the position is want.t until the picture moves) */
     private playFormat(video: Format, t: number): void {
         var self = this;
+        // Its own picture was moving: a start anew of the video on screen (another codec, an audio track of another
+        // type, a way out of a failure)
+        var anew = this.moving;
+        // Just past a skipped part (an intro, pastSkipped): its tail from the keyframe before t not shown
+        var past = this.segments.some(function (s, i) { return self.skipped[i] && s.end === t; });
         if (this.engine) {
             this.engine.stop();
         }
@@ -2498,8 +2507,11 @@ export class OwnPlayer {
         }
         this.moving = false;
         this.format = video;
-        // Displayed once it plays (a cover fading meanwhile stays for it)
-        this.video.style.display = 'none';
+        // Displayed once it plays (a cover fading meanwhile stays for it). A start anew stays displayed: the TV's video
+        // plane keeps the picture it showed last until the new one plays, where hidden the screen is black meanwhile
+        if (!anew || past) {
+            this.video.style.display = 'none';
+        }
         if (this.coverOut) {
             clearTimeout(this.coverTimer);
             this.fadeCover(false);
@@ -2508,9 +2520,8 @@ export class OwnPlayer {
         var engine: Engine = this.engine = engineFor(this.video, this.streams, function (why) { self.engineFailed(engine, why); });
         this.skipsFor(engine);
         engine.load(video, this.audioFormat() as Format, t);
-        // Just past a skipped part (an intro, pastSkipped): its tail from the keyframe before t not shown
         this.unhide(false);
-        if (this.segments.some(function (s, i) { return self.skipped[i] && s.end === t; })) {
+        if (past) {
             this.hide(t);
         }
         // A new start: fall back to YouTube's player if it does not play
@@ -2870,9 +2881,9 @@ export class OwnPlayer {
     /** Hand over to YouTube's player from the current position; where it cannot run (webOS TV 2.x: tv-app.ts) the
      * player closes as for Back. With Settings › Fall back to YouTube's player off nothing is handed over: the video
      * stays here, stopped (needsYouTube) */
-    private fallback(why: string): void {
+    private fallback(why: string, e?: NoStreams): void {
         if (!prefs().fallbackPlayer) {
-            this.needsYouTube(why);
+            this.needsYouTube(why, e);
             return;
         }
         var want = this.close();
@@ -2883,7 +2894,8 @@ export class OwnPlayer {
         }
         noteFallback(want.id, want.title, why);
         if (this.onFallback(want.id, want.t)) {
-            toast(tr('Bolli\'s player cannot play this ({1}): YouTube\'s player takes over.', why), undefined, PROBLEM);
+            // (the reason in the play log: noteFallback; YouTube's own, where its player refuses too, said by it: tv-app.ts)
+            toast(tr('Bolli\'s player cannot play this video: YouTube\'s player takes over.'), undefined, PROBLEM);
         } else {
             toast(tr('Bolli\'s player cannot play this video, and YouTube\'s player does not run on this TV.'), undefined, PROBLEM);
             this.onClosed();
@@ -2893,18 +2905,34 @@ export class OwnPlayer {
     /** A video that cannot be played here (why) while YouTube's player is not to take over: nothing closes, the video
      * stands where it was with its engine stopped, a toast says what it takes, and the info bar stays up with what OK
      * does now: try it again (tryAgain) */
-    private needsYouTube(why: string): void {
+    private needsYouTube(why: string, e?: NoStreams): void {
         var want = this.want;
         if (!want) {
             return;
         }
+        var id = want.id;
+        var self = this;
         this.halt();
+        // (after the halt: it moves the generation on)
+        var gen = this.gen;
         awaitLine(false);
         note('stopped', want.id + ' at ' + want.t.toFixed(1) + ': ' + why + ' (not handed to YouTube\'s player: Settings)');
         this.stopped = true;
         this.loaderDone = true;
         this.loader.hide();
-        toast(tr('This video needs YouTube\'s player. Turn on Settings › Playback › Fall back to YouTube\'s player to play it.'), undefined, PROBLEM);
+        // YouTube's reason where it is the video's own (members-only, an age check: YouTube's player may still play it,
+        // signed in its own way), in the app's language, before what the setting takes
+        var reason = e && aboutTheVideo(e) && !noneCanPlay(e) ? reasonInLanguage(id, e).then(function (said) {
+            return said || e.first || e.reason || '';
+        }, function () { return ''; }) : Promise.resolve('');
+        reason.then(function (said) {
+            if (gen !== self.gen) {
+                return;
+            }
+            var text = said ? tr('{1} Turn on Settings › Playback › Fall back to YouTube\'s player to try it there.', said) :
+                tr('This video needs YouTube\'s player. Turn on Settings › Playback › Fall back to YouTube\'s player to play it.');
+            toast(text, undefined, PROBLEM);
+        });
         this.osd.setMessage(tr('Press OK to try again.'));
         this.showOsd(false);
         this.onChange();
@@ -3424,7 +3452,7 @@ export class OwnPlayer {
     }
 
     /** Quality on Auto follows the connection (AutoQuality): one step down or up in the playing codec, in place; a step
-     * down with too little buffered for that (a stall) starts anew there in the lower quality */
+     * down with little buffered takes the lower quality from the end of what is loaded */
     private autoStep(): void {
         var f = this.format;
         var s = this.streams;
@@ -3450,11 +3478,7 @@ export class OwnPlayer {
         }
         this.auto.stepped(now);
         note('auto quality', f.height + 'p' + f.fps + ' -> ' + to.height + 'p' + to.fps + ', ahead ' + ahead.toFixed(1) + ' s');
-        if (step < 0 && ahead < AUTO_SWITCH_S) {
-            this.playFormat(to, this.position());
-            return;
-        }
-        engine.switchVideo(to, step < 0 ? undefined : QUALITY_SWITCH_S, step > 0);
+        engine.switchVideo(to, step < 0 ? undefined : QUALITY_SWITCH_S, step > 0, step < 0 && ahead < AUTO_SWITCH_S);
         this.format = to;
     }
 

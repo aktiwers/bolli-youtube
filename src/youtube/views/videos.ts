@@ -1,7 +1,8 @@
 // Video rows right of the rail: YouTube's shelves (api/feed.ts) as tile rows
 // in a row stack. FeedView is a screen fetched when first shown (Home,
 // Subscriptions, Library, a page opened from a tile); a long list (History,
-// a playlist) shows as a grid, a page's tabs as pills. More loads as focus
+// a playlist) shows as a grid, a page's tabs as pills; Subscriptions' videos
+// are a grid under YouTube's first row (Shelf.feed). More loads as focus
 // nears an end. Cached rows (api/kept-rows.ts) show at once while fresh ones
 // load; fresh rows replace them only while a video covers the screen or it
 // is hidden, keeping focus on the same video. Rows older than REFRESH_MS are
@@ -15,7 +16,7 @@ import { mark } from '../core/perf.js';
 import { afterClick, takesPointer, toPart } from '../core/pointer.js';
 import { View } from '../core/view.js';
 import { RowStack } from '../ui/row-stack.js';
-import { TileItem, TileRow } from '../ui/tile-row.js';
+import { ROOM_ABOVE, TileItem, TileRow } from '../ui/tile-row.js';
 import { keepTab, keptTab, keptTabs, more, Nudge, PageButton, PlaylistInfo, Rows, Shelf, Tab, Video } from '../api/feed.js';
 import { prefs } from '../api/prefs.js';
 import { Pills } from '../ui/pills.js';
@@ -96,6 +97,13 @@ function idsOf(shelves: Shelf[]): string {
     return shelves.map(function (s) {
         return s.videos.map(function (v) { return v.id; }).join(',');
     }).join('|');
+}
+
+/** The shelf drawn as a grid's lines: a page's one long list, or (led: the view places such lines, FeedOptions.lines)
+ * a screen's own videos under the row its first shelf is (Shelf.feed); null: rows */
+function linesOf(shelves: Shelf[], led: boolean): Shelf | null {
+    var last = shelves[shelves.length - 1];
+    return last && last.grid && (shelves.length === 1 || led && shelves.length === 2 && !!last.feed && !shelves[0].grid) ? last : null;
 }
 
 /** YouTube's search bar (OK opens Search) with its microphone beside it. The microphone can be focused where the
@@ -201,6 +209,10 @@ export class FeedHost {
         this.feed.renewIfOld();
     }
 
+    renewInFront(): void {
+        this.feed.renewInFront();
+    }
+
     prepare(): void {
         this.feed.prepare();
     }
@@ -238,6 +250,11 @@ export interface KeptFeed {
 export interface FeedOptions {
     /** The cached rows (null: none) */
     kept?: () => KeptFeed | null;
+    /** The rows shown (the cached ones, or the screen's own grown old) are the list as it was, or its first videos,
+     * shown ahead of the list the screen loads: that list is laid against them as soon as it comes, in view or not.
+     * Where it begins as they do nothing in sight is drawn anew (what it has more is added); where it differs it is
+     * drawn in their place, at once unless the keys are in the videos (then once out of view, as any fresh rows) */
+    early?: boolean;
     /** Rows this old are refreshed behind the ones shown (default REFRESH_MS) */
     refreshMs?: number;
     /** Fresh rows that differ from the ones shown replace them at once while the focus is not in the rows (a channel's
@@ -265,6 +282,29 @@ export interface FeedOptions {
     spacing?: RowSpacing;
     /** A playlist's videos were drawn while it shows (its frame's preview starts after the rest, as after a key) */
     onList?: () => void;
+    /** A grid's lines placed as Subscriptions' in YouTube's TV app, not as a page's grid (the screen may change the
+     * places while it lives: laidOut) */
+    lines?: FeedLines;
+    /** More is asked for only as the focus moves in the rows, never because they were drawn or came back in sight (a
+     * channel's list in Subscriptions, drawn while the focus rests on the channel: no request for lines that may
+     * never be looked at) */
+    idle?: boolean;
+    /** Its rows, or what stands in their place, were drawn */
+    onDrawn?: () => void;
+    /** Its videos are all one channel's (a channel's list in Subscriptions): their tiles do not name it */
+    oneChannel?: boolean;
+    /** More of a screen's own grid came (Shelf.feed): told before their tiles are made, so the screen can put the
+     * videos right as it did the first part's */
+    onPart?: (videos: Video[]) => void;
+}
+
+/** Where a grid's lines stand: `pitch` apart, the focused one's tiles at `top`; a row above them (Shelf.feed) has
+ * its tiles `head` under its name, which is at `rowTop` while that row is focused */
+export interface FeedLines {
+    pitch: number;
+    top: number;
+    rowTop: number;
+    head: number;
 }
 
 export interface FeedTexts {
@@ -281,6 +321,10 @@ export class FeedView implements View {
     /** A grid's title above its first line, with its tabs beside it */
     private heading: HTMLElement;
     private headingText: HTMLElement;
+    /** A page's grid: a band in the screen's colour under its title and buttons, over the lines that have scrolled up
+     * (shown: it is there) */
+    private pageTop: HTMLElement;
+    private pageTopShown = false;
     private tabsEl: HTMLElement;
     private tabs: Tab[] = [];
     /** The rows another tab brought (openTab), until they are drawn: not kept again as a page's would be */
@@ -334,6 +378,10 @@ export class FeedView implements View {
     /** Told of a playlist's videos added (its next part: their ids in the order they play, and the videos; main.ts adds
      * them to the queue played from it) */
     added: ((ids: string[], videos: Video[]) => void) | null = null;
+    /** The grid has a row above its lines (Shelf.feed: the stack's first row), and the videos in its lines (null: a
+     * grid that may list one twice, as a playlist does) */
+    private led = false;
+    private inLines: { [id: string]: boolean } | null = null;
     /** The column kept by Up/Down in a grid */
     private col = 0;
     /** Incremented on every fetch, so a late reply for an older one is dropped */
@@ -350,6 +398,9 @@ export class FeedView implements View {
     /** Showing older rows (cached or aged) while fresh ones load or wait to replace them */
     private stale = false;
     private fresh: { rows: Rows | null; at: number } | null = null;
+    /** The app came to the front and no key has come since: fresh rows that arrive take the shown ones' place at
+     * once (the viewer has not begun to move on the old ones) */
+    private atOnce = false;
     /** Cached rows shown before the account check has confirmed them */
     private unchecked: KeptFeed | null = null;
     /** A video covers the screen */
@@ -366,6 +417,7 @@ export class FeedView implements View {
         this.tiles.pad = opts.pad || 0;
         this.tiles.big = !!opts.big;
         this.tiles.spacing = opts.spacing || null;
+        this.tiles.oneChannel = !!opts.oneChannel;
         var self = this;
         this.tiles.shown = function () { return self.stack.rows; };
         // Shelves added while fresh rows wait come from their token: they continue the fresh rows (kept when those
@@ -388,6 +440,8 @@ export class FeedView implements View {
         this.heading.appendChild(this.headingText);
         this.heading.appendChild(this.tabsEl);
         setShown(this.heading, false);
+        this.pageTop = h('div', 'by-page-top');
+        this.el.appendChild(this.pageTop);
         this.el.appendChild(this.heading);
         this.byline = h('div', 'by-page-byline');
         this.el.appendChild(this.byline);
@@ -395,6 +449,9 @@ export class FeedView implements View {
         this.el.appendChild(this.buttonsEl);
         if (opts.big) {
             this.el.className += ' bd-page--big';
+        }
+        if (opts.oneChannel) {
+            this.el.className += ' bd-page--channel';
         }
         if (opts.page) {
             this.el.className += ' bd-page--page';
@@ -439,6 +496,14 @@ export class FeedView implements View {
         } else {
             this.renewIfOld(rest);
         }
+    }
+
+    /** The app has come back to the front: old rows are refetched, and the fresh ones are drawn as soon as they come
+     * unless a key came first (then once out of view, as ever). So nothing needs to be asked for while the app is
+     * out of sight for the rows to be new when it is opened */
+    renewInFront(): void {
+        this.atOnce = true;
+        this.renewIfOld();
     }
 
     /** Refetches old rows behind the ones shown (swapped in once out of view) */
@@ -551,15 +616,46 @@ export class FeedView implements View {
             this.taken();
             return;
         }
-        // Rebuild its line and the following ones, shifted one tile back (the full lines before it stay)
+        var self = this;
         var stack = this.stack;
-        var line = this.rowOf(id);
-        if (line < 0) {
+        // The row above the lines: made anew without it (gone with its last tile), the focus on the tile now in its
+        // place. From the tiles the row has: Paging adds a row's next tiles to the row, not to its shelf (Paging.drop
+        // reads them the same way)
+        var lead = this.led ? stack.rows[0] : null;
+        var gone = lead ? lead.items.map(function (item) { return item.id; }).indexOf(id) : -1;
+        if (lead && gone >= 0) {
+            var shelf = this.paging.shelves[0];
+            shelf.videos = lead.items.filter(function (item) { return item.id !== id; })
+                .map(function (item) { return self.tiles.video(item) as Video; }).filter(function (v) { return !!v; });
+            if (shelf.videos.length) {
+                var row = this.tiles.above(shelf, (this.opts.lines as FeedLines).head);
+                stack.replace(lead, row);
+                row.focusAt(Math.min(lead.index > gone ? lead.index - 1 : lead.index, row.count - 1));
+                stack.focusRow(stack.index);
+            } else {
+                stack.remove(lead);
+                this.paging.shelves = [];
+                this.led = false;
+            }
+        }
+        this.removeTile(id);
+        this.taken();
+    }
+
+    /** Removes video id's tile from a grid's lines: its line and the following ones are built anew, shifted one tile
+     * back (the full lines before it stay), the focus on the tile now in the same place */
+    private removeTile(id: string): void {
+        var stack = this.stack;
+        var first = this.led ? 1 : 0;
+        var line = this.rowOf(id, first);
+        if (line < 0 || !this.grid) {
             return;
         }
-        var perLine = stack.rows[0].count;
-        var before = line * perLine;
-        var at = stack.index * perLine + (stack.row ? stack.row.index : 0);
+        var perLine = stack.rows[first].count;
+        var before = (line - first) * perLine;
+        // (the focus in the row above stays there)
+        var inLines = stack.index >= first;
+        var at = (stack.index - first) * perLine + (stack.row ? stack.row.index : 0);
         var items: TileItem[] = [];
         for (var k = line; k < stack.rows.length; k++) {
             items = items.concat(stack.rows[k].items);
@@ -571,13 +667,12 @@ export class FeedView implements View {
         stack.setRows(stack.rows.slice(0, line));
         this.addLines(items);
         // Focus the tile now in the same position
-        var focusLine = Math.floor(at / perLine);
-        if (stack.rows[focusLine]) {
+        var focusLine = first + Math.floor(at / perLine);
+        if (inLines && stack.rows[focusLine]) {
             stack.rows[focusLine].focusAt(at % perLine);
             this.col = at % perLine;
             stack.focusRow(focusLine);
         }
-        this.taken();
     }
 
     /** After a tile is removed: scrolls to the focus; with no rows left, shows the empty message */
@@ -617,6 +712,7 @@ export class FeedView implements View {
     }
 
     onKey(code: number): boolean {
+        this.atOnce = false;
         if (this.at === 'tabs') {
             return this.tabKey(code);
         }
@@ -637,8 +733,9 @@ export class FeedView implements View {
             case KEY.LEFT:
             case KEY.RIGHT:
                 if (!row || !row.move(code === KEY.LEFT ? -1 : 1)) {
-                    // Right at a grid line's end continues at the next line's start; Left at its start goes to the rail
-                    if (code === KEY.RIGHT && this.grid && !this.list && this.stack.move(1)) {
+                    // Right at a grid line's end continues at the next line's start (not from the row above the lines);
+                    // Left at its start goes to the rail
+                    if (code === KEY.RIGHT && this.grid && !this.list && !this.onLead() && this.stack.move(1)) {
                         this.col = 0;
                         (this.stack.row as TileRow).focusAt(0);
                         this.place();
@@ -662,8 +759,10 @@ export class FeedView implements View {
                 return true;
             case KEY.UP:
             case KEY.DOWN:
-                // (rows: the tile straight above or below; a grid's lines keep their column, below)
-                if (!(this.grid ? this.stack.move(code === KEY.UP ? -1 : 1) : this.stack.moveStraight(code === KEY.UP ? -1 : 1))) {
+                // (rows: the tile straight above or below, also between a grid's lines and the row above them; the
+                // lines keep their column, below)
+                var straight = !this.grid || this.led && this.stack.index + (code === KEY.UP ? -1 : 0) === 0;
+                if (!(straight ? this.stack.moveStraight(code === KEY.UP ? -1 : 1) : this.stack.move(code === KEY.UP ? -1 : 1))) {
                     // Up from a grid's first line: its tabs or buttons; from the first row: the search bar
                     if (code === KEY.UP && this.grid && this.tabPills.count) {
                         this.focusTabs(true);
@@ -683,7 +782,10 @@ export class FeedView implements View {
                     }
                     return false;
                 }
-                if (this.grid && this.stack.row) {
+                if (this.grid && straight) {
+                    // (onto the lines from the row above them: the column of the tile reached)
+                    this.col = this.onLead() ? this.col : (this.stack.row as TileRow).index;
+                } else if (this.grid && this.stack.row) {
                     this.stack.row.focusAt(this.col);
                 }
                 this.place();
@@ -792,10 +894,10 @@ export class FeedView implements View {
         return this.list ? this.stage : null;
     }
 
-    /** The row (one video to a line in a playlist) that has video id (-1: none) */
-    private rowOf(id: string): number {
+    /** The row (one video to a line in a playlist) that has video id, looked for from row `from` on (-1: none) */
+    private rowOf(id: string, from?: number): number {
         var rows = this.stack.rows;
-        for (var r = 0; r < rows.length; r++) {
+        for (var r = from || 0; r < rows.length; r++) {
             if (rows[r].items.some(function (item) { return item.id === id; })) {
                 return r;
             }
@@ -838,6 +940,16 @@ export class FeedView implements View {
         return this.stack.index;
     }
 
+    /** The focus is on the row above a grid's lines (Shelf.feed) */
+    private onLead(): boolean {
+        return this.led && this.stack.index === 0;
+    }
+
+    /** The places its options give have changed (FeedOptions.lines: Subscriptions' other layout): the rows go there */
+    laidOut(): void {
+        this.place();
+    }
+
     /** Shows rows at once in place of the current ones (a filter of its rows: Subscriptions' pills); waiting fresh
      * rows count as shown, and a fetch in flight still arrives */
     showRows(rows: Rows): void {
@@ -847,6 +959,16 @@ export class FeedView implements View {
             this.stale = false;
         }
         this.draw(rows);
+        this.toFirst();
+    }
+
+    /** Its focused row has big tiles (opts.big: Home, if chosen) */
+    get big(): boolean {
+        return !!this.opts.big;
+    }
+
+    /** The focus on the first row, the rows back at their top (a screen laid out anew: Subscriptions' other layout) */
+    toFirst(): void {
         this.stack.focusRow(0);
         this.place();
     }
@@ -1056,7 +1178,7 @@ export class FeedView implements View {
     }
 
     /** Refetches the rows from a new load (e.g. a filter was picked) */
-    reloadAs(load: () => Promise<Rows | null>): void {
+    reloadAs(load: (renew?: boolean) => Promise<Rows | null>): void {
         this.load = load;
         this.at = 'rows';
         this.reload();
@@ -1250,14 +1372,35 @@ export class FeedView implements View {
                 self.fetchedAt = Date.now();
                 return;
             }
+            // Videos shown ahead of their list (opts.early): the list now. The same as far as it goes: nothing is drawn
+            // anew; another: in their place, unless the keys are in them (it then waits as fresh rows do, below)
+            if (self.stale && self.hasRows && self.opts.early) {
+                if (rows && self.extend(rows)) {
+                    self.stale = false;
+                    // (a list kept a while, old already: refetched behind it, as rows from the cache are below)
+                    if (self.shown) {
+                        self.renewIfOld();
+                    }
+                    return;
+                }
+                if (!(self.focused && self.at === 'rows')) {
+                    self.stale = false;
+                    self.drawFresh(rows, rows ? rows.at : undefined);
+                    return;
+                }
+            }
             // Cached content without rows (only YouTube's message) is replaced at once
             if (self.stale && self.hasRows) {
                 self.fresh = { rows: rows, at: Date.now() };
-                // Until they are swapped in, more shelves come from the fresh rows' token
+                // Until they are swapped in, more shelves come from the fresh rows' token (a screen's own grid: more
+                // of its lines)
+                var lines = rows ? linesOf(rows.shelves, !!self.opts.lines) : null;
                 if (!self.grid) {
                     self.paging.setNext(rows ? rows.next : '');
+                } else if (self.grid.feed && lines && lines.feed) {
+                    self.paging.setNext(lines.next || '');
                 }
-                self.freshen(self.freshNow());
+                self.freshen(self.freshNow() || self.atOnce);
             } else {
                 self.stale = false;
                 self.drawFresh(rows, rows ? rows.at : undefined);
@@ -1288,6 +1431,38 @@ export class FeedView implements View {
         });
     }
 
+    /** rows are the list the videos shown belong to (opts.early). Where the two begin alike, as far as the shorter
+     * goes, what is shown stays as it is (true): videos the list has more are added as more lines and its token for
+     * more taken; shown ones it does not reach (more of it was loaded here since) stay. False where they differ */
+    private extend(rows: Rows): boolean {
+        var grid = this.grid;
+        var got = linesOf(rows.shelves, !!this.opts.lines);
+        if (!grid || !grid.feed || this.led || this.list || !got || !got.feed || rows.shelves.length !== 1) {
+            return false;
+        }
+        var had = grid.videos;
+        for (var i = 0; i < had.length && i < got.videos.length; i++) {
+            if (had[i].id !== got.videos[i].id) {
+                return false;
+            }
+        }
+        this.unchecked = null;
+        if (got.videos.length >= had.length) {
+            var more = got.videos.slice(had.length);
+            grid.videos = had.concat(more);
+            grid.next = got.next;
+            this.paging.setNext(got.next || '');
+            if (more.length) {
+                this.addLines(this.tiles.items(this.once(more)));
+            }
+        }
+        this.fetchedAt = rows.at || Date.now();
+        if (this.opts.onDrawn) {
+            this.opts.onDrawn();
+        }
+        return true;
+    }
+
     /** Draws fresh rows in place of the current ones */
     private drawFresh(rows: Rows | null, at?: number): void {
         this.unchecked = null;
@@ -1305,7 +1480,7 @@ export class FeedView implements View {
     /** Prefetches rows ahead of the focus, only while the rows are fresh and visible (not cached rows, whose token is
      * old; not behind a video or with the app in the background) */
     private aheadInSight(): void {
-        if (this.shown && !this.covered && !document.hidden && !this.stale) {
+        if (this.shown && !this.covered && !document.hidden && !this.stale && !this.opts.idle) {
             this.paging.ahead(this.stack, false);
         }
     }
@@ -1356,26 +1531,29 @@ export class FeedView implements View {
         var video = this.tiles.video(row ? row.focused : null);
         var id = video ? video.id : '';
         var put = fresh.rows;
+        // (the focus in a grid's lines: under the row above them, which may show the same video)
+        var inLines = !!this.grid && !this.onLead();
         if (put && video && (id === this.played || this.covered) && !this.freshVideo(row!.focused)) {
             var place = row!.index;
-            for (var k = 0; this.grid && k < this.stack.index; k++) {
+            for (var k = this.led ? 1 : 0; inLines && k < this.stack.index; k++) {
                 place += this.stack.rows[k].count;
             }
-            put = withVideo(put, video, this.grid ? 0 : this.stack.index, place);
+            put = withVideo(put, video, inLines ? put.shelves.length - 1 : this.stack.index, place);
         }
         this.fresh = null;
         this.stale = false;
         this.drawFresh(put, fresh.at);
         var rows = this.stack.rows;
         var at = 0;
-        for (var r = 0; r < rows.length && id; r++) {
-            var i = rows[r].items.map(function (item) { return item.id; }).indexOf(id);
-            if (i >= 0) {
-                at = r;
-                rows[r].focusAt(i);
-                this.col = i;
-                break;
-            }
+        var found = id ? this.rowOf(id, inLines && this.led ? 1 : 0) : -1;
+        if (found < 0 && id) {
+            found = this.rowOf(id);
+        }
+        if (found >= 0) {
+            var i = rows[found].items.map(function (item) { return item.id; }).indexOf(id);
+            at = found;
+            rows[found].focusAt(i);
+            this.col = i;
         }
         this.stack.focusRow(at);
         this.place();
@@ -1413,7 +1591,9 @@ export class FeedView implements View {
         var self = this;
         var shelves = rows ? rows.shelves : [];
         var empty = !self.hasRows;
-        var grid = shelves.length === 1 && shelves[0].grid ? shelves[0] : null;
+        var grid = linesOf(shelves, !!self.opts.lines);
+        // (a screen's own grid: YouTube's first shelf a row above its lines)
+        var lead = grid && shelves.length === 2 ? shelves[0] : null;
         var list = !!grid && grid.style === 'list';
         // A playlist's frame and details, under and over its list
         if (list && !self.stage) {
@@ -1426,6 +1606,8 @@ export class FeedView implements View {
             self.stack = self.newStack(!!grid);
         }
         self.grid = grid;
+        self.led = !!lead;
+        self.inLines = grid && grid.feed ? {} : null;
         toggleClass(self.el, 'bd-page--list', list);
         self.chart = list && !!rows && !!rows.chart;
         self.playlistId = rows && rows.playlistId || '';
@@ -1459,13 +1641,22 @@ export class FeedView implements View {
             self.goTo('back');
         }
         if (grid) {
-            self.paging.set([], grid.next || '', function (videos) {
-                self.addLines(self.tiles.items(videos));
+            self.paging.set(lead ? [lead] : [], grid.next || '', function (videos, next) {
+                if (grid!.feed && self.opts.onPart) {
+                    self.opts.onPart(videos);
+                }
+                // (while fresh rows wait: more of their lines too, kept when they replace the ones shown)
+                var waiting = self.fresh && self.fresh.rows ? linesOf(self.fresh.rows.shelves, true) : null;
+                if (waiting && waiting.feed && grid!.feed) {
+                    waiting.videos = waiting.videos.concat(videos);
+                    waiting.next = next;
+                }
+                self.addLines(self.tiles.items(self.once(videos)));
                 self.more(videos);
-            });
-            self.stack.setRows([]);
+            }, grid.feed);
             self.tiles.reset();
-            self.addLines(self.tiles.items(grid.videos));
+            self.stack.setRows(lead ? [self.tiles.above(lead, (self.opts.lines as FeedLines).head)] : []);
+            self.addLines(self.tiles.items(self.once(grid.videos)));
         } else {
             self.paging.set(shelves, rows ? rows.next : '');
             self.stack.setRows(self.tiles.rows(shelves, true));
@@ -1485,12 +1676,16 @@ export class FeedView implements View {
         if (list && self.shown && self.hasRows && self.opts.onList) {
             self.opts.onList();
         }
+        if (self.opts.onDrawn) {
+            self.opts.onDrawn();
+        }
     }
 
     private newStack(grid: boolean): RowStack {
         var m = metrics();
-        var stack = new RowStack('bd-page-content', this.list ? m.list.pitch : grid ? m.gridPitch :
-            this.opts.spacing ? this.opts.spacing.pitch : rowH(), m.rowsTop);
+        var lines = !this.list && grid ? this.opts.lines : undefined;
+        var stack = new RowStack('bd-page-content', this.list ? m.list.pitch : lines ? lines.pitch : grid ? m.gridPitch :
+            this.opts.spacing ? this.opts.spacing.pitch : rowH(), lines ? lines.top : m.rowsTop);
         if (this.opts.big && !grid) {
             stack.setBig(m.big.h - m.tile.h);
         }
@@ -1518,19 +1713,41 @@ export class FeedView implements View {
             var first = this.stack.rows.length;
             items.forEach(function (item, i) { item.rank = String(first + i + 1); });
         }
-        var last = this.stack.rows[this.stack.rows.length - 1];
+        // (the row above the lines is none of them)
+        var last = this.stack.rows.length > (this.led ? 1 : 0) ? this.stack.rows[this.stack.rows.length - 1] : null;
         var fill = last ? Math.min(perLine - last.count, items.length) : 0;
-        if (fill > 0) {
+        if (last && fill > 0) {
             last.append(items.slice(0, fill));
         }
         this.stack.addAll(gridLines(items.slice(fill), perLine, shape, layout));
     }
 
+    /** Of videos, those a screen's own grid does not show yet (Shelf.feed: a part may repeat what an earlier one had),
+     * noted as shown; any other grid: all of them */
+    private once(videos: Video[]): Video[] {
+        var shown = this.inLines;
+        return !shown ? videos : videos.filter(function (v) {
+            var fresh = !shown![v.id];
+            shown![v.id] = true;
+            return fresh;
+        });
+    }
 
     /** Scrolls so the focused row's heading sits at the theme's rowsTop (for a grid: its title, first line below) */
     private place(): void {
         var m = metrics();
-        // A page's grid: title at the top, grid below (as on YouTube)
+        // Subscriptions' grid: the focused line's tiles at their place, the row above the lines by its name
+        var lines = this.opts.lines;
+        if (lines && this.grid && !this.list) {
+            translate(this.stack.el, 0, (this.onLead() ? lines.rowTop : lines.top) - this.stack.top);
+            return;
+        }
+        var paged = !!this.opts.page && !this.list && (!!this.grid || !!this.emptyEl.firstChild);
+        if (paged !== this.pageTopShown) {
+            this.pageTopShown = paged;
+            this.pageTop.style.height = m.page.gridTop - ROOM_ABOVE + 'px';
+            this.pageTop.style.display = paged ? 'block' : '';
+        }
         // A playlist: the side column stays; the list scrolls once focus is past its second line (as on YouTube)
         if (this.list) {
             translate(this.heading, 0, m.list.title);
@@ -1539,10 +1756,11 @@ export class FeedView implements View {
             this.showStage();
             return;
         }
-        // Title and buttons scroll with the grid so they never overlap its tiles (also an empty page's title)
-        if (this.opts.page && (this.grid || this.emptyEl.firstChild)) {
-            translate(this.heading, 0, m.page.top - this.stack.top);
-            translate(this.buttonsEl, 0, -this.stack.top);
+        // A page's grid: its title and buttons stay at the top, the grid scrolls under them, the lines that have
+        // scrolled up out of sight under the band (as on YouTube); also an empty page's title
+        if (paged) {
+            translate(this.heading, 0, m.page.top);
+            translate(this.buttonsEl, 0, 0);
             translate(this.stack.el, 0, m.page.gridTop - this.stack.top);
             return;
         }

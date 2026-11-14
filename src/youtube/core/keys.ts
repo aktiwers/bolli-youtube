@@ -58,6 +58,16 @@ var okTimer = 0;
 var okHeld = false;
 /** When a key last reached the app (keyCame; the app's start before any) */
 var keyAt = Date.now();
+/** Whether the key being handled is a press of its own, not a held key's repeat nor one of quick taps (ownPress):
+ * another key than the last, or the same let go since, and OWN_STEP_MS after the key before. A held key sends keydowns
+ * without keyups (its first repeat ~0.4-0.5 s after the press, then ~0.12 s apart on the TV), so a time between them
+ * alone cannot tell the first repeat from a press; quick taps pass by what they land on, as a held key does */
+var own = true;
+var OWN_STEP_MS = 250;
+/** What a press of its own lands on is asked for this long after it: right after the frame that moves the focus */
+export var ASK_MS = 40;
+/** The key let go since its last press (a keyup came) */
+var released = true;
 
 export function setActive(handler: KeyHandler): void {
     active = handler;
@@ -118,6 +128,12 @@ export function keyCame(): void {
     keyAt = Date.now();
 }
 
+/** Whether the key being handled (or the last one) was a press of its own, not a held key's repeat: what it moved the
+ * focus onto is asked for at once (a held key asks for nothing until the focus rests) */
+export function ownPress(): boolean {
+    return own;
+}
+
 /** When a key last reached the app (ms, as Date.now): screens wait for keys to rest (main.ts), History's reports say
  * how long ago (api/stats.ts, as YouTube's TV app does) */
 export function lastKeyAt(): number {
@@ -143,6 +159,9 @@ function down(code: number): boolean {
 }
 
 function up(code: number): boolean {
+    if (code === lastCode) {
+        released = true;
+    }
     if (code !== KEY.OK || !okDown) {
         return false;
     }
@@ -159,6 +178,8 @@ function press(code: number): boolean {
     if (code === lastCode && now - lastTime < REPEAT_MS) {
         return true;
     }
+    own = (released || code !== lastCode) && now - lastTime >= OWN_STEP_MS;
+    released = false;
     lastCode = code;
     lastTime = now;
     var used = active ? active.onKey(code) : false;

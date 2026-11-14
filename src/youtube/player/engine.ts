@@ -24,8 +24,9 @@ export interface Engine {
      * false if the formats differ (or the engine does not support it) */
     renew?(video: Format, audio: Format): boolean;
     /** Switches a format in place, about ahead s ahead of the playhead (an engine without: the player restarts);
-     * soon: the video as near as the TV allows, the new format's first part fetched before the old one goes */
-    switchVideo?(f: Format, ahead?: number, soon?: boolean): void;
+     * soon: the video as near as the TV allows, the new format's first part fetched before the old one goes; after:
+     * the video where what is loaded ends, nothing more of the old format fetched than the segment it is in */
+    switchVideo?(f: Format, ahead?: number, soon?: boolean, after?: boolean): void;
     switchAudio?(f: Format, ahead?: number): void;
     /** The parts the player will skip (an engine may load past them) */
     skips?: () => Skip[];

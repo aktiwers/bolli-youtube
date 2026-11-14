@@ -10,7 +10,7 @@ import { clock } from '../core/time.js';
 import { RowStack } from '../ui/row-stack.js';
 import { rowHeight, TileItem, TileLayout, TileRow, TileShape } from '../ui/tile-row.js';
 import { dearrowFetch, dearrowListen, dearrowOn, dearrowPicture, dearrowSettings, dearrowTitle, dearrowWait } from '../api/dearrow.js';
-import { more, pagePicture, Rows, Shelf, thumbnail, thumbnailFallback, Video } from '../api/feed.js';
+import { allVideos, listNext, more, pagePicture, Rows, Shelf, thumbnail, thumbnailFallback, Video } from '../api/feed.js';
 import { NoStreams, streams } from '../api/streams.js';
 import { metrics, RowSpacing, themed, word } from '../ui/theme.js';
 
@@ -76,8 +76,11 @@ export class Paging {
     shelves: Shelf[] = [];
     /** Continuation token for more shelves (for a grid: its next tiles) */
     private next = '';
-    /** Adds a grid's next tiles (null: rows of shelves) */
-    private lines: ((videos: Video[]) => void) | null = null;
+    /** Adds a grid's next tiles, told the token after them (null: rows of shelves) */
+    private lines: ((videos: Video[], next: string) => void) | null = null;
+    /** The grid's next parts are a screen's (Shelf.feed): every shelf of a part is more of its tiles, the token
+     * after them where such a list has it (api/feed.ts listNext) */
+    private whole = false;
     private fetching = false;
     /** Incremented when the rows change, so late replies for old rows are dropped */
     private gen = 0;
@@ -95,12 +98,14 @@ export class Paging {
         this.fetching = false;
     }
 
-    /** Sets the rows shown: their shelves and continuation token (lines: for a grid, adds its tiles) */
-    set(shelves: Shelf[], next: string, lines?: (videos: Video[]) => void): void {
+    /** Sets the rows shown: their shelves and continuation token (lines: for a grid, adds its tiles; shelves are then
+     * the rows above its lines; whole: its parts are a screen's) */
+    set(shelves: Shelf[], next: string, lines?: (videos: Video[], next: string) => void, whole?: boolean): void {
         this.stop();
         this.shelves = shelves;
         this.next = next;
         this.lines = lines || null;
+        this.whole = !!whole;
         this.empties = 0;
     }
 
@@ -142,7 +147,8 @@ export class Paging {
     /** Focus moved in stack (across: within a row): near an end with more available, fetches the next part */
     ahead(stack: RowStack, across: boolean): void {
         var row = stack.row;
-        var shelf = across && !this.lines ? this.shelves[stack.index] : null;
+        // (a grid's lines have no shelf of their own: only a row above them has)
+        var shelf = across ? this.shelves[stack.index] || null : null;
         var token = shelf ? (row && row.index >= row.count - 1 - TILES_AHEAD && shelf.next) || '' :
             stack.index >= stack.rows.length - 1 - (this.lines ? LINES_AHEAD : ROWS_AHEAD) ? this.next : '';
         this.fetch(stack, token, shelf, row);
@@ -167,13 +173,13 @@ export class Paging {
             }
             self.fetching = false;
             var first = rows.shelves[0];
-            if (self.lines) {
-                self.next = first && first.next || rows.next || '';
-                self.lines(first ? first.videos : []);
-            } else if (shelf) {
+            if (shelf) {
                 // The row's next tiles (a search row comes back as a section, whose token may be the section's)
                 shelf.next = first && first.next || rows.next || '';
                 (row as TileRow).append(self.tiles.items(first ? first.videos : []));
+            } else if (self.lines) {
+                self.next = self.whole ? listNext(rows) : first && first.next || rows.next || '';
+                self.lines(self.whole ? allVideos(rows.shelves) : first ? first.videos : [], self.next);
             } else {
                 self.next = rows.next;
                 self.shelves = self.shelves.concat(rows.shelves);
@@ -289,6 +295,8 @@ export class VideoTiles {
     big = false;
     /** Row spacing (null: the theme's lineRows off Home; Home's own) */
     spacing: RowSpacing | null = null;
+    /** The videos are all one channel's (its list in Subscriptions): the tiles do not name it, as YouTube's there */
+    oneChannel = false;
     /** The rows the tiles show in now (the view's: its stack's), which DeArrow's branding goes into as it arrives */
     shown: () => TileRow[] = function () { return []; };
     private videos: { [id: string]: Video } = {};
@@ -317,17 +325,30 @@ export class VideoTiles {
             layout = copied(layout, { rowGap: lines.pitch - layout.head - m.tile.h - layout.under });
         }
         return shelves.map(function (shelf) {
-            noteNewStyles(shelf);
-            // Square tiles (podcasts, releases) or game boxes, as tall as the others (rows keep one height); posters
-            // (Movies) with the focused one wide
-            var shape = shelf.style === 'square' || shelf.style === 'round' ? m.square : shelf.style === 'game' ? m.game : shelf.style === 'poster' ? m.poster : m.tile;
-            return new TileRow({ title: word(shelf.title), subtitle: shelf.subtitle, icon: shelf.icon, shape: shape, layout: shelf.subtitle ? layout : plain,
-                extraHeight: shelf.subtitle && lines ? lines.taller : 0,
-                // (made when the row nears the view: titles are tidied, lengths looked up and DeArrow asked only for
-                // rows that are reached; making every row of a reply at once held the keys ~0.1 s)
-                make: function () { return self.items(shelf.videos); }, noWrap: true, bigShape: self.big && shape === m.tile ? m.big : undefined,
-                wideShape: shape === m.poster ? m.posterWide : undefined, lazy: true });
+            return self.row(shelf, shelf.subtitle ? layout : plain, shelf.subtitle && lines ? lines.taller : 0);
         });
+    }
+
+    /** The row above a grid's lines (Subscriptions' first shelf, views/videos.ts): its tiles `head` under its name,
+     * the row that much taller than a line */
+    above(shelf: Shelf, head: number): TileRow {
+        var m = metrics();
+        return this.row(shelf, copied(m.rows, { pad: this.pad || m.rows.pad, head: head }), head);
+    }
+
+    /** A shelf's row in layout, extra taller than the stack's rows */
+    private row(shelf: Shelf, layout: TileLayout, extra: number): TileRow {
+        var self = this;
+        var m = metrics();
+        noteNewStyles(shelf);
+        // Square tiles (podcasts, releases) or game boxes, as tall as the others (rows keep one height); posters
+        // (Movies) with the focused one wide
+        var shape = shelf.style === 'square' || shelf.style === 'round' ? m.square : shelf.style === 'game' ? m.game : shelf.style === 'poster' ? m.poster : m.tile;
+        return new TileRow({ title: word(shelf.title), subtitle: shelf.subtitle, icon: shelf.icon, shape: shape, layout: layout, extraHeight: extra,
+            // (made when the row nears the view: titles are tidied, lengths looked up and DeArrow asked only for
+            // rows that are reached; making every row of a reply at once held the keys ~0.1 s)
+            make: function () { return self.items(shelf.videos); }, noWrap: true, bigShape: self.big && shape === m.tile ? m.big : undefined,
+            wideShape: shape === m.poster ? m.posterWide : undefined, lazy: true });
     }
 
     /** Forgets the videos of the previous tiles (all are made anew) */
@@ -355,11 +376,11 @@ export class VideoTiles {
                     fallback: page ? page.fallback : thumbnailFallback(v.id) || (branded !== image ? image : ''),
                     wideImage: v.poster ? v.wide || thumbnail(v.id) : undefined,
                     label: labelOf(v), labelIcon: v.labelIcon, stack: v.stack,
-                    lines: [v.channel, themed(v.info)], progress: watched[v.id] ? watched[v.id].progress : v.progress, round: v.round,
+                    lines: self.oneChannel ? [themed(v.info)] : [v.channel, themed(v.info)], progress: watched[v.id] ? watched[v.id].progress : v.progress, round: v.round,
                     // In the theme's wording (e.g. "CC" as YouTube's TV app writes it)
                     chips: v.badges && v.badges.map(word), offerChip: v.offer && word(v.offer)
                 });
-                if (!v.page && !v.poster && !v.live && !v.length) {
+                if (!v.page && !v.poster && !v.live && !v.length && !v.bare) {
                     self.measure(v);
                 }
             }

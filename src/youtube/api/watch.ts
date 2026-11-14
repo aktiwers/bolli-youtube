@@ -9,7 +9,7 @@
 import { knownAvatar, noteAvatar } from './avatars.js';
 import { all, commandsOf, first, get, nextOf, Page, pageOf, picture, rowsOf, text, Video } from './feed.js';
 import { forgetKept, Keeper } from './kept-pages.js';
-import { offThreadJson } from './off-thread.js';
+import { offThread, offThreadJson } from './off-thread.js';
 import { forgetPages } from './page-store.js';
 import { innertube, innertubeText, objectAt } from './youtube.js';
 
@@ -26,6 +26,9 @@ export interface WatchInfo {
     published: string;
     likes: string;
     related: Video[];
+    /** Asked for as one of a phone's queue (watchFrom): the queue's name as YouTube words it, how many videos it has,
+     * and its videos around this one (some twenty, with their titles) */
+    queue?: { title: string; total: number; videos: Video[] };
     /** The video YouTube plays next ('' none) */
     next: string;
     /** Token for the comments ('' none), and their count as YouTube shows it ("25k"; '' none) */
@@ -149,12 +152,37 @@ export interface Comments {
 var infos = new Keeper<WatchInfo>(5 * 60 * 1000, 3, true, true);
 var nextTexts = new Keeper<string>(5 * 60 * 1000, 3, false, true);
 
+/** The phone's queue the videos play from (cast.ts), by video id: its id. A video of it is asked for with the queue
+ * named, and YouTube answers with the queue's videos around it (WatchInfo.queue) in the same reply: the player's
+ * playlist gets its titles at no request of its own */
+var queued: { [id: string]: string } = {};
+
+/** ids play from the phone's queue listId from now on ('' or none: no queue) */
+export function watchFrom(ids: string[], listId: string): void {
+    queued = {};
+    if (listId) {
+        ids.forEach(function (id) { queued[id] = listId; });
+    }
+}
+
+/** The phone's queue around video id (its details asked for with the queue named), for the titles of the queue's
+ * other videos: not through the keepers above, whose few places hold the video playing's details */
+export function queueAround(id: string): Promise<WatchInfo> {
+    var list = queued[id];
+    return list ? offThread(innertubeText('next', { videoId: id, playlistId: list }), 'watch', watchInfoOf) : Promise.reject(new Error('no queue'));
+}
+
+/** What a video's details are kept under: its id, with its queue's (asked for without it, the reply has no queue) */
+function keyOf(id: string): string {
+    return queued[id] ? id + ' ' + queued[id] : id;
+}
+
 /** A video's watch page details; notes its channel's picture. The reply is usually fetched earlier (for the channel
  * picture, on tile focus or a start); it is parsed off the main thread, since a start runs meanwhile (here, parsing
  * its 150-200 KB took 30-140 ms) */
 export function watchInfo(id: string): Promise<WatchInfo> {
     // Kept as the worker's JSON: each caller parses its own copy once
-    return infos.getJson(id, function () { return offThreadJson(nextText(id), 'watch', watchInfoOf); }).then(function (info) {
+    return infos.getJson(keyOf(id), function () { return offThreadJson(nextText(id), 'watch', watchInfoOf); }).then(function (info) {
         noteAvatar(info.channel, info.avatar);
         return info;
     });
@@ -181,7 +209,8 @@ export function likesOf(id: string): Promise<string> {
 
 /** A video's /next reply as its text */
 function nextText(id: string): Promise<string> {
-    return nextTexts.get(id, function () { return innertubeText('next', { videoId: id }); });
+    var list = queued[id];
+    return nextTexts.get(keyOf(id), function () { return innertubeText('next', list ? { videoId: id, playlistId: list } : { videoId: id }); });
 }
 
 export function comments(token: string): Promise<Comments> {
@@ -310,11 +339,22 @@ export function watchInfoOf(reply: any): WatchInfo {
     // The likes as YouTube writes them in the language asked (its like button's count)
     var likes = text(get(likeButton, 'likeCountText'));
     var subscribeButton = first(buttons, 'subscribeButtonRenderer') || first(owner, 'subscribeButtonRenderer');
-    var related: Video[] = [];
-    rowsOf(get(results, 'pivot')).shelves.forEach(function (s) {
-        related = related.concat(s.videos.filter(function (v) { return !v.page; }));
-    });
-    return {
+    // Asked for as one of a queue: the first row under the video is the queue around it (its tiles play from the
+    // queue), not related videos (read apart: rows with blank headings are read as one list)
+    var list = get(results, 'playlist', 'playlist');
+    var rows: any[] = get(results, 'pivot', 'sectionListRenderer', 'contents') || [];
+    var inList = get(rows[0], 'shelfRenderer', 'content', 'horizontalListRenderer', 'items', 0, 'tileRenderer', 'onSelectCommand', 'watchEndpoint', 'playlistId');
+    var playable = function (part: any[]): Video[] {
+        var videos: Video[] = [];
+        rowsOf({ sectionListRenderer: { contents: part } }).shelves.forEach(function (s) {
+            videos = videos.concat(s.videos.filter(function (v) { return !v.page; }));
+        });
+        return videos;
+    };
+    var queue = list && list.playlistId && inList === list.playlistId ? { title: text(list.title), total: +list.totalVideos || 0, videos: playable(rows.slice(0, 1)) } :
+        undefined;
+    var related = queue ? playable(rows.slice(1)) : playable(rows);
+    var info: WatchInfo = {
         title: text(meta.title),
         channel: text(owner.title),
         channelPage: pageOf(owner.navigationEndpoint),
@@ -337,6 +377,11 @@ export function watchInfoOf(reply: any): WatchInfo {
         description: text(get(body, 'descriptionBodyText')) || text(get(body, 'attributedDescriptionBodyText')),
         notes: notesOf(part('expandableMetadataRenderer'), part('howThisWasMadeSectionViewModel'))
     };
+    // (only where there is one: a video's details are compared and stored whole)
+    if (queue) {
+        info.queue = queue;
+    }
+    return info;
 }
 
 /** The boxes under a description: YouTube's AI summary (its paragraphs) and how the video was made, each only with a

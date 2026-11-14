@@ -179,10 +179,13 @@ export interface Sabr {
 export interface NoStreams {
     status: string;
     reason: string;
+    /** Both ways refused: the first way's own reason (reason has the other's after it, for the play log) */
+    first?: string;
     /** The video's length (s) when YouTube tells it anyway (an age check) */
     length?: number;
     /** The TV client, asked as YouTube's player asks (signed in, or as a guest where there is no account), got only an
-     * error message (no offer, no way on, not a bot check) */
+     * error message (no offer, no way on, not a bot check). Not members-only: refused here even signed in (other apps'
+     * own players alike), YouTube's player may still play it for a member, and is asked */
     asYouTube?: boolean;
     /** Both ways failed alike and the TV client's answer was asYouTube: YouTube's player gets the same */
     refused?: boolean;
@@ -309,7 +312,8 @@ export function noneCanPlay(e: NoStreams): boolean {
  * refused alike or did not answer */
 export function reasonInLanguage(id: string, e: NoStreams): Promise<string> {
     if (inEnglish()) {
-        return Promise.resolve(e.reason || '');
+        // (both ways refused: the first's own, not the other's after it)
+        return Promise.resolve(e.first || e.reason || '');
     }
     return visitor(false).then(function (visitorId) {
         return askPlayer(id, visitorId, youtubeLanguage());
@@ -354,7 +358,7 @@ export function playableStreams(id: string, sabrFirst: boolean, asking?: Asking)
                 throw { status: tv.status, reason: tv.reason, refused: true, ended: guest.ended } as NoStreams;
             }
             var by = [streamsFailure(e), streamsFailure(other)];
-            throw { status: e.status, reason: e.reason + (other.reason ? ' (' + (sabr ? 'as a guest' : 'SABR') + ': ' + other.reason + ')' : ''),
+            throw { status: e.status, first: e.reason, reason: e.reason + (other.reason ? ' (' + (sabr ? 'as a guest' : 'SABR') + ': ' + other.reason + ')' : ''),
                 failed: ['no answer', 'http', 'refused'].filter(function (one) { return by.indexOf(one) >= 0; })[0] } as NoStreams;
         });
     });
@@ -369,11 +373,6 @@ function onlyBy(s: Streams): Streams {
     }
     only.only = true;
     return only;
-}
-
-/** Whether a video's streams are kept (by this method: asking for them makes no request to YouTube) */
-export function streamsKept(id: string, sabr: boolean): boolean {
-    return !!keptOf(id, sabr, Date.now());
 }
 
 /** A video's streams kept by this method at now: answered within KEEP_MS, or on their way for less than stuck */

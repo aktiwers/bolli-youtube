@@ -6,8 +6,13 @@
 // structured-cloned object (~160 ms). The worker starts when a request is
 // made, so it is ready for the reply, and is terminated after idling to free
 // its memory. Without a worker, the work runs on the main thread.
+//
+// Android's web view starts no worker from the app's own files (file:///android_asset/parse.js: "net::ERR_ABORTED",
+// and every reply was then parsed on the main thread). There the script's text is read once, when the first request
+// is made (a file of the package: no request to the network), and the worker is started from a copy of it in memory
+// (a blob's address), then and after each idling. Until the text is in, the work runs on the main thread.
 
-import { oldEngine } from '../core/platform.js';
+import { android, oldEngine } from '../core/platform.js';
 
 /** The worker's script, beside index.html (webOS TV 2.x's old engine: with promise.js before it) */
 var SCRIPT = 'parse.js';
@@ -39,6 +44,9 @@ var failed = false;
 var asked: { [id: number]: Asked } = {};
 var count = 0;
 var idleTimer = 0;
+/** Android: the address of the script's copy in memory ('' not read yet), and that it is being read */
+var copy = '';
+var reading = false;
 
 /** The JSON of data handed over, without YouTube's tracking fields (nothing reads them; a quarter of a channel page's
  * rows). They are deleted from the data first: a JSON.stringify replacer takes the TV's browser off its fast path
@@ -120,7 +128,11 @@ function overdue(id: number): number {
 function started(): Worker | null {
     if (!worker && !failed) {
         try {
-            worker = new Worker(oldEngine() ? OLD_SCRIPT : SCRIPT);
+            if (android() && !copy) {
+                read();
+                return null;
+            }
+            worker = new Worker(copy || (oldEngine() ? OLD_SCRIPT : SCRIPT));
             worker.onmessage = answered;
             worker.onerror = broke;
         } catch (e) {
@@ -128,6 +140,30 @@ function started(): Worker | null {
         }
     }
     return worker;
+}
+
+/** Android: reads the worker's script once and starts the worker from its copy in memory (not readable, or no such
+ * copy can be made: no worker) */
+function read(): void {
+    if (reading) {
+        return;
+    }
+    reading = true;
+    var request = new XMLHttpRequest();
+    request.open('GET', SCRIPT);
+    request.onload = function () {
+        try {
+            if (!request.responseText) {
+                throw new Error('empty');
+            }
+            copy = URL.createObjectURL(new Blob([request.responseText], { type: 'application/javascript' }));
+            started();
+        } catch (e) {
+            failed = true;
+        }
+    };
+    request.onerror = function () { failed = true; };
+    request.send();
 }
 
 function answered(e: MessageEvent): void {
@@ -169,6 +205,8 @@ function idle(): void {
 /** The worker failed (script did not load, threw, or a reply timed out): its pending work runs here */
 function broke(): void {
     failed = true;
+    // (no worker left to end after idling)
+    clearTimeout(idleTimer);
     if (worker) {
         worker.terminate();
         worker = null;

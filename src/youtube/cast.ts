@@ -16,7 +16,10 @@ import { toast } from './ui/toast.js';
 import { prefs, setPref } from './api/prefs.js';
 import { offerComments, withdrawComments } from './api/handoff.js';
 import { Lounge } from './api/lounge.js';
+import { fillAll, listed } from './api/cast-list.js';
+import { queueAround, watchFrom, watchInfo, WatchInfo } from './api/watch.js';
 import { newCpn } from './api/youtube.js';
+import { PlaylistInfo } from './api/feed.js';
 import { ListQueue } from './player/list-queue.js';
 import { OwnPlayer, Playing } from './player/own-player.js';
 
@@ -52,7 +55,8 @@ export class Cast {
 
     /** press: a key from the phone's arrows, handled as a remote key; play: starts a video from the phone (main.ts
      * prepares the screen for the player first) */
-    constructor(private player: OwnPlayer, private press: (code: number) => void, private play: (id: string, t: number, queue: ListQueue) => void) {
+    constructor(private player: OwnPlayer, private press: (code: number) => void, private play: (id: string, t: number, queue: ListQueue) => void,
+        private info: (id: string) => Promise<WatchInfo> = watchInfo, private around: (id: string) => Promise<WatchInfo> = queueAround) {
         var self = this;
         this.lounge.onCommand = function (name, fields) { self.command(name, fields); };
         player.onChange = function () { self.changed(); };
@@ -124,7 +128,8 @@ export class Cast {
     private command(name: string, f: Fields): void {
         var volume = f.volume !== undefined || f.delta !== undefined || f.muted !== undefined;
         this.heard = this.heard.slice(-29).concat([new Date().toTimeString().slice(0, 8) + ' ' + name +
-            (volume ? ' volume ' + f.volume + ' delta ' + f.delta + ' muted ' + f.muted : '')]);
+            (volume ? ' volume ' + f.volume + ' delta ' + f.delta + ' muted ' + f.muted : '') +
+            (name === 'setPlaylist' ? ' videos ' + ids(f.videoIds).length + ' list ' + (f.listId ? 'named' : 'none') : '')]);
         var p = this.player;
         var now = p.now;
         switch (name) {
@@ -162,10 +167,14 @@ export class Cast {
                 this.setPlaylist(f);
                 break;
             case 'updatePlaylist':
-                // The phone's list changed: it becomes the queue if it contains the playing video
+                // The phone's list changed: it becomes the queue if it contains the playing video (the playlist the
+                // player shows stays the one it was, when the list is still that one)
                 var list = ids(f.videoIds);
                 if (now && list.indexOf(now.id) >= 0) {
-                    this.install(new ListQueue(list, now.id));
+                    var next = new ListQueue(list, now.id);
+                    this.name(next, f.listId || this.extra.listId, this.queue && this.queue.playlist);
+                    this.install(next);
+                    this.fill(now.id);
                 }
                 this.tellList();
                 break;
@@ -173,6 +182,7 @@ export class Cast {
                 var q = this.phoneQueue();
                 if (q && f.videoId) {
                     q.ids.push(f.videoId);
+                    this.name(q, this.extra.listId, q.playlist);
                 } else if (now && f.videoId) {
                     this.install(new ListQueue([now.id, f.videoId], now.id));
                 }
@@ -265,9 +275,13 @@ export class Cast {
         }
         var t = parseFloat(f.currentTime) || 0;
         var now = this.player.now;
+        // (the list shown before: the phone sending its queue again, another video tapped in it, keeps its titles)
+        var had = this.queue && this.queue.playlist;
         var queue = this.queue = new ListQueue(list.length ? list : [id], id);
         queue.at = list.length ? at : 0;
         this.extra = extraOf(f);
+        // (before the video is asked for: its request names the queue)
+        this.name(queue, f.listId, had);
         if (now && now.id === id) {
             this.install(queue);
             if (Math.abs(now.t - t) > JUMP_S) {
@@ -279,6 +293,66 @@ export class Cast {
             // The phone is told when it starts (changed)
             this.play(id, t, queue);
         }
+        this.fill(id);
+    }
+
+    /** The phone's list as the player's playlist (its videos at the side, the watch page's row), where the phone names
+     * its queue and sends more than one video; had: the playlist of the list before this one (what is known of its
+     * videos stays). The queue's videos are asked for with the queue named from now on (api/watch.ts). */
+    private name(queue: ListQueue, listId: string | undefined, had: PlaylistInfo | null): void {
+        var named = !!listId && queue.ids.length > 1;
+        watchFrom(named ? queue.ids : [], named ? listId! : '');
+        // The same queue changed (the phone's list re-sent, grown or reordered): the same list, its videos made the new
+        // ones (those known keep their titles), its views told, its titles' asking going on
+        if (named && had && had.id === listId && had.relist) {
+            queue.playlist = had;
+            had.relist(queue.ids);
+            return;
+        }
+        var list = queue.playlist = named ? listed(queue.ids, listId!, tr('Queue'), had, this.around) : null;
+        var self = this;
+        if (list && list.listen) {
+            // (videos YouTube no longer has, left out of the list: out of the queue playing from it too, Next goes past
+            // them)
+            list.listen(function () {
+                var now = self.queue;
+                if (now && now.playlist === list && list!.videos.length !== now.ids.length) {
+                    var kept: { [id: string]: boolean } = {};
+                    list!.videos.forEach(function (v) { kept[v.id] = true; });
+                    now.keep(kept);
+                    self.tellList();
+                }
+            });
+        }
+        this.stopFilling();
+    }
+
+    /** The list whose titles are being asked for (once each) */
+    private filling: PlaylistInfo | null = null;
+    /** What stops the titles of the phone's list from being asked for */
+    private stopFilling = function (): void { return undefined; };
+
+    /** The titles of the queue's videos around video id, which YouTube sends with the video's own details (the
+     * request the player makes for it: none is added), put into the playlist the player shows */
+    private fill(id: string): void {
+        var self = this;
+        var queue = this.queue;
+        var list = queue && queue.playlist;
+        if (!queue || !list || !list.titles) {
+            return;
+        }
+        // (asked a moment on: after the player's own asking for the video, which this shares; then the rest of the
+        // list's, from it outward, once for the list)
+        var titles = list.titles;
+        var filling = this.filling !== list;
+        var q = queue;
+        var named = list;
+        this.filling = list;
+        Promise.resolve().then(function () { return titles(id, self.info(id)); }).then(null, function () { return false; }).then(function () {
+            if (filling && self.queue === q && q.playlist === named) {
+                self.stopFilling = fillAll(named, Math.max(0, q.ids.indexOf(id)));
+            }
+        });
     }
 
     /** Makes the phone's list the player's queue */
@@ -300,6 +374,8 @@ export class Cast {
         if (this.queue && !this.phoneQueue()) {
             this.queue = null;
             this.extra = extraOf({});
+            watchFrom([], '');
+            this.stopFilling();
         }
         var now = this.player.now;
         if (!now) {
@@ -317,6 +393,7 @@ export class Cast {
         if (now.id !== this.told.id) {
             this.nowPlaying();
             this.tellList();
+            this.fill(now.id);
         } else if (now.duration && !this.told.duration) {
             this.nowPlaying();
         } else if (stateOf(now) !== this.told.state) {

@@ -40,6 +40,40 @@ export function utcDate(ms: number): string {
     return d.getUTCFullYear() + '-' + pad2(d.getUTCMonth() + 1) + '-' + pad2(d.getUTCDate());
 }
 
+/** Tries made by itself after a failure, with an end: the first firstMs after it began, each next one twice as long
+ * after the one before (maxMs at most), and no more than `most` of them until it begins anew */
+export class Retries {
+    private made = 0;
+    private next = 0;
+
+    constructor(private firstMs: number, private maxMs: number, private most: number) {}
+
+    /** Whether a try is due now (not counted: tried) */
+    due(now: number): boolean {
+        if (!this.next) {
+            this.next = now + this.firstMs;
+        }
+        return this.made < this.most && now >= this.next;
+    }
+
+    /** A try was made now */
+    tried(now: number): void {
+        this.made++;
+        this.next = now + Math.min(this.maxMs, this.firstMs * Math.pow(2, this.made));
+    }
+
+    /** Begins anew (it worked, the viewer acted, the network came back, another thing is tried) */
+    anew(): void {
+        this.made = 0;
+        this.next = 0;
+    }
+
+    /** How many tries were made since it began */
+    get count(): number {
+        return this.made;
+    }
+}
+
 /** A cap on how often something is done: at most max times within any ms */
 export class Rate {
     private times: number[] = [];

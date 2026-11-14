@@ -12,7 +12,7 @@
 
 import { h, setClass, setShown, setText, toggleClass, translate } from '../core/dom.js';
 import { tr } from '../core/i18n.js';
-import { digit, KEY } from '../core/keys.js';
+import { ASK_MS, digit, KEY, ownPress } from '../core/keys.js';
 import { takesPointer, toPart } from '../core/pointer.js';
 import { listen } from '../core/platform.js';
 import { View } from '../core/view.js';
@@ -30,7 +30,8 @@ import { brandedRows, Paging, rowH, VideoTiles } from './tiles.js';
 
 /** Suggestions are requested once typing pauses this long (YouTube's app requests on every key) */
 var SUGGEST_MS = 80;
-/** Focus resting this long on a suggestion (or on Search) prefetches its results */
+/** Focus resting this long on a suggestion (or on Search) prefetches its results; after a press of its own onto it
+ * (not a held key's repeat nor quick taps: core/keys.ts ownPress) right after the frame that moves the focus (ASK_MS) */
 var REST_MS = 400;
 var SUGGESTIONS_MAX = 10;
 /** Keyboard languages listed as Recent in its picker */
@@ -499,7 +500,7 @@ export class SearchView implements View {
             if (term && term !== self.searched) {
                 self.ahead(term);
             }
-        }, REST_MS) as unknown as number;
+        }, ownPress() ? ASK_MS : REST_MS) as unknown as number;
     }
 
     private renderQuery(): void {

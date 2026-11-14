@@ -114,7 +114,7 @@ var RETRY_MS = 20000;
  * edges) lies inside it. The strip is a layer of its own, and a layer whose outline grows upwards is drawn anew as a
  * whole: without the room, each row gaining or losing the ring cost the TV a full row of tiles (~50 ms) before the
  * step could show. */
-var ROOM_ABOVE = 12;
+export var ROOM_ABOVE = 12;
 /** How far the focus ring reaches beyond the picture's box on each side (the theme's bd-ring-edge border) */
 var RING = 6;
 /** The focused tile's usual place in a row that slides: this many tiles from the margin */

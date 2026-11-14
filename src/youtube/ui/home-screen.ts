@@ -1,7 +1,22 @@
 // The app's entry on the TV's home screen (webOS): its logo, its name and its tile's colour, as set in Settings ›
-// Look (prefs homeIcon, homeName, homeColor). webOS lets an app point its own entry at another picture file, name and
-// colour (updateLaunchPoint), keeps that over restarts, and puts the package's back at an update: so the app asks
-// when a choice is made, and again once the first rows are drawn at a start unless the package's own were never left.
+// Look (prefs homeIcon, homeName, homeColor). webOS can point an app's entry at another picture file, name and colour
+// (updateLaunchPoint), keeps that over restarts, and puts the package's back at an update: so the app asks when a
+// choice is made, and again once the first rows are drawn at a start unless the package's own were never left.
+//
+// Two ways lead to that call (found on the webOS 4.0 and 5.0 emulators, 2026-11-13; their READMEs' "Home screen
+// entry: routes"). The app's own call: webOS 3 takes it, webOS 4 and 5 refuse it ("Denied method call"). As root,
+// where the TV is rooted and the Homebrew Channel has root (ui/app-files.ts asRoot): luna-send run by its service.
+// The own call goes first, as it costs next to nothing and its refusal is told at once; the way that worked is kept
+// with what was given, and goes first from then on. A root command starts a process on the TV: at a start it is only
+// run after an update (the app's version is another than the one the entry was given at), since nothing else puts
+// the package's entry back. The entry reaches the root shell as base64 alone (the name is the viewer's own text).
+// After a choice, root's way reads the entry back (listLaunchPoints); the own call's yes is the TV's word.
+//
+// A choice the TV did not take is put back to what it shows, and whoever listens (onHomeRefused: Settings) is told
+// why (NO_CHANNEL: the own call is refused and the TV has no Homebrew Channel; NO_ROOT: it has one without root;
+// NO_ENTRY: anything else), to say so. The choice itself is made at once (its tick does not wait for the TV); the
+// refusal comes after. At a start nothing is said; choices no TV ever took (made in a version that did not tell) are put
+// back then, so that Settings shows what the home screen does and later starts ask nothing.
 //
 // Only a file works as the picture: an address draws an empty tile, and a data URL takes the TV's home screen
 // process down (every app closes), so the TV is never handed one. Each built-in logo has its icon files in the app's
@@ -22,7 +37,7 @@ import { android } from '../core/platform.js';
 import { load, save } from '../core/store.js';
 import { Choice, prefs, setPref } from '../api/prefs.js';
 import { tr } from '../core/i18n.js';
-import { appId, blank, folder, NO_FILE, sized, writePngs } from './app-files.js';
+import { appId, asRoot, blank, folder, NO_CHANNEL, NO_FILE, NO_ROOT, sized, writePngs } from './app-files.js';
 import { addChoice, addCustomLogo, customChoice, CustomLogo, customLogos, customOf, customValue, isCustom, onCustomRemoved, removeCustomLogo } from './custom-logos.js';
 import { iconBase, logoFile, LOGOS } from './logo.js';
 import { loaded, squares } from './pictures.js';
@@ -33,9 +48,20 @@ export var APP_COLOR = '#0d0d12';
 /** The longest name taken */
 export var NAME_MAX = 30;
 
-var ENTRY = 'luna://com.webos.applicationManager/updateLaunchPoint';
-/** What the TV's entry was last given, kept (null: the package's own, never changed): the choice it stood for and
- * its icon files' name without size and ending. A start then asks again. */
+var MANAGER = 'luna://com.webos.applicationManager/';
+var ENTRY = MANAGER + 'updateLaunchPoint';
+/** A call of the application manager's as a root command, its one reply printed */
+var SEND = 'luna-send -n 1 ' + MANAGER;
+/** Why the TV's entry was not changed, when root's way says no more (NO_CHANNEL, NO_ROOT) */
+export var NO_ENTRY = 'no entry';
+/** The ways to the entry: the app's own call, and root's */
+var OWN = 'own';
+var ROOT = 'root';
+/** The app's version (written in by the build) */
+var VERSION = '__BOLLI_VERSION__';
+/** What the TV's entry was last given, kept (null: the package's own, never changed): the choice it stood for, its
+ * icon files' name without size and ending, the way it was given by and the app's version then. A start then asks
+ * again. */
 var GIVEN_KEY = 'youtube.home';
 /** The custom icon files: the number in the newest ones' names (never given again), which custom logo they hold (0:
  * none any more), and the numbers of earlier ones not emptied yet */
@@ -46,6 +72,17 @@ var SIZES = [{ px: 130, inner: 112 }, { px: 80, inner: 70 }];
 interface Given {
     key: string;
     files: string;
+    way?: string;
+    at?: string;
+}
+
+/** A home screen entry as the application manager takes it */
+interface Entry {
+    launchPointId: string;
+    icon: string;
+    largeIcon: string;
+    title: string;
+    iconColor: string;
 }
 
 interface Files {
@@ -54,13 +91,23 @@ interface Files {
     old: number[];
 }
 
-/** What was asked of the TV this run ('' nothing yet); that nothing needs asking (the package's own, never left: no
- * storage read at each screen drawn); the latest choice of a logo (an earlier one's late files are dropped); and the
- * writing in turn */
+/** What was asked of the TV this run ('' nothing yet); that nothing needs asking (asked already, or the package's
+ * own, never left: nothing computed and no storage read at each screen drawn); the latest choice of a logo (an
+ * earlier one's late files are dropped); the writing in turn; and that root's way is this TV's (it gave the entry
+ * last, or the own call was refused this run): it goes first, for the icon files too */
 var asked = '';
 var settled = false;
 var choosing = 0;
 var writing: Promise<unknown> = Promise.resolve();
+var rooted = false;
+/** Who is told that the TV did not take a choice just made (Settings) */
+var refusedTo: ((e: Error) => void) | null = null;
+
+/** tell is called when the TV did not take a choice just made of the home screen's logo, name or colour (e.message:
+ * NO_CHANNEL, NO_ROOT or NO_ENTRY), the choices already back to what the TV shows */
+export function onHomeRefused(tell: (e: Error) => void): void {
+    refusedTo = tell;
+}
 
 /** Whether the TV has a home screen entry the app can change (Settings offers its logo, name and colour only then) */
 export function hasHomeScreen(): boolean {
@@ -181,6 +228,12 @@ export function homeColorChoices(): Choice[] {
  * left. A custom logo whose files are gone (the app removed and installed anew) is written again from its kept
  * picture; one that cannot be: the first logo's icon. A TV that refuses keeps what it shows. */
 export function homeScreen(): void {
+    ask(false);
+}
+
+/** homeScreen; told: a choice was just made (quiet: by the app itself). The TV not taking it then puts the choices
+ * back to what it shows, and unless quiet says so (onHomeRefused). */
+function ask(told: boolean, quiet?: boolean): void {
     var shell = android();
     if (shell) {
         // Android: the shell is told the chosen logo, once per run and choice (it shows it once the app is off the
@@ -196,19 +249,27 @@ export function homeScreen(): void {
     if (!app) {
         return;
     }
+    // (asked from here on, or nothing to ask: the next screens drawn come no further than the lines above)
+    settled = true;
     var c = chosenCustom();
     var one = c ? LOGOS[0] : chosenLogo();
     var name = (prefs().homeName || '').slice(0, NAME_MAX);
     var color = homeColor();
     var key = (c ? customValue(c) : one.id) + '|' + name + '|' + color;
     var own = !c && one === LOGOS[0] && !name && !color;
-    if (key === asked) {
+    var given = key === asked ? null : load<Given>(GIVEN_KEY);
+    // (asked this run already; or the package's own, asked for only if another was given before, kept or asked this
+    // run)
+    if (key === asked || (own && !asked && !given)) {
         return;
     }
-    // (the package's own: asked for only if another was given before, kept or asked this run)
-    if (own && !asked && !load<Given>(GIVEN_KEY)) {
-        settled = true;
-        return;
+    if (given && given.way === ROOT) {
+        rooted = true;
+        // (at a start: what root gave stands until an update)
+        if (!told && !asked && given.key === key && given.at === VERSION) {
+            asked = key;
+            return;
+        }
     }
     asked = key;
     var dir = folder();
@@ -217,12 +278,49 @@ export function homeScreen(): void {
         if (asked !== key) {
             return;
         }
-        lunaAsk(ENTRY, { launchPointId: app + '_default', icon: dir + base + '-80.png', largeIcon: dir + base + '-130.png', title: name || APP_NAME,
-            iconColor: color || APP_COLOR }).then(function () {
-            save(GIVEN_KEY, own ? null : { key: key, files: base });
+        var entry: Entry = { launchPointId: app + '_default', icon: dir + base + '-80.png', largeIcon: dir + base + '-130.png', title: name || APP_NAME,
+            iconColor: color || APP_COLOR };
+        var took = function (way: string): void {
+            save(GIVEN_KEY, own ? null : { key: key, files: base, way: way, at: VERSION });
             emptyOld(base);
-        }, function () {
-            // (refused: the TV shows what it showed)
+        };
+        var byOwn = function (): Promise<void> {
+            return lunaAsk(ENTRY, entry).then(function () { took(OWN); }, function () {
+                rooted = true;
+                throw new Error(NO_ENTRY);
+            });
+        };
+        var byRoot = function (): Promise<void> {
+            return asRoot(SEND + 'updateLaunchPoint "$(echo ' + base64(JSON.stringify(entry)) + ' | base64 -d)"').then(function (out) {
+                if (!saysYes(out)) {
+                    throw new Error(NO_ENTRY);
+                }
+                // (after a choice: read back. Not readable: the TV's yes stands)
+                return told ? asRoot(SEND + 'listLaunchPoints \'{}\'').then(function (list) {
+                    if (differs(list, entry)) {
+                        throw new Error(NO_ENTRY);
+                    }
+                }, function () { return undefined; }) : undefined;
+            }).then(function () { took(ROOT); });
+        };
+        // (root's reason is the one to tell: the own call only ever says no)
+        var why = '';
+        var noRoot = function (e: Error): Promise<void> {
+            why = e.message;
+            return byOwn();
+        };
+        (rooted ? byRoot().then(null, noRoot) : byOwn().then(null, byRoot)).then(null, function (e: Error) {
+            why = why || e.message;
+            // (not taken: the TV shows what it showed. A choice made since has its own asking)
+            if (asked !== key) {
+                return;
+            }
+            if (told || !given) {
+                back(given);
+            }
+            if (told && !quiet && refusedTo) {
+                refusedTo(new Error(why === NO_CHANNEL || why === NO_ROOT ? why : NO_ENTRY));
+            }
         });
     };
     // (a custom logo that cannot be shown: the first logo's icon)
@@ -234,21 +332,72 @@ export function homeScreen(): void {
     }
 }
 
-/** Empties the custom icon files of earlier writings, now that the TV shows those named shown */
+/** Text as base64 (its UTF-8 bytes) */
+function base64(text: string): string {
+    return btoa(unescape(encodeURIComponent(text)));
+}
+
+/** Whether a call run as root was answered with a yes (out: what luna-send printed, the reply on its first line) */
+function saysYes(out: string): boolean {
+    try {
+        return JSON.parse(out.split('\n')[0]).returnValue === true;
+    } catch (e) {
+        return false;
+    }
+}
+
+/** Whether the launch points listed (out: listLaunchPoints' reply as printed) show entry otherwise: its launch point
+ * there without its name or both its pictures (a list that cannot be read, or lacks it: no) */
+function differs(out: string, entry: Entry): boolean {
+    try {
+        var points = JSON.parse(out).launchPoints as Entry[];
+        for (var i = 0; i < points.length; i++) {
+            if (points[i].launchPointId === entry.launchPointId) {
+                return points[i].title !== entry.title || points[i].largeIcon !== entry.largeIcon && points[i].icon !== entry.icon;
+            }
+        }
+    } catch (e) {
+        // (not a list)
+    }
+    return false;
+}
+
+/** Puts the choices back to what the TV shows: those it last took (given; null: the package's own). Nothing more is
+ * asked for them. */
+function back(given: Given | null): void {
+    var key = given ? given.key : '';
+    var first = key.indexOf('|');
+    var last = key.lastIndexOf('|');
+    var was = { homeIcon: given && first > 0 ? key.slice(0, first) : LOGOS[0].id, homeName: given ? key.slice(first + 1, last) : '', homeColor: given ? key.slice(last + 1) : '' };
+    var now = prefs();
+    (['homeIcon', 'homeName', 'homeColor'] as ('homeIcon' | 'homeName' | 'homeColor')[]).forEach(function (pref) {
+        if ((now[pref] || '') !== was[pref]) {
+            setPref(pref, was[pref]);
+        }
+    });
+    asked = key;
+    settled = true;
+}
+
+/** Empties the custom icon files of earlier writings, now that the TV shows those named shown (removes them, where
+ * root's way is this TV's) */
 function emptyOld(shown: string): void {
     var kept = files();
     var gone = kept.old.filter(function (n) { return named(n) !== shown; });
     if (gone.length) {
         kept.old = kept.old.filter(function (n) { return named(n) === shown; });
         save(FILES_KEY, kept);
-        gone.forEach(function (n) { blank(SIZES.map(function (size) { return named(n) + '-' + size.px + '.png'; })); });
+        var names: string[] = [];
+        gone.forEach(function (n) { SIZES.forEach(function (size) { names.push(named(n) + '-' + size.px + '.png'); }); });
+        blank(names, rooted);
     }
 }
 
-/** A choice of the home screen's logo, name or colour was made: asked of the TV now */
-function chosen(): void {
+/** A choice of the home screen's logo, name or colour was made: asked of the TV now (quiet: made by the app itself,
+ * nothing said if the TV does not take it) */
+function chosen(quiet?: boolean): void {
     settled = false;
-    homeScreen();
+    ask(true, quiet);
 }
 
 /** Chooses the home screen's logo: a built-in one's id at once; a custom one's value once its files are written
@@ -311,9 +460,10 @@ onCustomRemoved('home', function (c) {
     if (prefs().homeIcon === customValue(c)) {
         choosing++;
         setPref('homeIcon', LOGOS[0].id);
-        chosen();
+        chosen(true);
     } else {
         var given = load<Given>(GIVEN_KEY);
+        rooted = rooted || (!!given && given.way === ROOT);
         emptyOld(given ? given.files : iconBase(LOGOS[0]));
     }
 });
@@ -337,7 +487,7 @@ function write(c: CustomLogo): Promise<string> {
     var n = kept.n + 1;
     var names = SIZES.map(function (size) { return named(n) + '-' + size.px + '.png'; });
     return loaded(c.data).then(function (img) {
-        return writePngs(names, squares(img, SIZES), SIZES.map(function (size) { return size.px; }));
+        return writePngs(names, squares(img, SIZES), SIZES.map(function (size) { return size.px; }), rooted);
     }).then(function () {
         save(FILES_KEY, { n: n, custom: c.id, old: kept.n > 0 ? kept.old.concat([kept.n]) : kept.old });
         return named(n);
@@ -346,4 +496,4 @@ function write(c: CustomLogo): Promise<string> {
     });
 }
 
-export { NO_FILE };
+export { NO_CHANNEL, NO_FILE, NO_ROOT };

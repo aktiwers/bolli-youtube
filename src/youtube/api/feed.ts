@@ -8,14 +8,17 @@
 // and tokens. Shorts, unknown tiles and empty shelves are dropped.
 
 import { noteAvatars } from './avatars.js';
-import { Rate } from '../core/time.js';
 import { Keeper } from './kept-pages.js';
 import { prefs } from './prefs.js';
 import { offThread, offThreadJson } from './off-thread.js';
 import { innertubeText } from './youtube.js';
 
-/** Pages and search results are cached this long */
-var KEEP_MS = 5 * 60 * 1000;
+/** Pages and search results are cached this long: what is loaded stays loaded. A page's rows are
+ * some 10-60 KB of text; the counts below hold a few MB at most, against the app's ~100 MB (mostly pictures, which
+ * are not kept). Kept pages refresh behind themselves once old (pageAge, main.ts pageOptions) */
+var KEEP_MS = 60 * 60 * 1000;
+/** A channel's list in Subscriptions, search results and a tab's tiles are kept this long */
+var LIST_KEEP_MS = 5 * 60 * 1000;
 /** The start of the ids of YouTube's chart playlists (its Charts channel's, in every language) */
 var CHARTS = /^PL4fGSI1pDJn/;
 
@@ -26,6 +29,9 @@ export interface Video {
     channel: string;
     /** "10:35"; '' for live or unknown; for a page, its count ("274 videos") */
     length: string;
+    /** Known by its id alone, its details to come with its title (a phone's queue: api/cast-list.ts): its length is not
+     * looked up by its tiles (one request each, for a list of hundreds) */
+    bare?: boolean;
     /** "23m views • 11 years ago" */
     info: string;
     /** A page to open instead of a video to play */
@@ -82,6 +88,15 @@ export interface PlaylistInfo {
     videos: Video[];
     /** Its id ('' not known) */
     id?: string;
+    /** A list whose videos come without titles (a phone's queue: api/cast-list.ts): asks for the titles around video
+     * id and puts them in; resolves true when the videos changed (a new array) */
+    titles?: (id: string, from?: Promise<{ queue?: { title: string; videos: Video[] } }>) => Promise<boolean>;
+    /** Such a list: fn is called whenever titles came into it; returns what stops that (each view of the list: the side
+     * list, the watch page's row) */
+    listen?: (fn: () => void) => () => void;
+    /** Such a list: its videos made these ids, in this order (the phone's list changed: those known keep their titles),
+     * every view told */
+    relist?: (ids: string[]) => void;
 }
 
 /** A live stream that has ended: its id, title, and its channel's name and id */
@@ -110,6 +125,10 @@ export interface Shelf {
     grid?: boolean;
     /** Continuation token for more tiles (more()); none: it has them all */
     next?: string;
+    /** A grid that is a screen's own videos (Subscriptions': views/subscriptions.ts): the shelf before it is a row above
+     * its lines, each next part's shelves are more of its videos (next: the screen's token), and a video shows in it
+     * once */
+    feed?: boolean;
 }
 
 /** A screen: its title (a page's), its shelves, and the token for more shelves ('' none) */
@@ -136,6 +155,10 @@ export interface Rows {
     at?: number;
     /** YouTube's text for a page with nothing on it yet (e.g. Library's Movies & TV) */
     empty?: string;
+    /** A channel's list in Subscriptions: its handle ("@name"), from the list's header */
+    handle?: string;
+    /** Subscriptions: YouTube's heading before its list of every channel ("A-Z") */
+    channelsLabel?: string;
 }
 
 /** A page header button (tvSurfaceHeaderRenderer): its text, icon (iconType) and action: choices (a filter, each
@@ -209,39 +232,49 @@ export function page(p: Page): Promise<Rows> {
     return offThread(browseText(p), 'rows', rowsOf);
 }
 
-/** page(p) as JSON text (for the cache) */
+/** page(p) as JSON text (for the cache), with when it was fetched (rows.at: a kept page opened later refreshes behind
+ * itself once old) */
 function pageJson(p: Page): Promise<string> {
-    return offThreadJson(browseText(p), 'rows', rowsOf);
+    return offThreadJson(browseText(p), 'rows', rowsOf).then(function (text) {
+        return text.charAt(0) === '{' && text.length > 2 ? '{"at":' + Date.now() + ',' + text.slice(1) : text;
+    });
 }
 
-/** Recently opened pages and search results, cached a while (api/kept-pages.ts) */
-var pages = new Keeper<Rows>(KEEP_MS, 8, true, true);
-var searches = new Keeper<Rows>(KEEP_MS, 8, true, true);
+/** Recently opened pages and search results, cached a while (api/kept-pages.ts); a channel's list in Subscriptions
+ * among more of its kind (a few KB each: a viewer goes through many, and back to one is then no request) */
+var pages = new Keeper<Rows>(KEEP_MS, 24, true, true);
+// (Subscriptions keeps the channels' lists itself, for the session, refreshed behind after five minutes: views/
+// subscriptions.ts known; here only for a few minutes, as before)
+var lists = new Keeper<Rows>(LIST_KEEP_MS, 40, true, true);
+// (search results and tabs are not refreshed behind themselves: kept a few minutes, as before, more of them)
+var searches = new Keeper<Rows>(LIST_KEEP_MS, 16, true, true);
+
+function keeperOf(p: Page): Keeper<Rows> {
+    return p.browseId === 'FEsubscriptions' && p.params ? lists : pages;
+}
 
 /** A page, from the cache when fetched recently or ahead; History is always fetched (each watched video changes it,
- * and it loads in ~0.2 s) */
-export function keptPage(p: Page): Promise<Rows> {
-    return keepable(p) ? pages.getJson(pageKey(p), function () { return pageJson(p); }) : page(p);
+ * and it loads in ~0.2 s). renew: the screen showing it refreshes it behind its rows: asked of YouTube, the kept one
+ * replaced */
+export function keptPage(p: Page, renew?: boolean): Promise<Rows> {
+    if (!keepable(p)) {
+        return page(p);
+    }
+    var keeper = keeperOf(p);
+    if (renew) {
+        keeper.drop(pageKey(p));
+    }
+    return keeper.getJson(pageKey(p), function () { return pageJson(p); });
 }
 
 /** Whether page p's reply is kept or on its way (asking for it now is no request) */
 export function pageKept(p: Page): boolean {
-    return keepable(p) && pages.has(pageKey(p));
-}
-
-/** A page or a tab asked for ahead of an OK (the focus rests on its tile, button or chip) is a request the viewer may
- * never use: at most AHEAD_ASKS of them a minute */
-var AHEAD_ASKS = 6;
-var aheadAsks = new Rate(AHEAD_ASKS, 60000);
-
-/** Whether something may be asked for ahead now. kept: its reply is kept or on its way (no request: not counted) */
-export function mayAskPageAhead(kept: boolean): boolean {
-    return kept || aheadAsks.take();
+    return keepable(p) && keeperOf(p).has(pageKey(p));
 }
 
 /** A tab's tiles (more), kept a while: at hand again for a tab seen before, and asked ahead while the focus rests on
  * its chip (tabAhead); not History's (keptTabs), which each watched video changes, as History's page is not kept */
-var tabs = new Keeper<Rows>(KEEP_MS, 6, true, true);
+var tabs = new Keeper<Rows>(LIST_KEEP_MS, 16, true, true);
 
 /** Whether tab's tiles are kept and asked ahead */
 export function keptTabs(tab: Tab): boolean {
@@ -270,17 +303,15 @@ export function keepTab(token: string, rows: Rows, anew: boolean): void {
     }
 }
 
-/** Asks for a tab's tiles ahead, within the cap, so keptTab has them at once */
+/** Asks for a tab's tiles ahead, so keptTab has them at once */
 export function tabAhead(token: string): void {
-    if (mayAskPageAhead(tabs.has(token))) {
-        tabs.aheadJson(token, function () { return tabJson(token); });
-    }
+    tabs.aheadJson(token, function () { return tabJson(token); });
 }
 
 /** Prefetches a page (the focus rests on its tile), so keptPage has it at once */
 export function pageAhead(p: Page): void {
     if (keepable(p)) {
-        pages.aheadJson(pageKey(p), function () { return pageJson(p).then(tapped); });
+        keeperOf(p).aheadJson(pageKey(p), function () { return pageJson(p).then(tapped); });
     }
 }
 
@@ -335,6 +366,7 @@ export function subscriptions(): Promise<Rows> {
 /** Parses Subscriptions' reply: its rows and its channel list */
 export function subscriptionsOf(reply: any): Rows {
     var channels: SubChannel[] = [];
+    var label = '';
     try {
         // All, the channels with recent uploads, an "A-Z" heading (no page), then every channel
         var recent = true;
@@ -344,6 +376,7 @@ export function subscriptionsOf(reply: any): Rows {
                 var opens = tab && pageOf(tab.endpoint);
                 if (tab && !opens) {
                     recent = false;
+                    label = label || text(tab.title);
                 }
                 if (tab && tab.thumbnail && opens) {
                     channels.push({ title: text(tab.title), picture: picture(tab.thumbnail), fresh: get(tab, 'presentationStyle', 'style') === 'NEW_CONTENT',
@@ -356,6 +389,9 @@ export function subscriptionsOf(reply: any): Rows {
     }
     var rows = rowsOf(reply);
     rows.channels = channels;
+    if (label) {
+        rows.channelsLabel = label;
+    }
     // Its tabs are the channels again (334 here), never shown: drawn per channel as chips, stored and parsed each start
     delete rows.tabs;
     return rows;
@@ -422,6 +458,20 @@ export function more(token: string, from?: string): Promise<Rows> {
 /** Parses a continuation reply (more) */
 export function moreOf(reply: any): Rows {
     return rowsOf(reply && reply.continuationContents);
+}
+
+/** Every video of shelves, shelf after shelf */
+export function allVideos(shelves: Shelf[]): Video[] {
+    var videos: Video[] = [];
+    shelves.forEach(function (s) { videos = videos.concat(s.videos); });
+    return videos;
+}
+
+/** The token for more of rows that are one list in parts (Subscriptions' own, a channel's list there, a channel's
+ * Videos page): the page's own, else the one its last shelf has (a grid's is on the grid) */
+export function listNext(rows: Rows): string {
+    var last = rows.shelves[rows.shelves.length - 1];
+    return rows.next || last && last.next || '';
 }
 
 /** A video known only by its id (its details come when it plays) */
@@ -571,6 +621,11 @@ function walk(v: any, shelf: Shelf, rows: Rows): void {
                     tabs.push(own);
                     if (surface && surface.content) {
                         shown = shown || own;
+                        // (a channel's list in Subscriptions: its handle, under its name in the list's header)
+                        var handle = text(get(surface, 'header', 'tvSurfaceHeaderRenderer', 'avatar', 'avatarLockupRenderer', 'subtitle'));
+                        if (handle) {
+                            rows.handle = handle;
+                        }
                         walk(surface.content, shelf, rows);
                     }
                 });

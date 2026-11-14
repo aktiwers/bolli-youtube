@@ -25,11 +25,11 @@ import { oldEngine } from '../core/platform.js';
 import { FillLoader } from '../ui/fill-loader.js';
 import { logo, logoRound } from '../ui/logo.js';
 import { note } from './play-log.js';
-import { PROBLEM, skipEdge, toast } from '../ui/toast.js';
+import { cannotPlayText, PROBLEM, skipEdge, toast } from '../ui/toast.js';
 import { prefs } from '../api/prefs.js';
 import { Segment, segmentAt, segments, skippedText } from '../api/sponsorblock.js';
 import { PAGE, TvPage, tvPage, usable } from '../api/youtube.js';
-import { MediaState, pageHooks } from './tv-page.js';
+import { MediaState, pageHooks, Playability } from './tv-page.js';
 
 /** Warm-up video the player starts on: "Me at the zoo", YouTube's first upload (19 s) */
 var WARM_UP = 'jNQXAC9IVRw';
@@ -303,6 +303,9 @@ export class TvApp {
                     this.stop();
                 }
                 return;
+            case 'playability':
+                this.playability(value as Playability);
+                return;
         }
         if (this.phase === 'warming' && type === 'loadstart' && this.loader && this.want && m.route.indexOf('v=' + this.want.id) >= 0) {
             this.loader.step(WAIT_ASKED);
@@ -324,6 +327,23 @@ export class TvApp {
                 this.media(type, m);
             }
         }
+    }
+
+    /** YouTube's answer for the video opening (or the one its app was started on): refused (members-only to one who is not a member, removed): its player
+     * would show a black screen until the open is given up, so it is given up at once, back to the page it came from,
+     * with YouTube's reason (in the app's language, as YouTube's app asks). A film's offer (Buy or rent) is its screen;
+     * a sign-in YouTube's app asks for, and a live stream not live yet, are left to it */
+    private playability(p: Playability): void {
+        var want = this.want;
+        // (opening it; or started on it from cold, still warming: YouTube's app asks for it then, seen on the TV
+        // 2026-11-14, its answer a few seconds after the start)
+        var asking = this.phase === 'opening' || this.phase === 'warming' && !!want && want.id === this.startedFor;
+        if (!asking || !want || want.film || p.id && p.id !== want.id || (p.status !== 'UNPLAYABLE' && p.status !== 'ERROR')) {
+            return;
+        }
+        note('youtube refused', want.id + ': ' + p.status + ' ' + p.reason);
+        toast(cannotPlayText(p.reason), undefined, PROBLEM);
+        this.stop();
     }
 
     /** YouTube's app moved on to another video: follow that one */

@@ -2,7 +2,8 @@
 // app at 1920x1080 and scaled to two thirds (the 1280x720 layout): a 104 px
 // rail, Home's first row of 480 px tiles and other rows of 352 px, 24 px apart;
 // page grids and the watch page's related videos three to a line; a search bar
-// over Home's first row; Settings at the rail's foot.
+// over Home's first row; Settings at the rail's foot; Subscriptions' channels in a
+// column at the side.
 // Stylesheet: themes/youtube.css.
 
 import { registerTheme } from '../theme.js';
@@ -17,7 +18,7 @@ registerTheme({
         grid: { w: 352, h: 198 },
         gridHead: 72,
         // As on YouTube's History, Playlists and Music library
-        gridPitch: 359,
+        gridPitch: 356,
         square: { w: 198, h: 198 },
         game: { w: 141, h: 198 },
         // Movies posters, and the focused one wide (843x474 at 1920)
@@ -38,6 +39,10 @@ registerTheme({
         searchRowsTop: 131,
         subscriptionsTop: 268,
         subscriptionsStep: 112,
+        // YouTube's Subscriptions at 1920: lines 591 apart, the focused one's tiles at 192 (a channel's: 222), "Most
+        // relevant" 69 over its tiles and 6 over where a line lands; the column's items 78 high from 192 down, its
+        // "A-Z" label 63, the videos 465 further right beside it
+        subs: { pitch: 394, head: 46, top: 128, channelTop: 148, nameUp: 4, shift: 310, item: 52, label: 42, view: 592 },
         libraryTop: 226,
         libraryStep: 218,
         whoStep: 240,
@@ -49,9 +54,10 @@ registerTheme({
             focusTop: 320
         },
         channel: { rowsTop: 580, rowsTopDown: 120, pad: 64 },
-        page: { top: 44, gridTop: 123, right: 48 },
+        page: { top: 44, gridTop: 124, right: 48 },
         // Ages as YouTube's watch page writes them: 9 hr, 1 day, 3 wk, 3 mo, 2 yr
         ways: { homeBig: true, pagesOverAll: true, lowerCounts: true, words: { 'CC': 'Subtitles', 'Watch later': 'Watch Later' },
             ages: { s: ['sec', 'sec'], m: ['min', 'min'], h: ['hr', 'hr'], d: ['day', 'days'], w: ['wk', 'wk'], mo: ['mo', 'mo'], y: ['yr', 'yr'] } }
-    }
+    },
+    layouts: { subscriptions: 'side' }
 });

@@ -287,7 +287,27 @@ export class WatchPage {
     /** The playlist the video plays from (null: none): its row first, or its button (set before setVideo, which draws
      * the buttons) */
     setPlaylist(list: PlaylistInfo | null): void {
+        this.unlisten();
         this.playlist = list;
+        var self = this;
+        // (a list whose titles come later, a phone's queue: its row made again with them, at once where the page shows
+        // without the focus in its rows, else when it shows next)
+        this.unlisten = list && list.listen ? list.listen(function () { self.listChanged(); }) : function (): void { return undefined; };
+    }
+
+    /** Stops being told of titles that came into the playlist */
+    private unlisten = function (): void { return undefined; };
+
+    /** Titles came into the playlist: its row made again (rowsFor '' : at the next show where it cannot be now) */
+    private listChanged(): void {
+        if (!this.info || this.listAt < 0 && prefs().listDown !== 'row') {
+            return;
+        }
+        if (this.shown && this.zone !== 'related') {
+            this.drawRows();
+        } else {
+            this.rowsFor = '';
+        }
     }
 
     /** The player released the video: drops its details, the related tiles and the pictures */

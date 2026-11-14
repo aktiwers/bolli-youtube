@@ -6,10 +6,14 @@
 // comes from the theme (by-toast).
 
 import { h, setText } from '../core/dom.js';
+import { tr } from '../core/i18n.js';
 import { icon, setIcon } from './icons.js';
 
-/** Time from start until the fade-out begins (fade-in included, as YouTube's) */
+/** Time from start until the fade-out begins (fade-in included, as YouTube's); a text longer than LONG_TEXT letters (two
+ * sentences: why a video cannot be played, what a setting takes) stays LONG_MS */
 var SHOWN_MS = 3500;
+var LONG_TEXT = 80;
+var LONG_MS = 8000;
 
 var box: HTMLElement | null = null;
 var mark: HTMLElement;
@@ -36,7 +40,12 @@ export function toast(text: string, iconName?: string, edge?: string): void {
     void el.offsetWidth;
     el.className = base + ' by-toast--shown';
     clearTimeout(timer);
-    timer = setTimeout(function () { el.className = base; }, SHOWN_MS) as unknown as number;
+    timer = setTimeout(function () { el.className = base; }, text.length > LONG_TEXT ? LONG_MS : SHOWN_MS) as unknown as number;
+}
+
+/** Why a video cannot be played, as a toast says it (reason: YouTube's, in the app's language; '' none known) */
+export function cannotPlayText(reason: string): string {
+    return reason ? tr('This video cannot be played: {1}', reason) : tr('This video cannot be played.');
 }
 
 /** Edge for a toast saying something went wrong */

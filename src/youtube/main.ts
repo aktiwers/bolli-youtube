@@ -12,21 +12,21 @@
 
 import { fadeInImages, h, isStandingBy, LAYOUT_HEIGHT, LAYOUT_WIDTH, toggleClass } from './core/dom.js';
 import { tr } from './core/i18n.js';
-import { initKeys, isTyping, KEY, keyCame, lastKeyAt, setActive, setHoldOk } from './core/keys.js';
+import { ASK_MS, initKeys, isTyping, KEY, keyCame, lastKeyAt, ownPress, setActive, setHoldOk } from './core/keys.js';
 import { initPerf, mark, noteKey } from './core/perf.js';
 import { android, exitApp, ignorePointer } from './core/platform.js';
 import { initPointer, Layer, takesPointer } from './core/pointer.js';
 import { initScreenSaver } from './core/screensaver.js';
 import { load, save } from './core/store.js';
-import { localClock } from './core/time.js';
+import { localClock, Retries } from './core/time.js';
 import { View } from './core/view.js';
 import { PROBLEM, toast } from './ui/toast.js';
 import { screenIsOff, screenKey, screenLayer, screenOff, screenWake } from './ui/screen-off.js';
 import { googleOf, keptProfiles, ownChannel, Profile, profiles, signOut } from './api/accounts.js';
 import { saveAvatars } from './api/avatars.js';
-import { Channel, channelAhead, channelKept, isChannel, keptChannel } from './api/channel.js';
+import { Channel, channelAhead, isChannel, keptChannel } from './api/channel.js';
 import { dearrowFetch, dearrowOn, saveDearrow, Wanted } from './api/dearrow.js';
-import { first, get, home, keepable, keptPage, mayAskPageAhead, page, Page, pageAhead as fetchPageAhead, pageKept, PageButton, PlaylistInfo, Rows, searchAhead as fetchSearchAhead, sized, SubChannel, subscriptions, tabAhead, tapAhead, text, toastOf, Video } from './api/feed.js';
+import { allVideos, first, get, home, keepable, keptPage, listNext, page, Page, pageAhead as fetchPageAhead, PageButton, PlaylistInfo, Rows, searchAhead as fetchSearchAhead, sized, SubChannel, subscriptions, tabAhead, tapAhead, text, toastOf, Video } from './api/feed.js';
 import { freshGuideNames, guideNames } from './api/guide.js';
 import { visited } from './api/looked.js';
 import { forgetKept, pruneKept } from './api/kept-pages.js';
@@ -41,7 +41,7 @@ import { forgetHistorySettings } from './api/account-settings.js';
 import { ListQueue } from './player/list-queue.js';
 import { OwnPlayer } from './player/own-player.js';
 import { forgetPages, openPages } from './api/page-store.js';
-import { cancelPreload, firstStreams, mayAskAhead, preloadVideo, startSoon } from './player/preload.js';
+import { cancelPreload, firstStreams, preloadVideo, startSoon } from './player/preload.js';
 import { TilePreview } from './player/preview.js';
 import { TvApp } from './player/tv-app.js';
 import { apply, askToClear, flipSubscription } from './ui/account.js';
@@ -158,6 +158,10 @@ var standTimer = 0;
  * quick steps) */
 var NEIGHBOURS_MS = 80;
 var BUILD_REST_MS = 300;
+/** The rail opening slides the screen over 0.2 s (themes: .by-rail-shade, .by-app--rail): its neighbours' drawing and
+ * building wait for the slide's end, else they cut into it (seen on the TV 2026-11-14: the first opening lost ~0.27 s
+ * of frames in gaps of 0.05-0.13 s, 0.17-0.64 s after Left; later ones, with the neighbours built, ~0.05 s) */
+var RAIL_OPEN_MS = 260;
 var neighboursTimer = 0;
 var buildTimer = 0;
 var clockTimer = 0;
@@ -174,10 +178,14 @@ var preloadTimer = 0;
 var READY_REST_MS = 400;
 var readyTimer = 0;
 /** A page tile's page, the page of a channel's button (Videos, Live, ...) or a tab's tiles (Latest, Popular, Oldest)
- * are asked for ahead (a page also built) once the focus has rested there this long, within api/feed.ts
- * mayAskPageAhead's requests a minute */
+ * are asked for ahead (a page also built) once the focus has rested there this long */
 var PAGE_REST_MS = 500;
 var pageTimer = 0;
+/** A press of its own onto a tile (not a held key's repeat nor quick taps: core/keys.ts ownPress) asks for what OK
+ * there needs right after the frame that moves the focus (ASK_MS): a page tile's page, a video tile's streams (with
+ * Settings › Videos start sooner). Only the asking: building and loading ahead wait for the rests above, so the keys
+ * are not slowed */
+var askTimer = 0;
 /** A channel page's Play mix preview waits out YouTube's own delay (from the focus's rest) */
 var headerTimer = 0;
 /** With the app's player, YouTube's TV app (kept for films) is released once focus has been off films this long (not
@@ -189,9 +197,6 @@ var RELEASE_MS = 10000;
 var releaseTimer = 0;
 /** Pictures released while a player covers the app (restored when it closes) */
 var released: HTMLImageElement[] = [];
-/** While the app is in the background, the screen's rows are renewed (if old) this often */
-var HIDDEN_RENEW_MS = 30 * 60 * 1000;
-var hiddenTimer = 0;
 /** Subscriptions refresh sooner than other screens (an hour), for new uploads */
 var SUBSCRIPTIONS_REFRESH_MS = 20 * 60 * 1000;
 /** The account each feed was fetched for (refetched when it changes) */
@@ -201,11 +206,13 @@ var NO_ACCOUNT = tr('No one is signed in. Choose who\'s watching, or add an acco
 var beforeSearch = '';
 
 /** Optional screen hooks used here beyond View's. In the background (the visibility handler below) the screen gets
- * putFresh as the app hides and renewIfOld as it returns; a screen with timers of its own (sign-in, the TV code) asks
- * nothing while document.hidden and catches up once back. */
+ * putFresh as the app hides and renewInFront (else renewIfOld) as it returns: nothing is asked for while the app is
+ * out of sight. A screen with timers of its own (sign-in, the TV code) asks nothing while document.hidden and
+ * catches up once back. */
 interface Screen extends View {
     show(rest?: boolean): void;
     renewIfOld?: () => void;
+    renewInFront?: () => void;
     putFresh?: () => void;
     cover?: (covered: boolean) => void;
     setProgress?: (id: string, progress: number) => void;
@@ -233,8 +240,13 @@ function feedTexts(name: string, empty: string): FeedTexts {
 
 /** Page options: full screen with a back arrow when the theme wants it, page buttons, fade-in as rows arrive */
 function pageOptions(): FeedOptions {
-    return { page: metrics().ways.pagesOverAll ? { back: closePage } : undefined, onButton: pressPageButton, fade: true, onList: preloadFocused };
+    return { page: metrics().ways.pagesOverAll ? { back: closePage } : undefined, onButton: pressPageButton, fade: true, onList: preloadFocused,
+        refreshMs: PAGE_FRESH_MS };
 }
+
+/** A page kept longer than this (api/feed.ts keeps them an hour) is shown at once and refreshed behind, the fresh rows
+ * swapped in once out of view (as a channel's list in Subscriptions) */
+var PAGE_FRESH_MS = 5 * 60 * 1000;
 
 /** The screen the app starts on (Settings: Start page, read at each use: it may change meanwhile); Back in the rail
  * goes here, then exits */
@@ -273,19 +285,11 @@ function lookedAt(p: Page, told?: boolean): void {
 
 /** A channel's latest videos (its page in Subscriptions, or its Videos page) as a grid */
 function openVideos(title: string, p: Page): void {
-    pushPage(new FeedView(function () {
-        return keptPage(p).then(function (rows) {
-            var next = rows.shelves.length ? rows.shelves[rows.shelves.length - 1].next : '';
-            return { title: title, next: '', shelves: [{ title: '', videos: allVideos(rows), grid: true, next: next }] };
+    pushPage(new FeedView(function (renew) {
+        return keptPage(p, renew).then(function (rows) {
+            return { title: title, next: '', shelves: [{ title: '', videos: allVideos(rows.shelves), grid: true, next: listNext(rows) }] };
         });
     }, feedTexts(title, tr('No videos from {1} yet.', title)), openTile, pageOptions()));
-}
-
-/** Every video of rows, shelf after shelf */
-function allVideos(rows: Rows): Video[] {
-    var videos: Video[] = [];
-    rows.shelves.forEach(function (s) { videos = videos.concat(s.videos); });
-    return videos;
 }
 
 /** Your subscriptions, A-Z (Settings › Shortcuts' "A channel…") */
@@ -299,7 +303,7 @@ function subscribedChannels(): Promise<SubChannel[]> {
 function libraryPlaylists(): Promise<Video[]> {
     return keptPage({ browseId: BROWSE.library.browseId }).then(function (rows) {
         var seen: { [id: string]: boolean } = {};
-        return allVideos(rows).filter(function (v) {
+        return allVideos(rows.shelves).filter(function (v) {
             var id = v.page && /^VL/.test(v.page.browseId) ? v.page.browseId : '';
             var first = !!id && !seen[id];
             seen[id] = true;
@@ -332,10 +336,10 @@ function section(id: string): Screen {
             id === 'settings' ? new SettingsView(function () { return cast.linkCode(); }, SCREENS_RAIL, question, restartApp,
                 { prompt: shortcutPrompt, panel: tileMenu, channels: subscribedChannels, playlists: libraryPlaylists }) :
             id === 'home' ? feedSection(id, home, tr('Home'), tr('Nothing on Home yet.'), {
-                // As YouTube: a search bar (OK goes to Search) and big tiles in the focused row
+                // As YouTube: a search bar (OK goes to Search), and big tiles in the focused row if chosen
                 onSearch: openSearch,
                 onNudge: pressNudge,
-                big: metrics().ways.homeBig
+                big: homeBig()
             }) :
             id === 'subscriptions' ? new SubscriptionsView(yourFeed(id, subscriptions),
                 feedTexts(tr('your subscriptions'), tr('No videos from your subscriptions.')), openTile,
@@ -350,6 +354,11 @@ function section(id: string): Screen {
                             buildAhead(page, { title: c.title, picture: c.picture, fresh: c.fresh });
                         }, BUILD_AHEAD_MS) as unknown as number;
                     }
+                }, function (c) {
+                    // A channel's list in Subscriptions was asked of YouTube for the column: that is what takes
+                    // YouTube's mark of new videos from the channel (as in its own app), so the channel counts as
+                    // looked at and its dot goes, with no request of the dot's own (api/looked.ts)
+                    lookedAt(c.page, true);
                 }) :
             id === 'library' ? new LibraryView(yourFeed(id, function () { return page({ browseId: browse.browseId }); }),
                 feedTexts(tr('your library'), tr('Nothing in your library yet.')), openTile, feedOptions(id)) :
@@ -365,6 +374,12 @@ function section(id: string): Screen {
         stage.appendChild(sections[id].el);
     }
     return sections[id];
+}
+
+/** Home's focused row has big tiles: where the theme has them and Settings › Look says so (off by default: each Up or
+ * Down then lays two rows anew, which halves Home's frames on the TV) */
+function homeBig(): boolean {
+    return metrics().ways.homeBig && prefs().homeBig;
 }
 
 /** The visible screen: the top page, else the section */
@@ -406,6 +421,12 @@ function switchSection(id: string, rest?: boolean): void {
     current = id;
     pages = pagesOf[id] = pagesOf[id] || [];
     menu.select(id);
+    // (Settings › Look › Bigger focused row on Home changed since Home was made: made anew, from its stored rows)
+    var made = sections.home as FeedView | undefined;
+    if (id === 'home' && made && made.big !== homeBig()) {
+        discard(made);
+        delete sections.home;
+    }
     section(id);
     // Entering Search focuses its keyboard, as YouTube (not when a page over it closes)
     if (id === 'search') {
@@ -605,7 +626,7 @@ function pageView(p: Page, known?: KnownChannel): Screen {
     return isChannel(p) ? new ChannelView(p, texts, openTile, openPage, openSearch, known, function (c: Channel) {
         // Its videos: its uploads, newest first (YouTube's playlist UU… of channel UC…), whatever its tabs are
         askShortcut('channel', p.browseId, { title: c.title, channel: p, videos: { browseId: 'VLUU' + p.browseId.slice(2) } });
-    }) : new FeedView(function () { return keptPage(p); }, texts, openTile, pageOptions());
+    }) : new FeedView(function (renew) { return keptPage(p, renew); }, texts, openTile, pageOptions());
 }
 
 /** The page built ahead of OK on its tile (one at a time): fetched as pageAhead does once the focus has rested there,
@@ -674,7 +695,7 @@ function pressPageButton(b: PageButton, view: FeedView): void {
         tileMenu.open(choices.title, choices.items.map(function (c) {
             // The filtered page brings its own buttons, this one named after the choice
             return { label: c.text, chosen: c.chosen, action: function () {
-                view.reloadAs(function () { return keptPage(c.page); });
+                view.reloadAs(function (renew) { return keptPage(c.page, renew); });
             } };
         }), -1);
     } else if (toggle) {
@@ -1272,6 +1293,10 @@ function preloadFocused(): void {
     clearTimeout(headerTimer);
     clearTimeout(readyTimer);
     clearTimeout(pageTimer);
+    clearTimeout(askTimer);
+    if (ownPress()) {
+        askTimer = setTimeout(askFocused, ASK_MS) as unknown as number;
+    }
     readyTimer = setTimeout(function () { readyFocused(false); }, READY_REST_MS) as unknown as number;
     pageTimer = setTimeout(pageFocused, PAGE_REST_MS) as unknown as number;
     preloadTimer = setTimeout(function () {
@@ -1339,10 +1364,30 @@ function preloadFocused(): void {
     }, PRELOAD_REST_MS) as unknown as number;
 }
 
+/** A press of its own onto a tile: what OK there needs asked for now (kept: a later rest, the build and the start find
+ * it there or on its way); nothing drawn or built. A video's streams, a page's rows (a channel's page as the channel's
+ * own keeper keeps it); not a film (YouTube's player), a live stream (its preload fetches its newest segments), nor
+ * History (each showing of it asks YouTube) */
+function askFocused(): void {
+    var tile = focusedTile();
+    if (!tile || !prefs().preload || own.busy || tv.busy || tv.warming || document.hidden) {
+        return;
+    }
+    var page = tile.page;
+    if (page) {
+        // (a screen that opens its tiles' pages its own way, Subscriptions' grid: asked there, as pageFocused leaves it;
+        // pageAhead asks only for a page that is kept)
+        if (!screen().opensOwn) {
+            pageAhead(page);
+        }
+    } else if (!tile.movie && !tile.live && !tv.ready && !own.readyFor(tile.id) && own.leftId !== tile.id) {
+        firstStreams(tile.id).then(null, function () { return undefined; });
+    }
+}
+
 /** The focus has rested PAGE_REST_MS: the focused page tile's page, or the page of the channel button in focus (Videos,
  * Live, ...), is fetched and built ahead, or the tiles of the tab in focus fetched, so an OK soon after finds them on
- * their way or ready. Past the requests a minute allowed (what is kept is none) a page waits for the longer rest
- * (preloadFocused), a tab for its OK */
+ * their way or ready */
 function pageFocused(): void {
     var tile = focusedTile();
     var view = screen();
@@ -1355,16 +1400,14 @@ function pageFocused(): void {
         return;
     }
     var page = tile && tile.page || (view instanceof ChannelView ? view.focusedPage() : null);
-    // (checked here too, not only in pageAhead and buildAhead: no request is counted for what will not be asked)
-    if (!page || !isChannel(page) && !keepable(page) || view.opensOwn || built && built.key === builtKey(page) ||
-        !mayAskPageAhead(isChannel(page) ? channelKept(page) : pageKept(page))) {
+    if (!page || !isChannel(page) && !keepable(page) || view.opensOwn || built && built.key === builtKey(page)) {
         return;
     }
     pageReady(page, tile ? knownOf(tile) : undefined);
 }
 
 /** The focused video tile's video loaded paused and hidden (own.ready), so OK starts it at once: after READY_REST_MS of
- * rest within preload.ts's share of requests, else once the longer rest's preload comes (late). A closed video kept to
+ * rest, or once the longer rest's preload comes (late: the screen's pictures were still coming). A closed video kept to
  * resume goes for it (not for its own tile: OK resumes it there). Not a live stream (its preload fetches its newest
  * segments), nor while YouTube's player holds the decoder for films */
 function readyFocused(late: boolean): void {
@@ -1372,7 +1415,7 @@ function readyFocused(late: boolean): void {
     // (the screen's pictures checked last: it measures them; the late call comes once preloadFocused found them in)
     if (!prefs().preload || !video || video.page || video.movie || video.live || own.busy || tv.busy || tv.warming || tv.ready ||
         document.hidden || own.readyFor(video.id) || own.leftId === video.id ||
-        !late && (picturesWaiting() || !mayAskAhead(video.id))) {
+        !late && picturesWaiting()) {
         return;
     }
     var id = video.id;
@@ -1447,7 +1490,7 @@ function updateMenu(): void {
     clearTimeout(neighboursTimer);
     if (menuFocused) {
         clearTimeout(standTimer);
-        neighboursTimer = setTimeout(neighboursBy, NEIGHBOURS_MS) as unknown as number;
+        neighboursTimer = setTimeout(neighboursBy, wasInRail ? NEIGHBOURS_MS : RAIL_OPEN_MS) as unknown as number;
     } else if (wasInRail) {
         letGo(STAND_MS);
     }
@@ -1712,7 +1755,7 @@ function playLast(): void {
 /** The newest video on a channel's page of videos (asked anew) */
 function playNewest(p: Page): void {
     page(p).then(function (rows) {
-        var video = allVideos(rows).filter(function (v) { return !v.page; })[0];
+        var video = allVideos(rows.shelves).filter(function (v) { return !v.page; })[0];
         if (video) {
             play(video);
         } else {
@@ -1724,7 +1767,7 @@ function playNewest(p: Page): void {
 /** Plays playlist id from its first video, or shuffled: its first part's videos, as its page's Play all would */
 function playPlaylist(id: string, shuffled: boolean): void {
     keptPage({ browseId: 'VL' + id }).then(function (rows) {
-        var videos = allVideos(rows).filter(function (v) { return !v.page && !v.movie; });
+        var videos = allVideos(rows.shelves).filter(function (v) { return !v.page && !v.movie; });
         if (!videos.length) {
             toast(tr('Nothing here yet.'), 'info');
             return;
@@ -1740,17 +1783,36 @@ function askShortcut(kind: string, id: string, target: ShortcutTarget): void {
     tileMenu.open(tr('Shortcut'), wayLines(kind, id, target, shortcutPrompt()), -1);
 }
 
-/** A visible screen that failed to load retries by itself, as YouTube's app does: periodically (one request each
- * time), and at once when the network comes back */
+/** A visible screen that failed to load tries again by itself, as YouTube's app does, but not for ever: after
+ * RETRY_MS, then each time twice as long after the try before (RETRY_MAX_MS at most), RETRIES times in all (some 40
+ * minutes). A key, the network coming back or another screen begin anew; the network coming back tries at once */
 var RETRY_MS = 20000;
-function retryShown(): void {
+var RETRY_MAX_MS = 10 * 60000;
+var RETRIES = 8;
+var retries = new Retries(RETRY_MS, RETRY_MAX_MS, RETRIES);
+var retriedView: View | null = null;
+function retryShown(now?: boolean): void {
     var view = screen();
-    if (!document.hidden && view.retry) {
-        view.retry(true);
+    if (document.hidden || !view.retry) {
+        return;
+    }
+    if (view !== retriedView || now) {
+        retriedView = view;
+        retries.anew();
+    }
+    var at = Date.now();
+    if (now || retries.due(at)) {
+        if (view.retry(true)) {
+            retries.tried(at);
+        } else {
+            // (nothing failed, or no longer: the next failure counts from its own start)
+            retries.anew();
+        }
     }
 }
-setInterval(retryShown, RETRY_MS);
-window.addEventListener('online', retryShown);
+setInterval(function () { retryShown(); }, RETRY_MS);
+window.addEventListener('online', function () { retryShown(true); });
+document.addEventListener('keydown', function () { retries.anew(); }, true);
 
 function tickClock(): void {
     clearTimeout(clockTimer);
@@ -1782,19 +1844,8 @@ function renewScreen(): void {
     }
 }
 
-/** In the background (webOS may preload the app hidden at power-on), renews old rows every HIDDEN_RENEW_MS so they
- * are fresh when the app is opened hours later */
-function renewWhileHidden(): void {
-    clearInterval(hiddenTimer);
-    if (document.hidden) {
-        hiddenTimer = setInterval(renewScreen, HIDDEN_RENEW_MS) as unknown as number;
-    }
-}
-
-renewWhileHidden();
 document.addEventListener('visibilitychange', function () {
     tickClock();
-    renewWhileHidden();
     if (document.hidden) {
         preview.stop();
         saveAvatars();
@@ -1806,8 +1857,14 @@ document.addEventListener('visibilitychange', function () {
         }
         return;
     }
-    // Back in front after a while (e.g. TV off overnight)
-    renewScreen();
+    // Back in front after a while (e.g. TV off overnight): old rows are asked for now, and drawn as they come unless
+    // the viewer has pressed a key by then (nothing was asked for while the app was out of sight)
+    var front = screen();
+    if (front.renewInFront) {
+        front.renewInFront();
+    } else {
+        renewScreen();
+    }
 });
 // The Magic Remote's pointer as YouTube's app takes it (core/pointer.ts); Android's mouse input is only swallowed
 ignorePointer();
@@ -2204,6 +2261,10 @@ onAccountChange(accountChanged);
 debugHooks({
     play: play,
     section: function (id) {
+        // (a section the rail has: any other id leaves the app without a screen)
+        if (!RAIL.some(function (item) { return item.id === id; })) {
+            return;
+        }
         switchSection(id);
         menuFocused = false;
         updateMenu();

@@ -328,6 +328,8 @@
 .by-channel--preview .by-channel-shade, .by-channel--preview .by-channel-head, .by-channel--preview .by-search-bar,
 .by-channel--preview .by-search-mic { z-index: 45; }
 .by-feed-top { position: absolute; left: 0; top: 0; width: 1280px; }
+/* (a page's grid: over its lines that have scrolled up, under its title and buttons; the view sets its height) */
+.by-page-top { position: absolute; left: 0; top: 0; width: 1280px; display: none; }
 .by-search-top { position: absolute; left: 0; top: 0; width: 1280px; }
 .bd-search-query { position: absolute; }
 .by-search-back { position: absolute; line-height: 0; }
@@ -335,6 +337,8 @@
 /* Subscriptions (views/subscriptions.ts): the channels and the pills over its rows (they slide away in the rows) */
 .by-subs { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; overflow: hidden; }
 .by-subs-rows { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; -webkit-transition: -webkit-transform .25s cubic-bezier(.2, .7, .3, 1); }
+/* (over the videos: what has scrolled up past their top goes under it; under the channels and what else is at the top) */
+.by-subs-top { position: absolute; left: 0; top: 0; width: 1280px; }
 .by-subs-head { position: absolute; overflow: hidden; -webkit-transition: -webkit-transform .25s cubic-bezier(.2, .7, .3, 1), opacity .3s ease; }
 .by-subs-strip { position: relative; white-space: nowrap; -webkit-transition: -webkit-transform .2s ease; }
 .by-subs-channel { position: relative; display: inline-block; vertical-align: top; }
@@ -343,6 +347,19 @@
 .by-subs-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .by-subs-pills { white-space: nowrap; }
 .by-subs-pill { display: inline-block; }
+/* With the channels at the side (by-subs--side) the row at the top is not drawn; the screen's name, the column
+   (views/channel-column.ts: each item at its own place in a list that slides) and the line beside it show while the
+   focus is there, the videos' heading and "Visit channel" while it is in the videos (the screen hides the others) */
+.by-subs-title, .by-subs-column, .by-subs-rule, .by-subs-heading, .by-subs-visit { position: absolute; display: none; white-space: nowrap; }
+.by-subs--side .by-subs-title, .by-subs--side .by-subs-column, .by-subs--side .by-subs-rule, .by-subs--side .by-subs-heading,
+.by-subs--side .by-subs-visit { display: block; }
+.by-subs--side .by-subs-head { display: none; }
+.by-subs-column { overflow: hidden; }
+.by-subs-items { position: relative; -webkit-transition: -webkit-transform .2s ease; }
+.by-subs-item, .by-subs-label, .by-subs-item-picture, .by-subs-item-icon, .by-subs-item-dot, .by-subs-item-name { position: absolute; }
+.by-subs-item-name, .by-subs-label, .by-subs-heading-name, .by-subs-heading-handle { overflow: hidden; text-overflow: ellipsis; }
+.by-subs-heading-picture { position: absolute; display: none; }
+.by-subs-heading--channel .by-subs-heading-picture { display: block; }
 
 /* Library (views/library.ts): its cards over its rows (they slide away in the rows) */
 .by-library { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; overflow: hidden; }

@@ -7,12 +7,15 @@
 // are asked, a file of the right size answers) and copies each into the folder under its name; the database goes
 // again.
 //
-// byChannel, on a rooted TV with the Homebrew Channel: its service writes each PNG under its name.
+// byChannel, on a rooted TV with the Homebrew Channel: its service writes each PNG under its name, as root (asRoot:
+// one file a command, since a command of 131072 bytes or more gets no answer and stalls that service; each with a time
+// limit). From webOS 4 on it is the only way: the image service writes nowhere in an app's folder there.
 //
-// A writing is checked by loading each file at its size. An app cannot remove a file: one no longer wanted is
-// overwritten with a one-pixel picture (blank). One writing at a time (found looks for the newest database).
+// The way that worked for the entry itself goes first (rootFirst). A writing is checked by loading each file at its
+// size. An app cannot remove a file: one no longer wanted is overwritten with a one-pixel picture (blank), or removed
+// as root where that is the TV's way. One writing at a time (found looks for the newest database).
 
-import { lunaAsk } from '../core/luna.js';
+import { lunaAsk, Refusal } from '../core/luna.js';
 import { android } from '../core/platform.js';
 import { load, save } from '../core/store.js';
 import { base64Bytes } from '../api/sabr.js';
@@ -20,6 +23,9 @@ import { loaded } from './pictures.js';
 
 /** Why files were not written: the TV gives the app no way to */
 export var NO_FILE = 'no file';
+/** Why nothing was done as root: the TV has no Homebrew Channel; it has one without root */
+export var NO_CHANNEL = 'no channel';
+export var NO_ROOT = 'no root';
 
 var EXEC = 'luna://org.webosbrew.hbchannel.service/exec';
 var IMAGE = 'luna://com.palm.image/';
@@ -40,6 +46,10 @@ var FOUND_KEY = 'youtube.home.found';
 var STORE_MS = 8000;
 /** A one-pixel picture in the app's folder */
 var DOT = 'dot.png';
+/** How long a command run as root may take (the Channel's service may have to start first), and the longest one
+ * handed over (the app's largest, a 130 px picture of noise, is 90682 bytes) */
+var EXEC_MS = 10000;
+var COMMAND_MAX = 120000;
 
 /** The app's id on a webOS TV ('' elsewhere) */
 export function appId(): string {
@@ -62,24 +72,50 @@ export function sized(src: string, px: number): Promise<void> {
     });
 }
 
-/** Writes the PNGs (base64; squares of sizes px) into the app's folder under names, by the first way that works, and
- * checks that each loads at its size. Rejects (NO_FILE) if they could not be written. */
-export function writePngs(names: string[], pngs: string[], sizes: number[]): Promise<void> {
+/** Runs command as root through the Homebrew Channel's service and resolves with what it printed. Rejects with
+ * NO_CHANNEL (the TV has no such service), NO_ROOT (the service has no root: its exec is refused), else NO_FILE (the
+ * command failed, got no answer in time, or is too long to hand over) */
+export function asRoot(command: string): Promise<string> {
+    if (command.length > COMMAND_MAX) {
+        return Promise.reject(new Error(NO_FILE));
+    }
+    return lunaAsk(EXEC, { command: command }, EXEC_MS).then(function (reply) {
+        return typeof reply.stdoutString === 'string' ? reply.stdoutString : '';
+    }, function (e: Refusal) {
+        var said = e.said || '';
+        throw new Error(/does not exist/i.test(said) ? NO_CHANNEL : /denied/i.test(said) ? NO_ROOT : NO_FILE);
+    });
+}
+
+/** Writes the PNGs (base64; squares of sizes px) into the app's folder under names, by the first way that works
+ * (rootFirst: as root before the browser's database), and checks that each loads at its size. Rejects (NO_FILE) if
+ * they could not be written. */
+export function writePngs(names: string[], pngs: string[], sizes: number[], rootFirst?: boolean): Promise<void> {
     var dir = folder();
     // (the folder goes into paths and a command: only a plain path)
     if (!/^\/[\w\/.-]+\/$/.test(dir)) {
         return Promise.reject(new Error(NO_FILE));
     }
-    return within(byStore(dir, names, pngs, sizes), STORE_MS).then(null, function () { return byChannel(dir, names, pngs); }).then(function () {
+    var store = function (): Promise<void> { return within(byStore(dir, names, pngs, sizes), STORE_MS); };
+    var channel = function (): Promise<void> { return byChannel(dir, names, pngs); };
+    return (rootFirst ? channel().then(null, store) : store().then(null, channel)).then(function () {
         return Promise.all(names.map(function (name, i) { return sized(name, sizes[i]); }));
     }).then(function () { return undefined; }, function () {
         throw new Error(NO_FILE);
     });
 }
 
-/** Copies the one-pixel picture over the files named (they are no longer wanted) */
-export function blank(names: string[]): void {
+/** Copies the one-pixel picture over the files named (they are no longer wanted); root: removes them as root (from
+ * webOS 4 on the image service writes nowhere in the app's folder) */
+export function blank(names: string[], root?: boolean): void {
     var dir = folder();
+    if (root) {
+        // (into a command run as root: only a plain path and names as the app makes them)
+        if (/^\/[\w\/.-]+\/$/.test(dir) && names.every(function (name) { return /^[\w-]+\.png$/.test(name); })) {
+            asRoot('cd "' + dir + '" && rm -f ' + names.join(' ')).then(null, function () { return undefined; });
+        }
+        return;
+    }
     names.forEach(function (name) {
         lunaAsk(IMAGE + 'convert', { src: dir + DOT, dest: dir + name, destType: 'png' }).then(null, function () { return undefined; });
     });
@@ -170,12 +206,18 @@ function blobsOf(dir: string, sizes: number[]): Promise<string[] | null> {
 }
 
 function byChannel(dir: string, names: string[], pngs: string[]): Promise<void> {
-    var command = 'cd "' + dir + '"';
-    names.forEach(function (name, i) {
-        // (to a name beside it first, moved over once whole)
-        command += ' && echo ' + pngs[i] + ' | base64 -d > ' + name + '.new && mv ' + name + '.new ' + name;
+    // (into a command run as root: only names and base64 as the app makes them)
+    for (var i = 0; i < names.length; i++) {
+        if (!/^[\w-]+\.png$/.test(names[i]) || !/^[A-Za-z0-9+\/=]+$/.test(pngs[i])) {
+            return Promise.reject(new Error(NO_FILE));
+        }
+    }
+    var next: Promise<unknown> = Promise.resolve();
+    names.forEach(function (name, n) {
+        // (one file a command, in turn; to a name beside it first, moved over once whole)
+        next = next.then(function () { return asRoot('cd "' + dir + '" && echo ' + pngs[n] + ' | base64 -d > ' + name + '.new && mv ' + name + '.new ' + name); });
     });
-    return lunaAsk(EXEC, { command: command }).then(function () { return undefined; });
+    return next.then(function () { return undefined; });
 }
 
 /** p, or a rejection once ms have passed without it */

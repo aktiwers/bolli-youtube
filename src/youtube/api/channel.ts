@@ -51,8 +51,9 @@ export function isChannel(p: Page): boolean {
     return /^UC/.test(p.browseId) && !p.params;
 }
 
-/** Channel pages cached in memory for a while (api/kept-pages.ts; a reply is ~1 MB) */
-var channels = new Keeper<Channel>(5 * 60 * 1000, 4, true, true);
+/** Channel pages kept in memory (api/kept-pages.ts; a reply is ~1 MB, what is kept of it, parsed, far less): what is
+ * loaded stays loaded, for an hour; the channel's screen refreshes its rows behind it once old (views/channel.ts) */
+var channels = new Keeper<Channel>(60 * 60 * 1000, 12, true, true);
 /** Cached pages that came from the persistent store, not from YouTube in this session */
 var fromTV: { [key: string]: boolean } = {};
 /** Prefetched pages, stored persistently only once opened (pages merely passed by do not push out opened ones) */
@@ -77,11 +78,6 @@ export function keptChannel(p: Page, how?: Wanted, unseen?: boolean): Promise<Ch
         noteAvatar(c.title, c.avatar);
         return c;
     });
-}
-
-/** Whether channel page p's reply is in the memory cache or on its way (asking for it now is no request to YouTube) */
-export function channelKept(p: Page): boolean {
-    return channels.has(pageKey(p));
 }
 
 /** A channel page taken while unseen (keptChannel) shows now: it counts as opened */
