@@ -109,6 +109,30 @@ export function setPicture(img: HTMLImageElement, src: string, fallback?: string
     img.src = other && missing[src] ? other : src;
 }
 
+/** The first of srcs that loads as a real picture (one that fails or comes as a stand-in is remembered as setPicture
+ * does, and the next tried; one known missing is skipped), given to got; none: got is not called */
+export function firstPicture(srcs: string[], got: (img: HTMLImageElement, src: string) => void): void {
+    var left = srcs.filter(function (src) { return !missing[src]; });
+    if (!left.length) {
+        return;
+    }
+    var img = new Image();
+    var src = left[0];
+    var next = function (): void {
+        missing[src] = true;
+        firstPicture(left.slice(1), got);
+    };
+    img.onerror = next;
+    img.onload = function () {
+        if (img.naturalWidth <= STAND_IN_WIDTH) {
+            next();
+        } else {
+            got(img, src);
+        }
+    };
+    img.src = src;
+}
+
 /** Puts other in img where src still shows; a stand-in is remembered (a failure may pass, so src is tried again) */
 function fallBack(img: HTMLImageElement, src: string, other: string, standIn: boolean): void {
     if (img.getAttribute('src') === src) {

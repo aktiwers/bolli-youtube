@@ -1,6 +1,6 @@
 {
     "id": "org.bolli.youtube",
-    "version": "0.1.380",
+    "version": "0.1.381",
     "vendor": "bolli",
     "type": "web",
     "main": "index.html",

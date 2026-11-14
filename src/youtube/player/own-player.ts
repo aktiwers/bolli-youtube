@@ -15,7 +15,7 @@
 // YouTube's servers fail for a while (ladder.ts). A casting phone (cast.ts)
 // drives it through its public methods and onChange.
 
-import { h, LAYOUT_HEIGHT, LAYOUT_WIDTH, setPicture, setShown, setText, toggleClass } from '../core/dom.js';
+import { firstPicture, h, LAYOUT_HEIGHT, LAYOUT_WIDTH, setPicture, setShown, setText, toggleClass, uiScale } from '../core/dom.js';
 import { drawn, onCanvas } from '../ui/pictures.js';
 import { language, tr } from '../core/i18n.js';
 import { KEY, KEYS_GAP } from '../core/keys.js';
@@ -103,7 +103,7 @@ var START_GIVE_UP_MS = 15000;
 var START_LOOK_MS = 5000;
 var START_CAME_S = 6;
 var NO_STREAMS_CHECK_MS = 5000;
-/** The music screen's cover (px across, as it shows), and its blur: the cover halved down to BLUR_PX across, then
+/** The music screen's cover (layout px across), and its blur: the cover halved down to BLUR_PX across, then
  * doubled back up to BLUR_SHOWN_PX (coverOf) */
 var COVER_PX = 256;
 var BLUR_PX = 64;
@@ -2175,26 +2175,27 @@ export class OwnPlayer {
         setShown(this.music, on);
     }
 
-    /** The music screen's cover and its blur, both from video id's hqdefault picture (the one its tiles show: mostly
-     * in the cache; YouTube has it for every video; its cover 270 px across, more than the 256 shown). The cover: the
-     * middle square of the picture's 16:9 band (YouTube puts it there, its sides in a colour of its own), drawn on a
-     * canvas the cover's size, so the picture itself is let go. The blur: the cover halved down to BLUR_PX (each step
-     * averages, so the picture's compression blocks go, which the 120-px thumbnail stretched showed, 2026-11-14), then
-     * doubled back up to BLUR_SHOWN_PX (each step smooths the edges between the small pixels), which the screen
-     * stretches. Some 10 ms once per song on the TV; nothing while it plays (no filter: a full-screen blur is costly on
-     * the TV) */
+    /** The music screen's cover and its blur, from the smallest of video id's pictures whose cover fills the TV's own
+     * pixels for the cover's box (musicPictures: on a 1280 window the 480 px one, mostly in the cache; on a 1920 window
+     * at twice its pixels, 768, the largest), a smaller one where the video lacks it (core/dom.ts firstPicture). The cover: the middle square of the picture's 16:9 band (YouTube
+     * puts it there, its sides in a colour of its own), drawn on a canvas of the TV's pixels for the cover's box (no
+     * more than the picture has), so the picture itself is let go. The blur: the cover halved down to BLUR_PX (each
+     * step averages, so the picture's compression blocks go, which the 120-px thumbnail stretched showed,
+     * 2026-11-14), then doubled back up to BLUR_SHOWN_PX (each step smooths the edges between the small pixels), which
+     * the screen stretches. Once per song; nothing while it plays (no filter: a full-screen blur is costly on the TV) */
     private coverOf(id: string): void {
         var self = this;
-        var img = new Image();
-        img.onload = function () {
+        var need = Math.round(COVER_PX * uiScale() * (window.devicePixelRatio || 1));
+        firstPicture(musicPictures(id, need), function (img) {
             if (self.musicFor !== id) {
                 return;
             }
             var w = img.naturalWidth;
             var side = Math.round(w * 9 / 16);
+            var px = Math.min(side, need);
             var cover = self.musicCover;
-            cover.width = cover.height = COVER_PX;
-            (cover.getContext('2d') as CanvasRenderingContext2D).drawImage(img, (w - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, COVER_PX, COVER_PX);
+            cover.width = cover.height = px;
+            (cover.getContext('2d') as CanvasRenderingContext2D).drawImage(img, (w - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, px, px);
             var small = drawn(cover, BLUR_PX, BLUR_PX);
             for (var n = BLUR_PX * 2; n < BLUR_SHOWN_PX; n *= 2) {
                 var bigger = onCanvas(small, n, n);
@@ -2205,8 +2206,7 @@ export class OwnPlayer {
             blur.width = blur.height = BLUR_SHOWN_PX;
             (blur.getContext('2d') as CanvasRenderingContext2D).drawImage(small, 0, 0, BLUR_SHOWN_PX, BLUR_SHOWN_PX);
             small.width = 0;
-        };
-        img.src = 'https://i.ytimg.com/vi/' + id + '/hqdefault.jpg';
+        });
     }
 
     /** The pictures over the video gone, and let go too (a decoded picture kept through the video costs the TV's short
@@ -4063,6 +4063,18 @@ export interface Playing {
     ended: boolean;
     waiting: boolean;
     paused: boolean;
+}
+
+/** YouTube's pictures of a video whose cover (the middle square of its 16:9 band) is at least need px across, the
+ * smallest first, then the smaller ones (a video may lack the larger): hqdefault 270, sddefault 360, maxresdefault
+ * 720; need beyond the largest: all three, largest first */
+export function musicPictures(id: string, need: number): string[] {
+    var sizes = [{ name: 'hqdefault', cover: 270 }, { name: 'sddefault', cover: 360 }, { name: 'maxresdefault', cover: 720 }];
+    var from = 0;
+    while (from < sizes.length - 1 && sizes[from].cover < need) {
+        from++;
+    }
+    return sizes.slice(0, from + 1).reverse().map(function (size) { return 'https://i.ytimg.com/vi/' + id + '/' + size.name + '.jpg'; });
 }
 
 /** The formats a start plays (preloaded ahead): the Settings quality (Auto and Highest: the TV's max, 4K) in the
