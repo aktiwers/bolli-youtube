@@ -119,12 +119,13 @@ export function firstPicture(srcs: string[], got: (img: HTMLImageElement, src: s
     var img = new Image();
     var src = left[0];
     var next = function (): void {
-        missing[src] = true;
         firstPicture(left.slice(1), got);
     };
+    // (a failure may pass: only a stand-in is remembered, as setPicture does)
     img.onerror = next;
     img.onload = function () {
         if (img.naturalWidth <= STAND_IN_WIDTH) {
+            missing[src] = true;
             next();
         } else {
             got(img, src);

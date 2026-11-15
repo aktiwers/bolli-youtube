@@ -804,10 +804,11 @@ var TILE_STYLES: { [style: string]: string } = { TILE_STYLE_YTLR_SQUARE: 'square
 function tileVideo(key: string, x: any): Video | null {
     try {
         var v = key === 'tileRenderer' ? fromTile(x) : fromLockup(x);
-        // A video YouTube no longer shows (made private, deleted): its tile has no title, only "No views" and a picture
-        // that is not there (seen 2026-11-14 in a playlist and a phone's queue): left out, as YouTube's phone app does,
-        // in every row, page and list alike
-        return v && !v.page && !v.title ? null : v;
+        // A video YouTube no longer shows (made private, deleted): its tile has no title and one line only, "No views"
+        // (read as its channel), no line of views and age, and a picture that is not there (seen 2026-11-14 in a
+        // playlist and a phone's queue): left out, as YouTube's phone app does, in every row, page and list alike. A
+        // video tile merely without a title (YouTube moving it) keeps its views line, and stays
+        return v && !v.page && !v.title && !v.info ? null : v;
     } catch (e) {
         return null;
     }

@@ -378,8 +378,6 @@ function section(id: string): Screen {
     return sections[id];
 }
 
-/** Home's focused row has big tiles: where the theme has them and Settings › Look says so (off by default: each Up or
- * Down then lays two rows anew, which halves Home's frames on the TV) */
 /** Settings › Look › Bigger focused row on Home changed since Home was made: it goes, to be made anew from its stored
  * rows (beside the rail's focus: buildNeighbour, as the rail rests; else when it is shown) */
 function homeFresh(): void {
@@ -390,6 +388,8 @@ function homeFresh(): void {
     }
 }
 
+/** Home's focused row has big tiles: where the theme has them and Settings › Look says so (off by default: each Up or
+ * Down then lays two rows anew, which halves Home's frames on the TV) */
 function homeBig(): boolean {
     return metrics().ways.homeBig && prefs().homeBig;
 }
@@ -550,7 +550,7 @@ function neighboursBy(): void {
     var drew = false;
     neighbours().forEach(function (r) {
         // (a Home made before its row size changed: built anew here, while the rail rests, not on the key into it)
-        if (r.id === 'home') {
+        if (r.id === 'home' && current !== 'home') {
             homeFresh();
         }
         var view = screenOf(r.id);

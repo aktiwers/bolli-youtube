@@ -183,8 +183,9 @@ export function titled(list: PlaylistInfo, queue: { title: string; total?: numbe
     // (videos are left out only within a stretch no longer than the answer and as many again: anything wider is a
     // misreading, and nothing is dropped)
     var drop = first >= 0 && last - first + 1 <= queue.videos.length * 2;
-    // (the whole queue in this answer: those not in it are gone wherever they are)
-    var whole = first >= 0 && !!queue.total && queue.total <= WHOLE;
+    // (the whole queue in this answer: those not in it are gone wherever they are; not where the list is longer than
+    // YouTube counts the queue: a video the phone added since, or an answer for another list)
+    var whole = first >= 0 && !!queue.total && queue.total <= WHOLE && list.videos.length <= queue.total;
     var changed = false;
     var videos: Video[] = [];
     list.videos.forEach(function (v, i) {

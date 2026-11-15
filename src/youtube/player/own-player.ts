@@ -64,7 +64,7 @@ import { ListQueue } from './list-queue.js';
 import { ReplayGraph } from './replay-graph.js';
 import { paintFrame, SeekPreview } from './seek-preview.js';
 import { SabrEngine } from './sabr-engine.js';
-import { StatsBox } from './stats-box.js';
+import { CountedVideo, StatsBox } from './stats-box.js';
 import { UpNext } from './up-next.js';
 import { paidChip, setPaid, WatchPage } from './watch-page.js';
 
@@ -143,6 +143,20 @@ var LOADED_STILL = 3;
 /** How often a moving video is checked for a picture that stands while it should play (Stalls); one frozen with this
  * much buffered ahead (s) is nudged on NUDGE_S (Freezes) */
 var STALL_CHECK_MS = 1000;
+/** The chapter row stays open while it had a key within this long (ms): the info bar looks every 5 s from the last key,
+ * so it closes 10 s after it (at once on OK, Back, Up or Down) */
+var CHAPTERS_IDLE_MS = 9000;
+/** Android only: a start that took over the video loaded ahead hidden (ready at OK) is looked at this long after OK;
+ * with its media in but fewer than AHEAD_FRAMES new frames decoded it starts anew (an NVIDIA Shield TV 2017 on
+ * Android 11 showed its first frame only, 2026-11-15); after AHEAD_STRIKES such starts this device loads nothing
+ * ahead hidden any more (hiddenAheadOk) */
+var AHEAD_CHECK_MS = 2000;
+var AHEAD_FRAMES = 5;
+var AHEAD_STRIKES = 2;
+/** Where the stuck starts of a video prepared hidden are counted (this device) */
+var NO_HIDDEN_KEY = 'youtube.noHiddenAhead';
+/** Whether this device takes a video prepared hidden, told once per run (null: not asked yet; hiddenAheadOk) */
+var hiddenAhead: boolean | null = null;
 var FROZEN_AHEAD_S = 1;
 var NUDGE_S = 0.1;
 /** The next video is preloaded this long before the end (s) */
@@ -321,6 +335,8 @@ export class OwnPlayer {
     /** The chapters to pick from over the info bar's time line (Up), and whether opening it paused the video (it plays
      * again when the row closes without a pick) */
     private chapterRow: ChapterRow;
+    /** When the chapter row last had a key (or opened) */
+    private chapterKeyAt = 0;
     private chapterPaused = false;
     /** YouTube's most replayed graph over the info bar's progress bar, and the video's (null: none) */
     private osdReplays: ReplayGraph;
@@ -517,7 +533,7 @@ export class OwnPlayer {
         // (the TV saying it is online again, also where no loss was seen: what waits for the line is done now)
         window.addEventListener('online', function () { self.lineBack(); });
         this.loader = new FillLoader(this.el, true);
-        this.osd = new PlayerOsd(this.el, function () { return self.video.paused || !self.moving; }, function () {
+        this.osd = new PlayerOsd(this.el, function () { return self.video.paused || !self.moving || self.chaptersWanted(); }, function () {
             toggleClass(self.subtitleBox, 'vod-subtitles--up', false);
             self.chat.lift();
             self.closeChapters(false);
@@ -875,7 +891,7 @@ export class OwnPlayer {
      * browsing), nor once still() says its tile has lost the focus. The closed video kept, or another loaded ahead,
      * goes for it */
     ready(id: string, t: number, ask: () => Promise<Streams>, still: () => boolean): void {
-        if (this.want || this.peek || this.readyId === id || this.primed && this.primed.id === id) {
+        if (this.want || this.peek || this.readyId === id || this.primed && this.primed.id === id || !hiddenAheadOk()) {
             return;
         }
         var gen = ++this.readyGen;
@@ -903,6 +919,43 @@ export class OwnPlayer {
             engine.load(f.video, f.audio, start.t);
             engine.hold(READY_AHEAD_S);
         }, gone);
+    }
+
+    /** Android: AHEAD_CHECK_MS after a start took over the video loaded ahead hidden, whether its picture decodes. Media in
+     * (a second ahead at least: not a slow line) and fewer than AHEAD_FRAMES new frames (or the time not moving where
+     * the frames are not told): the device does not take a video prepared hidden. It is remembered (NO_HIDDEN_KEY: no
+     * more loading ahead hidden here), the pipeline let go, and the video started anew where it was */
+    private checkAhead(): void {
+        var self = this;
+        var gen = this.gen;
+        var v = this.video;
+        var from = framesDecoded(v);
+        setTimeout(function () {
+            if (gen !== self.gen || self.held || v.paused || !self.want || !self.format) {
+                return;
+            }
+            var t = v.currentTime;
+            var media = bufferedEnd(v.buffered, t) - t >= 1;
+            var frames = framesDecoded(v);
+            var stuck = frames >= 0 ? frames - from < AHEAD_FRAMES : !self.moving;
+            if (!media || !stuck) {
+                return;
+            }
+            var strikes = aheadStrikes() + 1;
+            save(NO_HIDDEN_KEY, strikes);
+            if (strikes >= AHEAD_STRIKES) {
+                hiddenAhead = false;
+            }
+            note('ahead stuck', self.want.id + ': ' + (frames >= 0 ? (frames - from) + ' frames' : 'not moving') + ' in ' + AHEAD_CHECK_MS +
+                ' ms, started anew (' + strikes + ' of ' + AHEAD_STRIKES + ' before no loading ahead hidden here)');
+            // (its engine stopped before its pipeline goes: nothing works on a source already let go)
+            if (self.engine) {
+                self.engine.stop();
+                self.engine = null;
+            }
+            releasePipeline(v);
+            self.playFormat(self.format, t);
+        }, AHEAD_CHECK_MS);
     }
 
     /** Drops the video loaded ahead, or its load on the way (the focus moved on, the app went away) */
@@ -1474,6 +1527,9 @@ export class OwnPlayer {
             case KEY.LEFT:
             case KEY.RIGHT:
                 this.chapterRow.move(code === KEY.LEFT ? -1 : 1);
+                this.chapterKeyAt = Date.now();
+                // (the bar's time counted from this key: it hides at its second look, 10 s on)
+                this.osd.keep();
                 this.showChapter();
                 break;
             case KEY.OK:
@@ -1503,8 +1559,16 @@ export class OwnPlayer {
             this.pause();
         }
         this.chapterRow.openAt(this.video.currentTime);
+        this.chapterKeyAt = Date.now();
         this.showKeys();
         this.showChapter();
+    }
+
+    /** The chapter row is open and was used within CHAPTERS_IDLE_MS: the info bar it is in stays (its own hiding came
+     * SHOW_MS after it showed, the video playing on with Pause on chapters off, while the viewer still went through the
+     * chapters, 2026-11-15) */
+    private chaptersWanted(): boolean {
+        return this.chapterRow.open && Date.now() - this.chapterKeyAt < CHAPTERS_IDLE_MS;
     }
 
     /** The selected chapter's start marked on the bar, its time and name on the time line */
@@ -1830,7 +1894,10 @@ export class OwnPlayer {
             this.watch.hide();
             this.osd.hide();
             this.upNext.show(next, wait);
-            this.prime(next);
+            // (loaded paused hidden as a video loaded ahead is: not where the device does not take that)
+            if (hiddenAheadOk()) {
+                this.prime(next);
+            }
             this.onChange();
         } else {
             this.stop();
@@ -1987,6 +2054,10 @@ export class OwnPlayer {
                 ahead.engine.hold(0);
             }
             this.adopt(taken);
+            // (judged only when its video was ready at OK: one still decoding may take its time)
+            if (ahead && !waiting && android()) {
+                this.checkAhead();
+            }
             if (ahead || waiting) {
                 // As a start: YouTube's player if it does not play; its frame there (decoded, it plays first)
                 this.giveUpLater();
@@ -2177,8 +2248,8 @@ export class OwnPlayer {
 
     /** The music screen's cover and its blur, from the smallest of video id's pictures whose cover fills the TV's own
      * pixels for the cover's box (musicPictures: on a 1280 window the 480 px one, mostly in the cache; on a 1920 window
-     * at twice its pixels, 768, the largest), a smaller one where the video lacks it (core/dom.ts firstPicture). The cover: the middle square of the picture's 16:9 band (YouTube
-     * puts it there, its sides in a colour of its own), drawn on a canvas of the TV's pixels for the cover's box (no
+     * at twice its pixels, 768, the largest), a smaller one where the video lacks it (core/dom.ts firstPicture). The
+     * cover: the middle square of the picture's 16:9 band (YouTube puts it there, its sides in a colour of its own), drawn on a canvas of the TV's pixels for the cover's box (no
      * more than the picture has), so the picture itself is let go. The blur: the cover halved down to BLUR_PX (each
      * step averages, so the picture's compression blocks go, which the 120-px thumbnail stretched showed,
      * 2026-11-14), then doubled back up to BLUR_SHOWN_PX (each step smooths the edges between the small pixels), which
@@ -4074,7 +4145,42 @@ export function musicPictures(id: string, need: number): string[] {
     while (from < sizes.length - 1 && sizes[from].cover < need) {
         from++;
     }
-    return sizes.slice(0, from + 1).reverse().map(function (size) { return 'https://i.ytimg.com/vi/' + id + '/' + size.name + '.jpg'; });
+    var urls: string[] = [];
+    for (var i = from; i >= 0; i--) {
+        urls.push('https://i.ytimg.com/vi/' + id + '/' + sizes[i].name + '.jpg');
+    }
+    return urls;
+}
+
+/** Whether this device takes a video prepared hidden (loaded ahead paused while its tile has the focus): yes but on
+ * Android where an NVIDIA device runs the app (a Shield TV 2017 showed the first frame only, 2026-11-15) or a start
+ * here found it did not (checkAhead). webOS: always */
+export function hiddenAheadOk(): boolean {
+    var shell = android();
+    if (!shell) {
+        return true;
+    }
+    if (hiddenAhead === null) {
+        hiddenAhead = aheadStrikes() < AHEAD_STRIKES && !(shell.device && /nvidia/i.test(shell.device()));
+    }
+    return hiddenAhead;
+}
+
+/** Starts here that found a video prepared hidden showing its first frame only (checkAhead) */
+function aheadStrikes(): number {
+    return load<number>(NO_HIDDEN_KEY) || 0;
+}
+
+/** Tests: hiddenAheadOk asks anew */
+export function forgetHiddenAhead(): void {
+    hiddenAhead = null;
+}
+
+/** Frames the video decoded so far (-1: not told here) */
+function framesDecoded(v: HTMLVideoElement): number {
+    var q = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : null;
+    var n = q ? q.totalVideoFrames : (v as CountedVideo).webkitDecodedFrameCount;
+    return typeof n === 'number' ? n : -1;
 }
 
 /** The formats a start plays (preloaded ahead): the Settings quality (Auto and Highest: the TV's max, 4K) in the

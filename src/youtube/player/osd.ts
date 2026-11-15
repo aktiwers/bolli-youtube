@@ -37,6 +37,9 @@ export class PlayerOsd {
     /** Whether the line under the title is shown (as last set) */
     private metaShown = true;
 
+    /** The bar's time up: a look again (stay) or hidden */
+    private later: () => void;
+
     /** stay: asked when the time is up (true keeps the bar); onHide: called when it hides */
     constructor(root: HTMLElement, private stay: () => boolean, private onHide?: () => void) {
         this.el = h('div', 'osd');
@@ -71,6 +74,15 @@ export class PlayerOsd {
         this.el.appendChild(line);
         this.el.appendChild(this.message);
         root.appendChild(this.el);
+        var self = this;
+        // (one for the bar's life: a key that keeps the bar up makes no new function)
+        this.later = function () {
+            if (self.stay()) {
+                self.timer = setTimeout(self.later, SHOW_MS) as unknown as number;
+            } else {
+                self.hide();
+            }
+        };
     }
 
     get shown(): boolean {
@@ -91,15 +103,7 @@ export class PlayerOsd {
             this.el.style.display = 'block';
         }
         clearTimeout(this.timer);
-        var self = this;
-        var later = function () {
-            if (self.stay()) {
-                self.timer = setTimeout(later, SHOW_MS) as unknown as number;
-            } else {
-                self.hide();
-            }
-        };
-        this.timer = setTimeout(later, SHOW_MS) as unknown as number;
+        this.timer = setTimeout(this.later, SHOW_MS) as unknown as number;
     }
 
     /** Where its content starts while shown, under the shade above it (layout units from the top; 0: hidden): what
