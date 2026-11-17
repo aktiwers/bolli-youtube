@@ -37,7 +37,9 @@
 /* The left rail (views/rail.ts): its items are placed by the theme's metrics; the clock is in it. Open, it pushes
    the screens right (main.ts by-app--rail); Search has none (by-app--search: its back arrow instead) */
 .by-rail { position: absolute; left: 0; top: 0; width: 1280px; height: 0; z-index: 10; }
-.bd-stage { -webkit-transition: -webkit-transform .2s ease; }
+/* (the screen slid by the open rail a layer of its own for good: made one only while it slid, the TV made it anew at
+   every open and close and drew the page under it again, ~20 ms of rasterizing a time; traced on the TV 2026-11-17) */
+.bd-stage { -webkit-transition: -webkit-transform .2s ease; will-change: transform; }
 .by-rail-divider { position: absolute; }
 .by-app--search .by-rail-item, .by-app--search .by-rail-logo, .by-app--search .by-rail-divider { display: none; }
 /* A page over a section (views/videos.ts page: History, a playlist) has no rail either (main.ts by-app--page): its back
@@ -188,6 +190,10 @@
 .by-watch-marker { position: absolute; }
 /* The subtitles go under the watch page (player/own-player.ts) */
 .by-player--watch .vod-subtitles { display: none; }
+/* (a subtitle size being chosen in the player's menu: the page under the video steps aside but its menu, the subtitles
+   show beside it, over the picture: their place there is the theme's, themes/youtube.css) */
+.by-player--sizing .by-watch-dim, .by-player--sizing .by-watch-body { visibility: hidden; }
+.by-player--watch.by-player--sizing .vod-subtitles { display: block; z-index: 1; }
 /* A live stream's chat (player/chat-view.ts): shown while the player is marked by-player--chat, not under the watch
    page; its newest messages at the bottom, older ones cut at the top */
 .by-chat { position: absolute; overflow: hidden; display: none; }

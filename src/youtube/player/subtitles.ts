@@ -138,6 +138,11 @@ export class SubtitleView {
     private shown: string | null = null;
     /** Text in the element, which keeps the last text while hidden */
     private written = '';
+    /** The subtitle the video has now (null: none), and a sample shown while it has none (null: none) */
+    private real: string | null = null;
+    private sample: string | null = null;
+    /** The size, a percentage of the stylesheet's (Settings › Subtitle size) */
+    private size = 100;
 
     constructor(private container: HTMLElement) {
         // Inline, so a background is drawn per line; pre-line breaks at '\n' and still wraps long lines
@@ -147,8 +152,34 @@ export class SubtitleView {
         container.style.visibility = 'hidden';
     }
 
-    /** Show text, or hide the overlay for null */
+    /** The text at percent of the stylesheet's size, at once (a zoom: its letters drawn at that size, lines wrapping as
+     * at it; nothing written when it is the size already) */
+    setSize(percent: number): void {
+        if (percent !== this.size) {
+            this.size = percent;
+            if (percent === 100) {
+                this.text.style.removeProperty('zoom');
+            } else {
+                this.text.style.setProperty('zoom', String(percent / 100));
+            }
+        }
+    }
+
+    /** A sample shown while the video shows no subtitle (choosing a size: something to see it on); null: none */
+    setSample(text: string | null): void {
+        this.sample = text;
+        this.paint();
+    }
+
+    /** Show text, or hide the overlay for null (a sample shows meanwhile, if one is set) */
     show(text: string | null): void {
+        this.real = text;
+        this.paint();
+    }
+
+    /** The video's subtitle, else the sample, else nothing */
+    private paint(): void {
+        var text = this.real || this.sample;
         if (text === this.shown) {
             return;
         }

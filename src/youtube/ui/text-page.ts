@@ -4,15 +4,14 @@
 // is longer than the field. Settings types a picture's address on it (a custom logo) and the home screen name (with
 // a space key).
 //
-// The TV keyboard key puts the text in a real text field over the shown one and gives it the focus: the TV then
-// shows its own keyboard, and a phone's app or a plugged-in keyboard types (and pastes) into it too. The keys are
-// the field's meanwhile (core/keys.ts setTyping). Enter there hands the text over as the tick does; Back, or the
-// TV's keyboard going away, comes back to this keyboard with the text as typed.
+// The TV keyboard key brings the TV's own keyboard (ui/tv-field.ts): Enter there hands the text over as the tick does;
+// Back, or the TV's keyboard going away, comes back to this keyboard with the text as typed.
 
 import { h, setShown, setText } from '../core/dom.js';
 import { tr } from '../core/i18n.js';
-import { KEY, setTyping } from '../core/keys.js';
+import { KEY } from '../core/keys.js';
 import { Keyboard, KeyboardLabels } from './keyboard.js';
+import { TvField } from './tv-field.js';
 import { sideKey } from './youtube-keyboard.js';
 
 var DELETE = 'Delete';
@@ -21,8 +20,6 @@ var UPPER = 'ABC';
 var LOWER = 'abc';
 /** The key that brings the TV's own keyboard (shown as a keyboard: dress) */
 var TV = 'TV keyboard';
-var ENTER = 13;
-var ESCAPE = 27;
 /** Characters the field shows (the address's end) */
 var SHOWN = 44;
 
@@ -30,9 +27,8 @@ export class TextPage {
     el: HTMLElement;
     shown = false;
     private field: HTMLElement;
-    /** The real text field the TV's own keyboard types into, and whether it has the focus now */
-    private input: HTMLInputElement;
-    private inField = false;
+    /** The TV's own keyboard's field */
+    private tv: TvField;
     private keyboard: Keyboard;
     private labels: KeyboardLabels;
     private upper = false;
@@ -46,31 +42,25 @@ export class TextPage {
         this.el = h('div', 'by-langs by-address');
         this.title = this.el.appendChild(h('div', 'by-langs-title')) as HTMLElement;
         this.field = this.el.appendChild(h('div', 'by-langs-field')) as HTMLElement;
-        this.input = this.el.appendChild(h('input', 'by-langs-field by-langs-input')) as HTMLInputElement;
-        this.input.type = 'text';
-        ['autocomplete', 'autocorrect', 'autocapitalize'].forEach(function (name) { self.input.setAttribute(name, 'off'); });
-        this.input.setAttribute('spellcheck', 'false');
-        setShown(this.input, false);
-        this.input.addEventListener('input', function () {
-            if (self.inField) {
-                self.keyboard.setValue(self.input.value);
+        this.tv = new TvField(this.el, 'by-langs-field', this.field);
+        this.tv.onText = function (text) { self.keyboard.setValue(text); };
+        this.tv.onDone = function () { self.done(); };
+        this.tv.onLeave = function () {
+            if (self.shown) {
+                self.keyboard.setFocused(true);
+                self.draw();
             }
-        });
-        // (the focus taken from it, or the TV's keyboard put away by its own Back: this keyboard again)
-        this.input.addEventListener('blur', function () { self.leaveField(); });
-        document.addEventListener('keyboardStateChange', function (e: Event) {
-            var detail = (e as CustomEvent).detail as { visibility?: boolean } | undefined;
-            if (detail && detail.visibility === false) {
-                self.leaveField();
-            }
-        });
+        };
         // (Space, Clear and the tick as Search's bottom row: each a pill)
         this.labels = { space: tr('Space'), del: DELETE, clear: tr('Clear'), enter: DONE, spaceUnits: 2 };
         this.keyboard = new Keyboard(this.labels, function () { self.draw(); }, this.lines());
         this.keyboard.actions[UPPER] = function () { self.setUpper(true); };
         this.keyboard.actions[LOWER] = function () { self.setUpper(false); };
         this.keyboard.actions[DONE] = function () { self.done(); };
-        this.keyboard.actions[TV] = function () { self.enterField(); };
+        this.keyboard.actions[TV] = function () {
+            self.keyboard.setFocused(false);
+            self.tv.enter(self.keyboard.text);
+        };
         this.dress();
         var keys = this.el.appendChild(h('div', 'by-langs-keys')) as HTMLElement;
         keys.appendChild(this.keyboard.el);
@@ -98,59 +88,10 @@ export class TextPage {
 
     close(): void {
         if (this.shown) {
-            this.leaveField();
+            this.tv.leave();
             this.shown = false;
             setShown(this.el, false);
         }
-    }
-
-    /** The text into the real field, which gets the focus and the keys: the TV shows its own keyboard */
-    private enterField(): void {
-        var self = this;
-        var input = this.input;
-        this.inField = true;
-        input.value = this.keyboard.text;
-        setShown(this.field, false);
-        setShown(input, true);
-        this.keyboard.setFocused(false);
-        setTyping(function (code) { return self.fieldKey(code); });
-        input.focus();
-        try {
-            input.setSelectionRange(input.value.length, input.value.length);
-        } catch (e) {
-            // (the caret stays where the engine put it)
-        }
-    }
-
-    /** Back to this keyboard, the text as the real field has it (nothing if the field has not the keys) */
-    private leaveField(): void {
-        if (!this.inField) {
-            return;
-        }
-        this.inField = false;
-        setTyping(null);
-        this.keyboard.setValue(this.input.value);
-        this.input.blur();
-        setShown(this.input, false);
-        setShown(this.field, true);
-        if (this.shown) {
-            this.keyboard.setFocused(true);
-            this.draw();
-        }
-    }
-
-    /** A key while the real field has them: Enter hands the text over, Back (Esc on a keyboard) comes back to this
-     * keyboard; any other is the field's (false) */
-    private fieldKey(code: number): boolean {
-        if (code === ENTER) {
-            this.leaveField();
-            this.done();
-        } else if (code === KEY.BACK || code === ESCAPE) {
-            this.leaveField();
-        } else {
-            return false;
-        }
-        return true;
     }
 
     /** The page while open (null: closed): the pointer's layer, a click beside it is Back (core/pointer.ts) */
@@ -159,13 +100,8 @@ export class TextPage {
     }
 
     onKey(code: number): boolean {
-        // (the Android app hands the remote's keys here also while the real field has the focus: Enter and Back as
-        // on a TV, and its number keys, which never reach the field there, type into it)
-        if (this.inField) {
-            if (!this.fieldKey(code) && this.keyboard.typeDigit(code)) {
-                this.input.value = this.keyboard.text;
-            }
-            return true;
+        if (this.tv.active) {
+            return this.tv.onKey(code, this.keyboard);
         }
         if (code === KEY.BACK) {
             this.close();

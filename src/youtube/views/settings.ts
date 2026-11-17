@@ -29,7 +29,7 @@ import { View } from '../core/view.js';
 import { AccountGroup, AccountSetting, historySettings } from '../api/account-settings.js';
 import { Ask } from '../api/feed.js';
 import { ALWAYS, audioLanguages, languageName, offeredLanguages } from '../api/languages.js';
-import { Choice, Choices, ChoiceSetting, HIGHEST, prefDefault, prefs, Prefs, setNames, setPref, Value } from '../api/prefs.js';
+import { CAPTION_SIZES, Choice, Choices, ChoiceSetting, HIGHEST, prefDefault, prefs, Prefs, setNames, setPref, Value } from '../api/prefs.js';
 import { keyName, shortcutOf, shortcuts } from '../api/shortcuts.js';
 import { PARTS } from '../api/sponsorblock.js';
 import { codecPlays } from '../api/streams.js';
@@ -742,6 +742,9 @@ function bolli(pages: StartPage[], more: (pref: LanguagePref) => void, chat: () 
             appLanguage(restart),
             subtitles(more),
             pref(tr('Subtitle style'), tr('How YouTube\'s automatic subtitles appear'), pic('language'), 'captionStyle', CAPTION_STYLES),
+            pref(tr('Subtitle size'), tr('How big subtitles are in Bolli\'s player'), pic('language'), 'captionSize', CAPTION_SIZES.map(function (size) {
+                return { value: size, name: size + ' %', note: size === 100 ? tr('as YouTube shows them') : '' };
+            })),
             audioLanguage(more)
         ] },
         { title: tr('Speed'), settings: [

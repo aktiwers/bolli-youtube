@@ -1,7 +1,8 @@
 // YouTube's on-screen keyboards: the plain one (More languages: a to g with Delete as YouTube's backspace icon, then
 // the caller's letters, then Space, as wide as the keys beside it, and Clear), and
 // Search's (SearchKeyboard): a language's letters (ui/keyboard-languages.ts) with Delete, &123 (YouTube's numbers and
-// symbols, ABC back) and the language key at the ends of the first three rows, Space, Clear and Search in its words.
+// symbols, ABC back) and the language key at the ends of the first three rows, the TV keyboard key (the TV's own
+// keyboard: ui/tv-field.ts, as Settings' text page has it) at the fourth's, Space, Clear and Search in its words.
 
 import { setText } from '../core/dom.js';
 import { tr } from '../core/i18n.js';
@@ -13,6 +14,8 @@ var DELETE = 'Delete';
 var NUMBERS = '&123';
 var LETTERS = 'ABC';
 var LANGUAGE = 'Language';
+/** The key that brings the TV's own keyboard (shown as a keyboard) */
+var TV = 'TV keyboard';
 
 /** A keyboard with lines of keys (each a string) after a to g */
 export function youtubeKeyboard(lines: string[], onChange: (text: string) => void): Keyboard {
@@ -42,6 +45,8 @@ export class SearchKeyboard {
     private symbols = false;
     /** The language key was pressed; the keys changed (another language, or &123 and ABC: its height may differ) */
     onLanguage: () => void = function () { return undefined; };
+    /** The TV keyboard key was pressed */
+    onTvKeyboard: () => void = function () { return undefined; };
     onLayout: () => void = function () { return undefined; };
 
     /** id: the language (keyboardLanguage); onChange: gets the text after each key */
@@ -52,6 +57,7 @@ export class SearchKeyboard {
         this.keyboard.actions[NUMBERS] = function () { self.showSymbols(true); };
         this.keyboard.actions[LETTERS] = function () { self.showSymbols(false); };
         this.keyboard.actions[LANGUAGE] = function () { self.onLanguage(); };
+        this.keyboard.actions[TV] = function () { self.onTvKeyboard(); };
         this.keyboard.typer = function (text, key) { return composed(text, key, self.language.compose); };
         this.keyboard.eraser = function (text) { return erased(text, self.language.compose); };
         this.dress();
@@ -92,7 +98,7 @@ export class SearchKeyboard {
 
     /** The rows (the letters, or the numbers and symbols) with the side keys, then Space, Clear and Search */
     private lines(): string[][] {
-        var side = this.symbols ? [DELETE, LETTERS] : [DELETE, NUMBERS, LANGUAGE];
+        var side = this.symbols ? [DELETE, LETTERS, '', TV] : [DELETE, NUMBERS, LANGUAGE, TV];
         var lines = (this.symbols ? SYMBOLS : this.language.rows).map(function (row, i) {
             var keys = row.split('').map(function (c) { return c === GAP ? '' : c; });
             return side[i] ? keys.concat([side[i]]) : keys;
@@ -107,5 +113,6 @@ export class SearchKeyboard {
         sideKey(this.keyboard, NUMBERS);
         sideKey(this.keyboard, LETTERS);
         sideKey(this.keyboard, LANGUAGE, 'language');
+        sideKey(this.keyboard, TV, 'keyboard');
     }
 }

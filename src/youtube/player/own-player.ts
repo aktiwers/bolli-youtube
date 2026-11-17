@@ -32,7 +32,7 @@ import { knownAvatar } from '../api/avatars.js';
 import { liveNow } from '../api/channel.js';
 import { dearrowOn, dearrowPicture, dearrowTitle, dearrowWait } from '../api/dearrow.js';
 import { dots, Ended, Page, PlaylistInfo, thumbnail, thumbnailFallback, Video } from '../api/feed.js';
-import { ChoiceSetting, prefs, setNames, setPref } from '../api/prefs.js';
+import { CAPTION_SIZES, ChoiceSetting, prefs, setNames, setPref } from '../api/prefs.js';
 import { keyName, wakeKey } from '../api/shortcuts.js';
 import { Replays, replays } from '../api/replays.js';
 import { Segment, segmentAt, segments, skippedText } from '../api/sponsorblock.js';
@@ -3697,6 +3697,9 @@ export class OwnPlayer {
         var style = CAPTION_STYLES.filter(function (one) { return one.value === prefs().captionStyle; })[0];
         var lines: PanelLine[] = [{ label: tr('Style'), under: style ? style.name : '', stay: true, action: function () {
             self.watch.panel.push(tr('Subtitle style'), function () { return self.styleLines(); });
+        } }, { label: tr('Size'), under: prefs().captionSize + ' %', stay: true, action: function () {
+            self.sizing(true);
+            self.watch.panel.push(tr('Subtitle size'), function () { return self.sizeLines(); }, -1, function () { self.sizing(false); });
         } }, { label: tr('Off'), chosen: !this.caption, action: function () {
             self.setCaption(null);
             setPref('captions', '');
@@ -3711,6 +3714,27 @@ export class OwnPlayer {
             lines.push({ label: tr('This video has none'), plain: true });
         }
         return lines;
+    }
+
+    /** Subtitle size (shared with Settings): the subtitles show the focused size at once, over the page under the video;
+     * OK keeps it; the list left, the chosen one again */
+    private sizeLines(): PanelLine[] {
+        var self = this;
+        return CAPTION_SIZES.map(function (size) {
+            return { label: size + ' %', chosen: prefs().captionSize === size, focus: function () { self.subtitleView.setSize(size); },
+                action: function () { setPref('captionSize', size); } };
+        });
+    }
+
+    /** While a subtitle size is being chosen (on): the page under the video steps aside for the picture, its menu stays,
+     * and the subtitles show beside the menu (a sample where the video shows none now); after (off): as before, at the
+     * size chosen */
+    private sizing(on: boolean): void {
+        toggleClass(this.el, 'by-player--sizing', on);
+        this.subtitleView.setSample(on ? tr('Subtitles look like this at this size') : null);
+        if (!on) {
+            this.subtitleView.setSize(prefs().captionSize);
+        }
     }
 
     /** Subtitle style (shared with Settings): redraws the current subtitles in the chosen style */
@@ -3932,6 +3956,8 @@ export class OwnPlayer {
         }
         this.track = null;
         this.captionAsked = false;
+        // (the size chosen, here or in Settings)
+        this.subtitleView.setSize(prefs().captionSize);
         this.subtitleView.show(null);
         this.watch.setSubtitles(!!c);
         this.loadCaption();

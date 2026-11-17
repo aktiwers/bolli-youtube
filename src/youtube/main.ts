@@ -2470,6 +2470,8 @@ whenScreenRests(function () {
     openPages();
     prepareSections(['subscriptions', 'library']);
     prepareNames();
+    // The open rail as narrow as its names allow (laid out now, the first screen drawn)
+    menu.fit();
     // The rail's names as YouTube's guide gives them now (asked once a week, and after a language change)
     freshGuideNames().then(function (names) {
         for (var id in BROWSE) {

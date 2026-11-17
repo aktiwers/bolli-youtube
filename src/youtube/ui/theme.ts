@@ -512,7 +512,7 @@ function highlightRules(color: string, page: string): string {
  * or body had it restyle the whole page at every change (1153 elements, ~50 ms on the TV, 2026-11-16). The page's
  * own colour and the font: pageLook */
 var partStyles: HTMLStyleElement[] = [];
-var rulesOf = ['', '', '', ''];
+var rulesOf = ['', '', '', '', ''];
 
 /** The rules of part i (partStyles' order), made by make ('' none) when its key ('' none) is not the one they were
  * made from */
@@ -530,6 +530,31 @@ function setRules(i: number, key: string, make: () => string): void {
         }
     }
     partStyles[i].textContent = key ? make() : '';
+}
+
+/** The screen is pushed this much less than the open shade is wide: the closed rail's 104 px less its entries' 22
+ * (themes/youtube.css by-rail-item left), as the stylesheet's own width had it (270 px, the screen pushed 188) */
+var SHADE_OVER = 82;
+
+/** The open sidebar fitted to its names (views/rail.ts fit): its entries pill wide (px), starting left px from the
+ * screen's edge, the same room after them as before; the shade that wide, the screen pushed as far as before for its
+ * width (shade less SHADE_OVER). Until it is measured, the stylesheet's own (themes/youtube.css by-rail) */
+export function setRailWidth(pill: number, left: number): void {
+    setRules(4, pill + ' ' + left, function () {
+        var shade = pill + 2 * left;
+        return '.by-rail--open .by-rail-item, .by-rail-divider { width: ' + pill + 'px; }\n' +
+            '.by-rail--open .by-rail-shade { -webkit-transform: scaleX(' + (shade / metrics().rail.width).toFixed(4) + '); }\n' +
+            '.by-app--rail .bd-stage { -webkit-transform: translate3d(' + (shade - SHADE_OVER) + 'px, 0, 0); }\n';
+    });
+}
+
+/** What the open sidebar was last fitted for (the font, a sidebar of its own colour), and what fits it again */
+var railFor = '';
+var railRefit: (() => void) | null = null;
+
+/** fn fits the open sidebar to its names again whenever the look changes what sizes them (views/rail.ts) */
+export function onRailLook(fn: () => void): void {
+    railRefit = fn;
 }
 
 /** The page's own colour: an empty element under the app the size of the screen (made once a colour is chosen), in
@@ -621,6 +646,15 @@ export function applyLook(): void {
         return (sideOwn ? sidebarRules(sideColor, sideStyle) : '') + (sideText ? sidebarText(sideText, sideBack) : '');
     });
     setRules(3, focus ? focus + ' ' + color : '', function () { return highlightRules(focus, color); });
+    // (the open sidebar fitted to its names again where what sizes them changed: the font, or a sidebar of its own
+    // colour, whose entries stand further left)
+    var railKey = font + ' ' + sideOwn;
+    if (railKey !== railFor) {
+        railFor = railKey;
+        if (railRefit) {
+            railRefit();
+        }
+    }
     // (the logo: drawn anew in its places alone, and only where the one set (the look's on top, else the account's own)
     // is not the one drawn (ui/logo.ts showLogo); at the start, before anything draws it, nothing. Who's watching
     // (plain) leaves it as the account has it)

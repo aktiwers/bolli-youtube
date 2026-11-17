@@ -78,6 +78,9 @@ export interface Prefs {
     audioLanguage: string;
     /** Auto-generated subtitles: 'words' (word by word, as YouTube shows them) or 'lines' (two lines at a time) */
     captionStyle: string;
+    /** Subtitles' size, a percentage of the stylesheet's (one of CAPTION_SIZES; Settings › Subtitle size, the player's
+     * Subtitles › Size) */
+    captionSize: number;
     /** Languages added under Settings › Subtitles › More languages (Danish and English are always listed) */
     captionLanguages: string[];
     /** The sign while a video starts in the app's player: one of ui/spinner.ts LOADING_SIGNS ('off': none) */
@@ -315,7 +318,17 @@ SHORTCUTS.push({ key: BUTTON.RED, where: 'everywhere', action: 'screenOff' },
     { key: BUTTON.CH_UP, where: 'player', action: 'next' }, { key: BUTTON.CH_DOWN, where: 'player', action: 'previous' },
     { key: BUTTON.LIST, where: 'player', action: 'playlist' }, { key: BUTTON.GUIDE, where: 'player', action: 'like' },
     { key: BUTTON.SCREEN_REMOTE, where: 'everywhere', action: 'subscribe' });
-var DEFAULTS: Prefs = { skip: ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'music_offtopic'], theme: 'youtube', startPage: 'home', quality: 0, codec: 'auto', preload: true, history: true, autoplay: true, autoplayWait: 10, stableVolume: false, previews: 'sound', channelVideo: true, captions: '', audioLanguage: '', captionStyle: 'words', captionLanguages: [], startSign: 'channel', startPicture: 'tile', sabr: false, pictures: 'sharpest', replays: true, dislikes: true, liveChat: true, chatMode: 'over', chatPosition: 'right', chatHeight: 'tall', chatBottom: 'ticker', chatSide: 'right', chatPicture: 'fit', chatBox: null, chatSize: 'normal', chatBackground: 'bubbles', chatTimes: false, chatAvatars: false, chatFade: 0,
+/** The subtitle sizes offered (Settings › Subtitle size, the player's Subtitles › Size): percentages of the stylesheet's
+ * size, 20 to 150 in steps of 5, then 175 and 200 (as small as 20 %, no larger than 200) */
+export var CAPTION_SIZES = (function (): number[] {
+    var sizes: number[] = [];
+    for (var size = 20; size <= 150; size += 5) {
+        sizes.push(size);
+    }
+    return sizes.concat([175, 200]);
+})();
+
+var DEFAULTS: Prefs = { skip: ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'music_offtopic'], theme: 'youtube', startPage: 'home', quality: 0, codec: 'auto', preload: true, history: true, autoplay: true, autoplayWait: 10, stableVolume: false, previews: 'sound', channelVideo: true, captions: '', audioLanguage: '', captionStyle: 'words', captionSize: 100, captionLanguages: [], startSign: 'channel', startPicture: 'tile', sabr: false, pictures: 'sharpest', replays: true, dislikes: true, liveChat: true, chatMode: 'over', chatPosition: 'right', chatHeight: 'tall', chatBottom: 'ticker', chatSide: 'right', chatPicture: 'fit', chatBox: null, chatSize: 'normal', chatBackground: 'bubbles', chatTimes: false, chatAvatars: false, chatFade: 0,
     listLayout: 'stage', listPreview: 'sound', listAutoplay: true, listNumbers: 'charts', listDetails: true, listButtons: ['play', 'shuffle', 'repeat', 'save', 'shortcut'],
     listCarryOn: true, listKeep: true, listNext: 0, listDown: 'row', listSide: 'over', videoClock: 'off', chaptersPause: false, quickJumps: true, background: '', sidebar: '', highlight: '', text: '', sidebarText: '', icons: '', railIcons: '', customLook: null, savedLooks: [], font: '', backgroundStyle: '', sidebarStyle: '', whoLook: 'dark', subsLayout: '', homeBig: false, subsRelevant: true, logo: 'red', lookLogo: '', lookSign: '', homeIcon: 'red', homeName: '', homeColor: '', dearrow: '',
     dearrowOptions: ['thumbnails', 'frames', 'tidy'], keyboardRecent: [], colourRecent: [], shortcuts: SHORTCUTS,
@@ -390,6 +403,10 @@ export function prefs(): Prefs {
     }
     if (LOADING_SIGNS.indexOf(stored.lookSign as string) < 0) {
         delete stored.lookSign;
+    }
+    // (a subtitle size not offered: the stylesheet's own)
+    if (CAPTION_SIZES.indexOf(stored.captionSize as number) < 0) {
+        delete stored.captionSize;
     }
     var read: { [name: string]: unknown } = {};
     for (name in DEFAULTS) {

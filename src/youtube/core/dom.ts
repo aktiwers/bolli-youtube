@@ -1,6 +1,8 @@
 // Small DOM helpers. Elements are built once and then only updated, which
 // is far cheaper on the TV than rebuilding them.
 
+import { load, save } from './store.js';
+
 export function h(tag: string, className?: string, text?: string): HTMLElement {
     var el = document.createElement(tag);
     if (className) {
@@ -99,26 +101,73 @@ export function setSrc(img: HTMLImageElement, src: string): void {
 /** A loaded picture this narrow is a stand-in: i.ytimg answers a size a video lacks with a 120x90 picture and a
  * 404, which this browser shows as loaded, without an error */
 var STAND_IN_WIDTH = 120;
-/** Pictures that came as stand-ins this session: their fallback is asked at once */
-var missing: { [src: string]: boolean } = {};
+/** Pictures that came as stand-ins: their fallback is asked at once. Kept across starts (MISSING_KEY, the latest
+ * MISSING_MAX), so each costs one failed request on this TV, not one each start (seen in the logs, 2026-11-17: the same
+ * thumbnails' 404s after a relaunch); read the first time a picture is drawn, written once things rest after a new one */
+var missing: { [src: string]: boolean } | null = null;
+var missingOrder: string[] = [];
+var MISSING_KEY = 'youtube.missingPictures';
+var MISSING_MAX = 300;
+var MISSING_SAVE_MS = 2000;
+var missingTimer = 0;
+
+/** The pictures known to come as stand-ins, read from where they are kept the first time */
+function missingMap(): { [src: string]: boolean } {
+    if (!missing) {
+        missing = {};
+        var kept = load<string[]>(MISSING_KEY);
+        // (kept as saved: never more than MISSING_MAX)
+        missingOrder = Array.isArray(kept) ? kept : [];
+        for (var i = 0; i < missingOrder.length; i++) {
+            missing[missingOrder[i]] = true;
+        }
+    }
+    return missing;
+}
+
+/** Whether src is known to come as a stand-in */
+function isMissing(src: string): boolean {
+    return !!missingMap()[src];
+}
+
+/** src came as a stand-in: remembered, and kept once things rest */
+function noteMissing(src: string): void {
+    var map = missingMap();
+    if (map[src]) {
+        return;
+    }
+    map[src] = true;
+    missingOrder.push(src);
+    if (missingOrder.length > MISSING_MAX) {
+        delete map[missingOrder.shift() as string];
+    }
+    clearTimeout(missingTimer);
+    missingTimer = setTimeout(function () { save(MISSING_KEY, missingOrder); }, MISSING_SAVE_MS) as unknown as number;
+}
 
 /** Shows src in img, or fallback once src fails or comes as a stand-in (at once when it did before). Every picture
  * with a fallback goes through here; without one, src as it is. */
 export function setPicture(img: HTMLImageElement, src: string, fallback?: string): void {
     var other = fallback && fallback !== src ? fallback : '';
+    // (one hidden while it fell back before: seen again as this picture comes)
+    if (img.style.opacity === '0') {
+        img.style.opacity = '';
+    }
     img.onerror = other ? function () { fallBack(img, src, other, false); } : null;
     img.onload = other ? function () {
         if (img.naturalWidth <= STAND_IN_WIDTH) {
             fallBack(img, src, other, true);
+        } else if (img.style.opacity === '0') {
+            img.style.opacity = '';
         }
     } : null;
-    img.src = other && missing[src] ? other : src;
+    img.src = other && isMissing(src) ? other : src;
 }
 
 /** The first of srcs that loads as a real picture (one that fails or comes as a stand-in is remembered as setPicture
  * does, and the next tried; one known missing is skipped), given to got; none: got is not called */
 export function firstPicture(srcs: string[], got: (img: HTMLImageElement, src: string) => void): void {
-    var left = srcs.filter(function (src) { return !missing[src]; });
+    var left = srcs.filter(function (src) { return !isMissing(src); });
     if (!left.length) {
         return;
     }
@@ -131,7 +180,7 @@ export function firstPicture(srcs: string[], got: (img: HTMLImageElement, src: s
     img.onerror = next;
     img.onload = function () {
         if (img.naturalWidth <= STAND_IN_WIDTH) {
-            missing[src] = true;
+            noteMissing(src);
             next();
         } else {
             got(img, src);
@@ -144,10 +193,12 @@ export function firstPicture(srcs: string[], got: (img: HTMLImageElement, src: s
 function fallBack(img: HTMLImageElement, src: string, other: string, standIn: boolean): void {
     if (img.getAttribute('src') === src) {
         if (standIn) {
-            missing[src] = true;
+            noteMissing(src);
         }
-        // Hidden until the fallback loads (the stand-in would show meanwhile)
+        // Hidden until the fallback loads (the stand-in, YouTube's grey "no picture", would show meanwhile): a tile's by its
+        // fade, any other picture (the player's start picture: seen on the TV 2026-11-17) by its opacity
         toggleClass(img, 'bd-fade--in', false);
+        img.style.opacity = '0';
         img.src = other;
     }
 }

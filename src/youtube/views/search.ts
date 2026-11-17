@@ -24,6 +24,7 @@ import { keepSearch, recentSearches, Suggestion, suggestions } from '../api/sugg
 import { icon, setIcon } from '../ui/icons.js';
 import { KEYBOARD_LANGUAGES, keyboardFor, KeyboardLanguage, keyboardLanguage, recentWith } from '../ui/keyboard-languages.js';
 import { PanelLine, SidePanel } from '../ui/side-panel.js';
+import { TvField } from '../ui/tv-field.js';
 import { SearchKeyboard } from '../ui/youtube-keyboard.js';
 import { metrics } from '../ui/theme.js';
 import { brandedRows, Paging, rowH, VideoTiles } from './tiles.js';
@@ -58,6 +59,8 @@ export class SearchView implements View {
     private status: HTMLElement;
     private keys: SearchKeyboard;
     private keyboard: Keyboard;
+    /** The TV's own keyboard's field, over the shown one while it has the keys (the keyboard's TV keyboard key) */
+    private tv: TvField;
     /** The keyboard's language picker */
     private panel: SidePanel;
     private stack = new RowStack('bd-search-rows', rowH(), metrics().searchRowsTop);
@@ -115,6 +118,21 @@ export class SearchView implements View {
         // The field and the arrow stay where they are, the rest scrolls under them
         this.el.appendChild(h('div', 'by-search-top'));
         this.el.appendChild(this.query);
+        // The TV's own keyboard: what is typed there is typed here (suggestions as it changes), Enter searches it
+        this.tv = new TvField(this.el, 'bd-search-query', this.query);
+        this.tv.input.setAttribute('dir', 'auto');
+        this.tv.onText = function (text) {
+            if (text !== self.keyboard.text) {
+                self.keyboard.setValue(text);
+                self.changed(text);
+            }
+        };
+        this.tv.onDone = function () { self.submit(self.keyboard.text); };
+        this.tv.onLeave = function () { self.mark(); };
+        this.keys.onTvKeyboard = function () {
+            self.tv.enter(self.keyboard.text);
+            self.mark();
+        };
         this.el.appendChild(this.back);
         this.panel = new SidePanel(this.el);
         this.renderQuery();
@@ -170,6 +188,7 @@ export class SearchView implements View {
 
     hide(): void {
         clearTimeout(this.restTimer);
+        this.tv.leave();
         this.panel.close();
         setShown(this.el, false);
         this.stack.setShown(false);
@@ -208,6 +227,9 @@ export class SearchView implements View {
     }
 
     onKey(code: number): boolean {
+        if (this.tv.active) {
+            return this.tv.onKey(code, this.keyboard);
+        }
         if (this.panel.shown) {
             this.panel.onKey(code);
             if (!this.panel.shown) {
@@ -534,7 +556,7 @@ export class SearchView implements View {
 
     private mark(): void {
         var f = this.focused;
-        this.keyboard.setFocused(f && this.at === 'keys' && !this.panel.shown);
+        this.keyboard.setFocused(f && this.at === 'keys' && !this.panel.shown && !this.tv.active);
         this.stack.setFocused(f && this.at === 'rows');
         toggleClass(this.back, 'by-search-back--focused', f && this.at === 'back');
         for (var i = 0; i < this.items.length; i++) {

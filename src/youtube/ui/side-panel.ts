@@ -30,6 +30,8 @@ export interface PanelLine {
     action?: () => void;
     /** The panel stays open after the action (it opened another, or shows the change) */
     stay?: boolean;
+    /** Called as the line gets the focus (a choice tried at once where it is seen: the player's subtitle size) */
+    focus?: () => void;
 }
 
 /** A list in the panel: its title, a line builder (rerun when it changes or is returned to), its focus (-1: its
@@ -38,6 +40,15 @@ interface List {
     title: string;
     lines: () => PanelLine[];
     focused: number;
+    /** Called as the list goes (Back, the panel closed, another opened in its place): what its lines tried let go */
+    leave?: () => void;
+}
+
+/** List goes: told (List.leave) */
+function leaveList(list: List): void {
+    if (list.leave) {
+        list.leave();
+    }
 }
 
 /** Lines of a text by paragraph (blank lines between them), as text to read */
@@ -80,7 +91,7 @@ export class SidePanel {
 
     /** Opens a list on its own (closing any open ones); focus: the focused line (none: its chosen one) */
     open(title: string, lines: PanelLine[] | (() => PanelLine[]), focus?: number): void {
-        this.stack = [];
+        this.leaveAll();
         this.push(title, lines, focus);
     }
 
@@ -107,15 +118,24 @@ export class SidePanel {
         });
     }
 
-    /** Pushes a list over the shown one: Back returns to it, focus kept */
-    push(title: string, lines: PanelLine[] | (() => PanelLine[]), focus?: number): void {
+    /** Pushes a list over the shown one: Back returns to it, focus kept; leave: called as it goes */
+    push(title: string, lines: PanelLine[] | (() => PanelLine[]), focus?: number, leave?: () => void): void {
         var top = this.stack[this.stack.length - 1];
         if (top) {
             top.focused = this.focused;
         }
         var made = typeof lines === 'function' ? lines : function () { return lines; };
-        this.stack.push({ title: title, lines: made, focused: focus === undefined ? -1 : focus });
+        this.stack.push({ title: title, lines: made, focused: focus === undefined ? -1 : focus, leave: leave });
         this.draw();
+    }
+
+    /** Every open list goes, the newest first, each told (List.leave) */
+    private leaveAll(): void {
+        var lists = this.stack;
+        this.stack = [];
+        for (var i = lists.length - 1; i >= 0; i--) {
+            leaveList(lists[i]);
+        }
     }
 
     /** Whether the list shown is the one opened with these lines */
@@ -159,7 +179,7 @@ export class SidePanel {
     close(): void {
         if (this.shown) {
             this.shown = false;
-            this.stack = [];
+            this.leaveAll();
             setShown(this.el, false);
         }
     }
@@ -186,7 +206,7 @@ export class SidePanel {
             case KEY.LEFT:
             case KEY.BACK:
                 if (this.stack.length > 1) {
-                    this.stack.pop();
+                    leaveList(this.stack.pop() as List);
                     this.draw();
                 } else {
                     this.close();
@@ -238,6 +258,9 @@ export class SidePanel {
         if (line) {
             toggleClass(line.el, 'by-line--focused', true);
             translate(this.list, 0, -Math.max(0, line.el.offsetTop - ROOM));
+            if (line.line.focus) {
+                line.line.focus();
+            }
         }
     }
 }

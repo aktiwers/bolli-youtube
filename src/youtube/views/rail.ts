@@ -12,11 +12,15 @@ import { KEY, KeyHandler } from '../core/keys.js';
 import { takesPointer } from '../core/pointer.js';
 import { railIcon } from '../ui/icons.js';
 import { drawLogo } from '../ui/logo.js';
-import { metrics } from '../ui/theme.js';
+import { metrics, onRailLook, setRailWidth } from '../ui/theme.js';
 
 /** The focused section shows after the focus rests this long (drawing one takes the TV ~300 ms, which delays the
  * next key step) */
 var REST_MS = 500;
+/** After a name or the look changed, the open width is fitted again once things rest this long (a layout read, never at a
+ * key) */
+var FIT_MS = 400;
+
 /** One that stands ready: right after the highlight's frame (in the same frame the highlight would wait ~0.1 s for
  * the section's tiles) */
 var READY_MS = 40;
@@ -66,6 +70,8 @@ export class Rail implements KeyHandler {
     private dropIndex = -1;
     /** Shows the focused section once the focus rests there */
     private restTimer = 0;
+    /** The open width fitted again soon (fitSoon) */
+    private fitTimer = 0;
 
     /** onSelect: a section is shown (rested: the focus rested on its entry or passes it; else Right or OK entered it);
      * logoEntries: builds the logo's menu in its current state; ready: section id shows with nothing to draw (no rest
@@ -110,6 +116,41 @@ export class Rail implements KeyHandler {
             self.noLogo = !file;
             self.mark();
         });
+        // (fitted again when the font or the sidebar's colour changes, and once a font's letters have come)
+        onRailLook(function () { self.fitSoon(); });
+        var fonts = (document as unknown as { fonts?: { addEventListener?: (type: string, fn: () => void) => void } }).fonts;
+        if (fonts && fonts.addEventListener) {
+            fonts.addEventListener('loadingdone', function () { self.fitSoon(); });
+        }
+    }
+
+    /** The open sidebar as narrow as its names allow, none cut, the same room on both sides: its entries as wide as the widest name, after as much room as their icon has
+     * before it; the shade with the same room after them as before them (ui/theme.ts setRailWidth). Read from the layout
+     * (the names', the icon's and the entries' places), so it holds for any language, font and stylesheet. Nothing where
+     * the entries are not laid out (a screen without the sidebar): the stylesheet's width stays until the next fit */
+    fit(): void {
+        clearTimeout(this.fitTimer);
+        var widest = 0;
+        var label: HTMLElement | null = null;
+        for (var i = 0; i < this.els.length; i++) {
+            var one = this.els[i].querySelector('.by-rail-label') as HTMLElement;
+            if (one && one.offsetWidth > widest) {
+                widest = one.offsetWidth;
+                label = one;
+            }
+        }
+        var icon = this.els.length ? this.els[0].querySelector('.by-rail-icon') as HTMLElement : null;
+        if (!label || !icon) {
+            return;
+        }
+        setRailWidth(label.offsetLeft + widest + icon.offsetLeft, this.els[0].offsetLeft);
+    }
+
+    /** fit once things rest (FIT_MS) */
+    fitSoon(): void {
+        var self = this;
+        clearTimeout(this.fitTimer);
+        this.fitTimer = setTimeout(function () { self.fit(); }, FIT_MS) as unknown as number;
     }
 
     /** Renames item id (YouTube's guide names) */
@@ -118,6 +159,7 @@ export class Rail implements KeyHandler {
             if (this.items[i].id === id) {
                 this.items[i].label = label;
                 setText(this.els[i].querySelector('.by-rail-label') as HTMLElement, label);
+                this.fitSoon();
             }
         }
     }
