@@ -1796,6 +1796,12 @@ export class OwnPlayer {
         }
     }
 
+    /** The queue or its playlist changed while a video plays (a phone's queue begun, grown or sent anew: cast.ts): the
+     * watch page's row and button follow (the list at the side and Down read listNow as they open) */
+    queueChanged(): void {
+        this.watch.setPlaylist(this.listNow);
+    }
+
     /** The playlist the video plays from: its queue's, while the video is the queue's (not a related one played after
      * it); null: none */
     private get listNow(): PlaylistInfo | null {

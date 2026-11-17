@@ -497,9 +497,14 @@ html, body { background: #0f0f0f; }
 .by-colours-shade.by-colours--set:before { width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 4px; }
 /* Settings › Theme › Icons (views/icon-page.ts): Colours' panel (by-colours), its sets in rows, each its name and five
    of its icons, the chosen one ticked; under them the focused one's line. On System, a window over the app with all the
-   icons in the focused set. Each tab's rows and line in a box of their own, one over the other, the shown tab's in sight */
-.by-icons-list { position: relative; margin-top: 4px; }
-.by-icons-rows { position: absolute; left: -6px; right: -6px; top: -6px; padding: 6px; will-change: transform; }
+   icons in the focused set. Each tab's rows in a box of their own, one over the other, the shown tab's in sight; the
+   list as tall as the page leaves it, its rows scrolling inside it (a track slid by a transform, views/icon-page.ts
+   scroll), the focused set's line in a place of its own under it */
+.by-icons { display: -webkit-flex; display: flex; -webkit-flex-direction: column; flex-direction: column; }
+.by-icons > .by-colours-head { -webkit-flex-shrink: 0; flex-shrink: 0; }
+.by-icons-list { position: relative; margin: 4px -6px 0; -webkit-flex: 1; flex: 1; min-height: 0; overflow: hidden; }
+.by-icons-rows { position: absolute; left: 0; right: 0; top: 0; will-change: transform; }
+.by-icons-track { padding: 6px; will-change: transform; }
 /* (6 px of room round the rows, so the focus ring on the first row does not grow the layer: a layer that grows is
    drawn anew whole) */
 .by-icons-set { position: relative; height: 56px; margin-bottom: 8px; padding: 0 16px; border-radius: 12px; background: #2a2a2a;
@@ -510,7 +515,8 @@ html, body { background: #0f0f0f; }
 .by-icons-sample { display: inline-block; vertical-align: middle; width: 26px; height: 26px; margin-right: 22px; color: #f1f1f1; }
 .by-icons-set.by-colours--focused { box-shadow: 0 0 0 3px #212121, 0 0 0 6px #f1f1f1; }
 .by-icons-set.by-colours--set .by-icons-name:after { content: '  \2713'; }
-.by-icons-note { margin-top: 8px; font-size: 16px; line-height: 22px; color: #aaa; white-space: normal; }
+.by-icons-note { -webkit-flex-shrink: 0; flex-shrink: 0; height: 44px; margin: 6px 0 20px; overflow: hidden; font-size: 16px; line-height: 22px;
+                 color: #aaa; white-space: normal; }
 /* (centred between the closed sidebar's 104 px and the page at 740 px: clear of both; ten icons a row take 538 px) */
 .by-icons-all { position: absolute; left: 112px; top: 80px; width: 620px; box-sizing: border-box; padding: 24px 30px 10px; border-radius: 18px;
                 background: #181818; color: #f1f1f1; will-change: transform; }

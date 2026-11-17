@@ -288,6 +288,11 @@ export class WatchPage {
      * the buttons) */
     setPlaylist(list: PlaylistInfo | null): void {
         this.unlisten();
+        // (another list while the video's details are in, a phone's queue begun mid-video: its row and button drawn
+        // anew at the next show; the same list again draws nothing)
+        if (list !== this.playlist && this.info) {
+            this.rowsFor = '';
+        }
         this.playlist = list;
         var self = this;
         // (a list whose titles come later, a phone's queue: its row made again with them, at once where the page shows

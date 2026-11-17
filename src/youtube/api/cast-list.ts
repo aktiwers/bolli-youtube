@@ -12,6 +12,8 @@
 // and last of an answer that is not in it is dropped from the list (the cast drops it from the queue too). A queue no
 // longer than an answer (WHOLE: YouTube's own count of it) is all in one answer: any of it not sent is gone, at its ends
 // too (YouTube may also send such a video, untitled: api/feed.ts leaves those out as it reads them).
+// A phone may also send a queue without naming it (seen 2026-11-17: videos added to the queue on one phone never showed
+// on the TV): it is shown all the same, each video's title from its own details (aloneOf), one request each.
 
 import { PlaylistInfo, thumbnail, Video, videoOf } from './feed.js';
 
@@ -26,8 +28,18 @@ var FAILS_MAX = 3;
  * (16 to 19 in all, seen on the TV 2026-11-14), so each answer is all new titles */
 var REACH = 9;
 
-/** What YouTube sent of the queue around a video */
-type Around = { queue?: { title: string; videos: Video[] } };
+/** What YouTube sent of the queue around a video, and the video's own title and channel (a video's details) */
+export type Around = { title?: string; channel?: string; queue?: { title: string; videos: Video[] } };
+
+/** A video's own details as an answer for a queue the phone does not name (no queue to ask YouTube for): that video
+ * alone, with its title */
+export function aloneOf(id: string, info: { title: string; channel: string }): Around {
+    var v = videoOf(id);
+    v.title = info.title;
+    v.channel = info.channel;
+    v.image = thumbnail(id);
+    return { queue: { title: '', videos: [v] } };
+}
 
 /** The videos of ids, those in known as they are, the others by their id alone, each with its picture from its id (the
  * side list shows it at once) */
@@ -60,14 +72,20 @@ export function listed(ids: string[], listId: string, title: string, had?: Playl
         var tell = function (): void {
             listeners.slice().forEach(function (fn) { fn(); });
         };
-        // from: the video's details asked for already (the one playing: the player's own request), else asked here
-        list.titles = function (id: string, from?: Promise<Around>): Promise<boolean> {
+        // from: what gets the video's details instead (the one playing: the player's own request), else asked here; called
+        // only for a video not asked for yet
+        list.titles = function (id: string, from?: () => Promise<Around>): Promise<boolean> {
             if (asked[id]) {
                 return Promise.resolve(false);
             }
             asked[id] = true;
-            return (from || info(id)).then(function (got) {
+            return (from ? from() : info(id)).then(function (got) {
                 var changed = got.queue ? titled(list, got.queue) : false;
+                // (the video asked for by its own title, where the queue sent leaves it out: one picked on the TV, put
+                // into the phone's queue a moment before; seen 2026-11-17, its line in the list without a title)
+                if (got.title && titledOne(list, id, got.title, got.channel || '')) {
+                    changed = true;
+                }
                 if (changed) {
                     tell();
                 }
@@ -150,6 +168,26 @@ export function fillAll(list: PlaylistInfo, at: number): () => void {
     };
     next();
     return function () { stopped = true; };
+}
+
+/** Video id of list, still without a title, given its title and channel (true: it was; the list's videos a new array) */
+function titledOne(list: PlaylistInfo, id: string, title: string, channel: string): boolean {
+    var changed = false;
+    var videos = list.videos.map(function (v) {
+        if (v.id !== id || v.title) {
+            return v;
+        }
+        changed = true;
+        var now = videoOf(id);
+        now.title = title;
+        now.channel = channel;
+        now.image = v.image;
+        return now;
+    });
+    if (changed) {
+        list.videos = videos;
+    }
+    return changed;
 }
 
 /** Puts what YouTube sent of the queue (its name, and videos with their titles) into list: each video in its place,

@@ -7,9 +7,13 @@
 // the language then), a tab shown or hidden. The set the focus is on shown on the app (ui/theme.ts tryLook) as soon as
 // a key comes on its own, once the keys rest when they come one after another; on the tabs, the one set again; OK sets
 // it, Back closes (what was tried let go).
+// The rows scroll where they are more than the page holds (seen on the TV, 2026-11-17: System's last set below the
+// screen): each tab's track of rows slides by a transform to keep the focused row in the middle, worked out from the rows'
+// fixed height (no layout read at a key; the list's height read once as the page opens); the tabs and the focused set's
+// line stay in place.
 // Styled by themes/<id>.css (by-icons, kept dark on a light page: tools/light_theme.mjs OVER).
 
-import { h, setShown, setText, standsBy, toggleClass } from '../core/dom.js';
+import { h, setShown, setText, standsBy, toggleClass, translate } from '../core/dom.js';
 import { tr } from '../core/i18n.js';
 import { KEY } from '../core/keys.js';
 import { holding, takesPointer } from '../core/pointer.js';
@@ -61,6 +65,11 @@ export function tabs(): Tab[] {
     ];
 }
 
+/** A row's height and the gap under it (themes/youtube.css by-icons-set), and the room round the rows in their track
+ * (by-icons-track: the focus ring's) */
+var ROW_STEP = 64;
+var ROOM = 6;
+
 /** Where tab t's set chosen is among its sets (one not offered: the first) */
 function chosenAt(t: Tab): number {
     var chosen = lookPart(t.part);
@@ -72,12 +81,14 @@ function chosenAt(t: Tab): number {
     return 0;
 }
 
-/** A tab's rows as drawn while the page is open: their box (shown while the tab is), the rows, the focused set's line
- * under them; the sidebar's "Same as System" samples and the system's style they are drawn in */
+/** A tab's rows as drawn while the page is open: their box (shown while the tab is), the track in it that scrolls and
+ * how far it is scrolled (px), the rows; the sidebar's "Same as System" samples and the system's style they are drawn
+ * in */
 interface TabView {
     box: HTMLElement;
+    track: HTMLElement;
+    scrolled: number;
     rows: HTMLElement[];
-    note: HTMLElement;
     same: HTMLElement[];
     sameIn: string;
 }
@@ -90,10 +101,13 @@ export class IconPage {
     private tabEls: HTMLElement[] = [];
     private tabBox: HTMLElement;
     private list: HTMLElement;
-    /** Each tab's rows as drawn (null: not yet since the page opened); the shown tab's rows and line */
+    /** The list's height (px; 0: not read yet since the page opened) */
+    private view = 0;
+    /** The focused set's line, under the list */
+    private note: HTMLElement;
+    /** Each tab's rows as drawn (null: not yet since the page opened); the shown tab's rows */
     private views: (TabView | null)[] = [];
     private rows: HTMLElement[] = [];
-    private note: HTMLElement | null = null;
     /** The window over the app with all the icons (System), its title and its boxes, the icons' names in their order,
      * the set it shows (null: none since the page opened) */
     private all: HTMLElement;
@@ -117,6 +131,7 @@ export class IconPage {
         head.appendChild(h('div', 'by-colours-title', tr('Icons')));
         this.tabBox = head.appendChild(h('div', 'by-colours-tabs')) as HTMLElement;
         this.list = this.el.appendChild(h('div', 'by-icons-list')) as HTMLElement;
+        this.note = this.el.appendChild(h('div', 'by-icons-note')) as HTMLElement;
         this.all = h('div', 'by-icons-all');
         // (the window and each tab's rows put away by standsBy, as the app's screens: a layer moved, nothing drawn anew;
         // hidden, the TV drew each anew whole at every Left/Right, its shadow too. Hidden only while the page is closed,
@@ -163,10 +178,15 @@ export class IconPage {
         this.views = this.tabs.map(function () { return null; });
         this.focused = null;
         this.allSet = null;
+        this.view = 0;
         this.toTab(0);
         this.drawAll();
         setShown(this.all, true);
         setShown(this.el, true);
+        // (the list's height, once: laid out now as the page is anyway, before its first frame; the focused row then
+        // brought into sight)
+        this.view = this.list.offsetHeight;
+        this.scroll();
     }
 
     close(): void {
@@ -254,7 +274,6 @@ export class IconPage {
             }
         }
         this.rows = view.rows;
-        this.note = view.note;
         this.at = chosenAt(t);
         this.drawSet();
         this.drawFocus();
@@ -265,6 +284,7 @@ export class IconPage {
      * icons drawn from its entries (their place and name: data-rail), each looked up once */
     private build(t: Tab): TabView {
         var box = this.list.appendChild(h('div', 'by-icons-rows')) as HTMLElement;
+        var track = box.appendChild(h('div', 'by-icons-track')) as HTMLElement;
         var rail = t.part === 'railIcons';
         var entries: { [name: string]: string } = {};
         if (rail) {
@@ -274,9 +294,9 @@ export class IconPage {
             }
         }
         var system = lookPart('icons');
-        var view: TabView = { box: box, rows: [], note: box, same: [], sameIn: system };
+        var view: TabView = { box: box, track: track, scrolled: 0, rows: [], same: [], sameIn: system };
         view.rows = t.sets.map(function (set) {
-            var row = box.appendChild(h('div', 'by-icons-set')) as HTMLElement;
+            var row = track.appendChild(h('div', 'by-icons-set')) as HTMLElement;
             row.appendChild(h('div', 'by-icons-name', set.name));
             var samples = row.appendChild(h('div', 'by-icons-samples')) as HTMLElement;
             var boxes = t.samples.map(function (name) {
@@ -293,7 +313,6 @@ export class IconPage {
             }
             return row;
         });
-        view.note = box.appendChild(h('div', 'by-icons-note')) as HTMLElement;
         return view;
     }
 
@@ -315,8 +334,21 @@ export class IconPage {
             this.focused = to;
         }
         var set = this.at < 0 ? null : this.tabs[this.tab].sets[this.at];
-        if (this.note) {
-            setText(this.note, set ? set.note : '');
+        setText(this.note, set ? set.note : '');
+        this.scroll();
+    }
+
+    /** The shown tab's rows scrolled to keep the focused one in the middle of the list, as far as they go (all in sight:
+     * none); on the tabs, as they were. A transform of the track alone, only when it changes */
+    private scroll(): void {
+        var view = this.views[this.tab];
+        if (!view || this.at < 0 || !this.view) {
+            return;
+        }
+        var to = Math.round(Math.max(0, Math.min(this.rows.length * ROW_STEP + 2 * ROOM - this.view, (this.at + 0.5) * ROW_STEP + ROOM - this.view / 2)));
+        if (to !== view.scrolled) {
+            view.scrolled = to;
+            translate(view.track, 0, -to);
         }
     }
 

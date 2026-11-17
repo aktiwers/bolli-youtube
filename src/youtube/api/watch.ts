@@ -172,6 +172,12 @@ export function queueAround(id: string): Promise<WatchInfo> {
     return list ? offThread(innertubeText('next', { videoId: id, playlistId: list }), 'watch', watchInfoOf) : Promise.reject(new Error('no queue'));
 }
 
+/** A video's details by themselves, not kept (the title of a video of a phone's queue that the phone does not name:
+ * cast.ts; through the keepers above it would push out the video playing's) */
+export function videoAlone(id: string): Promise<WatchInfo> {
+    return offThread(innertubeText('next', { videoId: id }), 'watch', watchInfoOf);
+}
+
 /** What a video's details are kept under: its id, with its queue's (asked for without it, the reply has no queue) */
 function keyOf(id: string): string {
     return queued[id] ? id + ' ' + queued[id] : id;

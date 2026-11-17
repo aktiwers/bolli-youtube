@@ -19,8 +19,8 @@ import { toast } from './ui/toast.js';
 import { prefs, setPref } from './api/prefs.js';
 import { offerComments, withdrawComments } from './api/handoff.js';
 import { Lounge } from './api/lounge.js';
-import { fillAll, listed } from './api/cast-list.js';
-import { queueAround, watchFrom, watchInfo, WatchInfo } from './api/watch.js';
+import { aloneOf, Around, fillAll, listed } from './api/cast-list.js';
+import { queueAround, videoAlone, watchFrom, watchInfo, WatchInfo } from './api/watch.js';
 import { newCpn } from './api/youtube.js';
 import { PlaylistInfo } from './api/feed.js';
 import { ListQueue } from './player/list-queue.js';
@@ -31,6 +31,10 @@ var DIAL_URL = 'http://localhost:18181/apps/YouTube/dial_data';
 var KEYS: { [name: string]: number } = { UP: KEY.UP, DOWN: KEY.DOWN, LEFT: KEY.LEFT, RIGHT: KEY.RIGHT, ENTER: KEY.OK, BACK: KEY.BACK };
 /** When the phone's time differs from the player's by more than this, the player seeks there */
 var JUMP_S = 3;
+/** A queue the phone does not name: all its titles asked for at the cast only up to this many videos (one request each,
+ * a video's whole details, ~150-200 KB; typically a few videos added on the phone); a longer one's as the list at the
+ * side shows its lines, once the focus rests */
+var ALONE_FILLED = 10;
 
 type Fields = { [name: string]: string };
 
@@ -59,7 +63,8 @@ export class Cast {
     /** press: a key from the phone's arrows, handled as a remote key; play: starts a video from the phone (main.ts
      * prepares the screen for the player first) */
     constructor(private player: OwnPlayer, private press: (code: number) => void, private play: (id: string, t: number, queue: ListQueue) => void,
-        private info: (id: string) => Promise<WatchInfo> = watchInfo, private around: (id: string) => Promise<WatchInfo> = queueAround) {
+        private info: (id: string) => Promise<WatchInfo> = watchInfo, private around: (id: string) => Promise<WatchInfo> = queueAround,
+        private alone: (id: string) => Promise<WatchInfo> = videoAlone) {
         var self = this;
         this.lounge.onCommand = function (name, fields) { self.command(name, fields); };
         player.onChange = function () { self.changed(); };
@@ -182,12 +187,20 @@ export class Cast {
                 this.tellList();
                 break;
             case 'addVideo':
+                // (the phone's list grown, or one begun with the video playing: shown as the player's playlist, the
+                // watch page's row too, from now on)
                 var q = this.phoneQueue();
                 if (q && f.videoId) {
                     q.ids.push(f.videoId);
-                    this.name(q, this.extra.listId, q.playlist);
+                    this.name(q, f.listId || this.extra.listId, q.playlist);
+                    this.player.queueChanged();
                 } else if (now && f.videoId) {
-                    this.install(new ListQueue([now.id, f.videoId], now.id));
+                    q = new ListQueue([now.id, f.videoId], now.id);
+                    this.name(q, f.listId || this.extra.listId, null);
+                    this.install(q);
+                }
+                if (now && q) {
+                    this.fill(now.id);
                 }
                 this.tellList();
                 break;
@@ -299,21 +312,26 @@ export class Cast {
         this.fill(id);
     }
 
-    /** The phone's list as the player's playlist (its videos at the side, the watch page's row), where the phone names
-     * its queue and sends more than one video; had: the playlist of the list before this one (what is known of its
-     * videos stays). The queue's videos are asked for with the queue named from now on (api/watch.ts). */
+    /** The phone's list as the player's playlist (its videos at the side, the watch page's row), where the phone sends
+     * more than one video; had: the playlist of the list before this one (what is known of its videos stays). Where the
+     * phone names its queue, its videos are asked for with the queue named from now on (api/watch.ts), and the titles
+     * come some twenty at a time; else each video's from its own details (its id ''). */
     private name(queue: ListQueue, listId: string | undefined, had: PlaylistInfo | null): void {
-        var named = !!listId && queue.ids.length > 1;
-        watchFrom(named ? queue.ids : [], named ? listId! : '');
+        var many = queue.ids.length > 1;
+        var id = many && listId || '';
+        watchFrom(id ? queue.ids : [], id);
         // The same queue changed (the phone's list re-sent, grown or reordered): the same list, its videos made the new
         // ones (those known keep their titles), its views told, its titles' asking going on
-        if (named && had && had.id === listId && had.relist) {
+        if (many && had && had.id === id && had.relist) {
             queue.playlist = had;
             had.relist(queue.ids);
             return;
         }
-        var list = queue.playlist = named ? listed(queue.ids, listId!, tr('Queue'), had, this.around) : null;
         var self = this;
+        var ask: (one: string) => Promise<Around> = id ? this.around : function (one) {
+            return self.alone(one).then(function (info) { return aloneOf(one, info); });
+        };
+        var list = queue.playlist = many ? listed(queue.ids, id, tr('Queue'), had, ask) : null;
         if (list && list.listen) {
             // (videos YouTube no longer has, left out of the list: out of the queue playing from it too, Next goes past
             // them)
@@ -351,16 +369,24 @@ export class Cast {
         var q = queue;
         var named = list;
         this.filling = list;
-        Promise.resolve().then(function () { return titles(id, self.info(id)); }).then(null, function () { return false; }).then(function () {
-            if (filling && self.queue === q && q.playlist === named) {
+        // (a queue the phone does not name: the video's details as its answer, the rest of a short one's asked for alone)
+        var byQueue = !!list.id;
+        Promise.resolve().then(function () {
+            return titles(id, function () {
+                var info = self.info(id);
+                return byQueue ? info : info.then(function (got) { return aloneOf(id, got); });
+            });
+        }).then(null, function () { return false; }).then(function () {
+            if (filling && self.queue === q && q.playlist === named && (named.id || q.ids.length <= ALONE_FILLED)) {
                 self.stopFilling = fillAll(named, Math.max(0, q.ids.indexOf(id)));
             }
         });
     }
 
-    /** Makes the phone's list the player's queue */
+    /** Makes the phone's list the player's queue (the video playing's playlist follows it: the watch page's row) */
     private install(queue: ListQueue): void {
         this.queue = this.player.queue = queue;
+        this.player.queueChanged();
     }
 
     /** The phone's list while the player plays from it (null: another video was picked on the TV since) */

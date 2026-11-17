@@ -89,8 +89,9 @@ export interface PlaylistInfo {
     /** Its id ('' not known) */
     id?: string;
     /** A list whose videos come without titles (a phone's queue: api/cast-list.ts): asks for the titles around video
-     * id and puts them in; resolves true when the videos changed (a new array) */
-    titles?: (id: string, from?: Promise<{ queue?: { title: string; videos: Video[] } }>) => Promise<boolean>;
+     * id and puts them in (from: what asks instead, called only if they were not asked for yet); resolves true when
+     * the videos changed (a new array) */
+    titles?: (id: string, from?: () => Promise<{ queue?: { title: string; videos: Video[] } }>) => Promise<boolean>;
     /** Such a list: fn is called whenever titles came into it; returns what stops that (each view of the list: the side
      * list, the watch page's row) */
     listen?: (fn: () => void) => () => void;

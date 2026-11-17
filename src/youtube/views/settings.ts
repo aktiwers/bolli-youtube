@@ -698,7 +698,8 @@ interface Category {
  * languages"; chat: Live chat settings; keys: Shortcuts; restart: starts the app again; brand: what the Branding
  * settings need). Account & phone and About come after them (SettingsView) */
 function bolli(pages: StartPage[], more: (pref: LanguagePref) => void, chat: () => void, keys: () => void, restart: () => void, brand: Brand): Category[] {
-    var theme: (Setting | string)[] = [logoSetting(brand), themeSetting(brand)];
+    // (Theme first: it sets all the parts below it at once; then the logo, then each part)
+    var theme: (Setting | string)[] = [themeSetting(brand), logoSetting(brand)];
     // The registered themes, only when there is more than one (beside the look's Theme)
     if (themes().length > 1) {
         theme.push(pref(tr('Theme'), tr('How the app looks'), '', 'theme', function () {
@@ -1983,16 +1984,18 @@ export class SettingsView implements View {
     }
 
     /** When the right side is taller than the screen, scrolls it to keep the focused choice and its note in view (the
-     * choice first); for a grid of tiles only the tiles and their note scroll, under the setting's name and
-     * description, which stay in place. Unscrolled, nothing has a transform and so no layer of its own */
+     * choice first); for a grid of tiles, and for choices shown over the app (Theme, Loading spinner: Setting.preview),
+     * only the choices and their note scroll, under the setting's name and description, which stay in place (as the
+     * Icons page's rows). Unscrolled, nothing has a transform and so no layer of its own */
     private scrollPanel(): void {
         // (the focused choice, or the focused setting of a group's list; none in a group's list that fits the panel, as
         // measured once it was drawn: a step in it reads no layout)
         var g = this.openGroup();
         var b = g ? (this.place === 'group' && g.fits !== g.drawnAt ? g.rows[g.at] : null) : this.place === 'choices' ? this.buttons[this.button] : null;
         var to = 0;
-        // A grid: only the tiles scroll, the setting's top stays; any other: the whole right side, as it always did
-        var pinned = !!this.drawn && !!this.drawn.grid;
+        // A grid, or choices over the app: only the choices scroll, the setting's top stays; any other: the whole right
+        // side, as it always did
+        var pinned = !!this.drawn && (!!this.drawn.grid || !!this.drawn.preview);
         var moving = pinned ? this.scroller : this.body;
         if (b) {
             // (the body sits at the panel's top; the choices start where their scrolling part does in their box)
