@@ -36,7 +36,6 @@ import { lunaAsk } from '../core/luna.js';
 import { android } from '../core/platform.js';
 import { load, save } from '../core/store.js';
 import { Choice, prefs, setPref } from '../api/prefs.js';
-import { tr } from '../core/i18n.js';
 import { appId, asRoot, blank, folder, NO_CHANNEL, NO_FILE, NO_ROOT, sized, writePngs } from './app-files.js';
 import { addChoice, addCustomLogo, customChoice, CustomLogo, customLogos, customOf, customValue, isCustom, onCustomRemoved, removeCustomLogo } from './custom-logos.js';
 import { iconBase, logoFile, LOGOS } from './logo.js';
@@ -192,35 +191,6 @@ export function homeName(): string {
 export function homeColor(): string {
     var color = prefs().homeColor || '';
     return /^#[0-9a-f]{6}$/i.test(color) ? color.toLowerCase() : '';
-}
-
-/** #rrggbb of a hue (degrees), saturation and lightness (0..1) */
-function hsl(h: number, s: number, l: number): string {
-    var part = function (n: number): string {
-        var k = (n + h / 30) % 12;
-        var v = Math.round(255 * (l - s * Math.min(l, 1 - l) * Math.max(-1, Math.min(k - 3, 9 - k, 1))));
-        return (v < 16 ? '0' : '') + v.toString(16);
-    };
-    return '#' + part(0) + part(8) + part(4);
-}
-
-/** The columns of the tile colour's grid: its first row the package's own and greys from black to white, then twelve
- * hues across in four shades, light to deep */
-export var COLOR_COLUMNS = 12;
-var GREYS = ['#000000', '#1a1a1a', '#333333', '#4d4d4d', '#666666', '#808080', '#999999', '#b3b3b3', '#cccccc', '#e6e6e6', '#ffffff'];
-var SHADES = [[0.85, 0.72], [0.85, 0.55], [0.8, 0.38], [0.75, 0.22]];
-
-/** Tile colour's choices in Settings: tiles of the colours themselves */
-export function homeColorChoices(): Choice[] {
-    var list: Choice[] = [{ value: '', name: tr('The app\'s own'), note: '', color: APP_COLOR }];
-    GREYS.forEach(function (grey) { list.push({ value: grey, name: '', note: '', color: grey }); });
-    SHADES.forEach(function (shade) {
-        for (var i = 0; i < COLOR_COLUMNS; i++) {
-            var color = hsl(i * 30, shade[0], shade[1]);
-            list.push({ value: color, name: '', note: '', color: color });
-        }
-    });
-    return list;
 }
 
 /** Gives the TV's home screen the chosen logo, name and colour, once per run and choice: when one is chosen, and

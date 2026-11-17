@@ -38,9 +38,15 @@ export function toggleClass(el: HTMLElement, name: string, on: boolean): void {
 
 /** Show or hide a screen. visibility (not display) keeps its layout and
  * decoded images, so coming back to it (Back, a section switch) costs one
- * style pass instead of rebuilding the whole page. */
+ * style pass instead of rebuilding the whole page. Written only when it
+ * changes: the TV restyles an element at any write to its style, the same
+ * value too (Settings' colour picker ticks its 112 tiles at every arrow:
+ * 112 elements restyled each time, 2026-11-16). */
 export function setShown(el: HTMLElement, shown: boolean): void {
-    el.style.visibility = shown ? '' : 'hidden';
+    var to = shown ? '' : 'hidden';
+    if (el.style.visibility !== to) {
+        el.style.visibility = to;
+    }
 }
 
 /** Puts a screen out of sight while it stays drawn (by: true), or back in its place: the stylesheet's by-standby moves

@@ -431,6 +431,8 @@ export class DashEngine implements Engine {
     /** A seek's window (narrow) is being made: settle clears what is buffered past it (cleared: asked for), seeks and
      * tells the TV; where that seek lands (s; -1: no seek's window up: a start's lifts when it plays) */
     private narrowing = false;
+    /** The line is down: no request is made (wait) */
+    private lineWait = false;
     private cleared = false;
     private landed = -1;
     /** A start's window: whether it began to play, when (ms) and where (s). It lifts once the picture has moved
@@ -1436,7 +1438,7 @@ export class DashEngine implements Engine {
 
     private pump(track: Track): void {
         var sb = track.sb;
-        if (this.stopped || !sb || sb.updating || track.xhr || track.retryTimer) {
+        if (this.stopped || this.lineWait || !sb || sb.updating || track.xhr || track.retryTimer) {
             return;
         }
         // The start's window lifted (widen): the segment it cut loaded again, its frames before the cut dropped (as a
@@ -1712,6 +1714,26 @@ export class DashEngine implements Engine {
         track.segments = sw.segments;
         track.init = sw.init;
         track.started = 0;
+    }
+
+    /** Engine.wait: none of its requests while the line is down */
+    wait(on: boolean, ask?: boolean): void {
+        this.lineWait = on;
+        if (on) {
+            this.letGo();
+        } else if (ask !== false) {
+            for (var i = 0; i < this.tracks.length; i++) {
+                this.pump(this.tracks[i]);
+            }
+        }
+    }
+
+    /** Engine.letGo: what every track has in flight, and asked ahead, dropped (the next pump asks from where it is) */
+    letGo(): void {
+        for (var i = 0; i < this.tracks.length; i++) {
+            this.drop(this.tracks[i]);
+            this.unask(this.tracks[i]);
+        }
     }
 
     /** Drops whatever the track has in flight (on a seek or stop) */

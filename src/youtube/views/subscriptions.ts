@@ -1,6 +1,6 @@
 // Subscriptions screen. Its videos are YouTube's list as its TV app shows it (views/videos.ts FeedView, Shelf.feed):
 // YouTube's first shelf ("Most relevant") a row, everything after it one grid in YouTube's order. Its channels show
-// where the theme has them or Settings › Look says (ui/theme.ts subsLayout; another choice takes effect when the
+// where the theme has them or Settings › Screens says (ui/theme.ts subsLayout; another choice takes effect when the
 // screen shows next, with the rows and channels it has: nothing is asked for):
 //  - at the side, as YouTube's TV app: a column (views/channel-column.ts) of "All", YouTube's first-listed channels
 //    and every channel A-Z, the focused item's videos beside it: "All" the list above, a channel its newest videos

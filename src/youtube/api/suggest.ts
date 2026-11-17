@@ -7,6 +7,7 @@
 
 import { load, save } from '../core/store.js';
 import { Keeper } from './kept-pages.js';
+import { ownKey } from './prefs.js';
 import { get, tvClient, youtubePage } from './youtube.js';
 
 export interface Suggestion {
@@ -19,6 +20,7 @@ export interface Suggestion {
 
 var KEEP_MS = 10 * 60 * 1000;
 var kept = new Keeper<Suggestion[]>(KEEP_MS, 30, false, false);
+/** Each account's own (api/prefs.ts ownKey) */
 var RECENT_KEY = 'youtube.recentSearches';
 var RECENT_MAX = 10;
 
@@ -56,8 +58,13 @@ function suggestionsOf(text: string): Suggestion[] {
 var recent: string[] | null = null;
 
 export function recentSearches(): string[] {
-    recent = recent || load<string[]>(RECENT_KEY) || [];
+    recent = recent || load<string[]>(ownKey(RECENT_KEY)) || [];
     return recent;
+}
+
+/** Another account's settings came in: its recent searches read anew */
+export function forgetRecentSearches(): void {
+    recent = null;
 }
 
 /** Moves a search to the front of the recent list (deduplicated, case-insensitive) */
@@ -66,11 +73,11 @@ export function keepSearch(term: string): void {
     recent = recentSearches().filter(function (t) { return t.toLowerCase() !== lower; });
     recent.unshift(term);
     recent.length = Math.min(recent.length, RECENT_MAX);
-    save(RECENT_KEY, recent);
+    save(ownKey(RECENT_KEY), recent);
 }
 
 /** Clears the recent searches (when YouTube's search history is cleared) */
 export function clearRecentSearches(): void {
     recent = [];
-    save(RECENT_KEY, recent);
+    save(ownKey(RECENT_KEY), recent);
 }

@@ -1,39 +1,24 @@
 /* "YouTube": YouTube's dark TV look, as YouTube's TV app draws it
    (measured at 1920x1080; here two thirds of that, the 1280x720 layout).
    Layout sizes are the theme's metrics (src/youtube/ui/themes/youtube.ts). */
-/* YouTube's font, as its TV app uses it (Roboto 400, 500, 700; Apache 2.0: fonts/LICENSE-Roboto.txt): Latin,
-   extended Latin and Cyrillic subsets, each loaded when a text needs it (WOFF: the TV's browser does not support
-   WOFF2); Inter as the fallback */
-@font-face { font-family: 'Roboto'; font-weight: 400; src: url(../fonts/roboto-latin-400-normal.woff) format('woff'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
-@font-face { font-family: 'Roboto'; font-weight: 400; src: url(../fonts/roboto-latin-ext-400-normal.woff) format('woff'); unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF; }
-@font-face { font-family: 'Roboto'; font-weight: 400; src: url(../fonts/roboto-cyrillic-400-normal.woff) format('woff'); unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116; }
-@font-face { font-family: 'Roboto'; font-weight: 500; src: url(../fonts/roboto-latin-500-normal.woff) format('woff'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
-@font-face { font-family: 'Roboto'; font-weight: 500; src: url(../fonts/roboto-latin-ext-500-normal.woff) format('woff'); unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF; }
-@font-face { font-family: 'Roboto'; font-weight: 500; src: url(../fonts/roboto-cyrillic-500-normal.woff) format('woff'); unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116; }
-@font-face { font-family: 'Roboto'; font-weight: 700; src: url(../fonts/roboto-latin-700-normal.woff) format('woff'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
-@font-face { font-family: 'Roboto'; font-weight: 700; src: url(../fonts/roboto-latin-ext-700-normal.woff) format('woff'); unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF; }
-@font-face { font-family: 'Roboto'; font-weight: 700; src: url(../fonts/roboto-cyrillic-700-normal.woff) format('woff'); unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116; }
 body { font-family: 'Roboto', 'Inter', sans-serif; }
 
 html, body { background: #0f0f0f; }
-/* Settings › Background: pure black (OLED: those pixels off) wherever the screens' own grey shows (ui/theme.ts
-   applyBlack: by-black on <html>), and the rings that cut a gap to it around focused things */
-.by-black, .by-black body, .by-black .by-rail--open .by-rail-shade, .by-black .by-search-top, .by-black .by-langs,
-.by-black .by-feed-top, .by-black .by-question, .by-black .by-channel-top, .by-black .by-shortcuts, .by-black .by-subs-top, .by-black .by-page-top { background-color: #000; }
-.by-black .by-subs-dot { box-shadow: 0 0 0 3px #000; }
-.by-black .by-subs-item-dot { box-shadow: 0 0 0 2px #000; }
-.by-black .by-subs-pill--focused { box-shadow: 0 0 0 2px #000, 0 0 0 5px #f1f1f1; }
-.by-black .by-library-card--focused { box-shadow: 0 0 0 4px #000, 0 0 0 7px #f1f1f1; }
+/* Settings › Background: another colour wherever the screens' own grey shows, and in the rings that cut a gap to it
+   around focused things, is given by ui/theme.ts (backgroundRules); a light one takes youtube-light.css, made from this
+   one by tools/light_theme.mjs */
 
 /* The rail, as YouTube's: the logo, the sections' icons (grey; the current one white), Settings at the foot; with
    focus their names, a line under Library (the entries above move up for it), the screen pushed right. Only moves,
    fades and the shade's scale animate (a changing width or colour made the TV paint the rail on every frame): the
-   entries' pills and colours change at once */
+   entries' pills and colours change at once. Open, as wide as YouTube's TV app's, measured on the TV 2026-11-17 (its
+   page read at 1920x1080: the menu 510 px, its pills 444 from 33, their names 30 px from 123, the screen pushed 378 px;
+   closed 156, as here): here two thirds of those */
 /* (The pointer, core/pointer.ts: the closed rail's shade over the screen's edge takes no clicks, a page's back arrow is
    under it; what is hidden or only drawn over the screen takes none either) */
 .by-rail-shade { width: 104px; -webkit-transform-origin: 0 0; -webkit-transition: -webkit-transform .2s ease; pointer-events: none; }
-.by-rail--open .by-rail-shade { -webkit-transform: scaleX(2.596); background-color: #0f0f0f; pointer-events: auto; }
-.by-app--rail .bd-stage { -webkit-transform: translate3d(188px, 0, 0); }
+.by-rail--open .by-rail-shade { -webkit-transform: scaleX(3.2692); background-color: #0f0f0f; pointer-events: auto; }
+.by-app--rail .bd-stage { -webkit-transform: translate3d(252px, 0, 0); }
 /* A section's rows (main.ts by-section; they start at the rail's edge) are cut off 98 px from the left, 6 short of their
    margin (a focused first tile's ring), so a tile moving past it goes out of sight there instead of fading out (each
    fade made the TV paint the tile on a layer of its own) */
@@ -48,14 +33,14 @@ html, body { background: #0f0f0f; }
 .by-rail-logo--round { left: 22px; width: 60px; border-radius: 30px; background-size: cover; }
 .by-rail-item { left: 22px; width: 60px; height: 52px; border-radius: 12px; color: #b7b7b7; -webkit-transition: -webkit-transform .2s ease; }
 .by-rail-item--selected { color: #f1f1f1; }
-.by-rail--open .by-rail-item { width: 226px; color: #f1f1f1; }
+.by-rail--open .by-rail-item { width: 296px; color: #f1f1f1; }
 .by-rail--open .by-rail-item--top { -webkit-transform: translateY(-27px); }
 .by-rail-item--focused { background-color: #f1f1f1; color: #0f0f0f; }
 .by-rail--open .by-rail-item--focused { color: #0f0f0f; }
 .by-rail-icon { left: 18px; top: 14px; width: 24px; height: 24px; }
-.by-rail-label { left: 56px; top: 0; line-height: 52px; font-size: 18px; font-weight: 500; opacity: 0; -webkit-transition: opacity .15s ease; }
+.by-rail-label { left: 60px; top: 0; line-height: 52px; font-size: 20px; font-weight: 500; opacity: 0; -webkit-transition: opacity .15s ease; }
 .by-rail--open .by-rail-label { opacity: 1; }
-.by-rail-divider { left: 22px; width: 226px; height: 2px; background: #3f3f3f; opacity: 0; -webkit-transition: opacity .15s ease; pointer-events: none; }
+.by-rail-divider { left: 22px; width: 296px; height: 2px; background: #3f3f3f; opacity: 0; -webkit-transition: opacity .15s ease; pointer-events: none; }
 .by-rail--open .by-rail-divider { opacity: 1; }
 .by-rail-drop { left: 100px; top: 30px; }
 
@@ -83,8 +68,9 @@ html, body { background: #0f0f0f; }
                    font-weight: 500; color: #aaa; }
 .bd-row-icon { width: 32px; height: 32px; margin: -4px 10px 0 0; border-radius: 16px; vertical-align: middle; background: #272727; }
 /* A playlist's or a mix's tile: the edges of the stack over its picture (their colours YouTube's) */
-.bd-tile-stack { position: absolute; top: -5px; left: 10px; right: 10px; height: 5px; border-radius: 6px 6px 0 0; }
-.bd-tile-stack--1 { top: -10px; left: 20px; right: 20px; }
+.bd-tile-stack { position: absolute; top: -5px; left: 10px; right: 10px; height: 5px; border-radius: 6px 6px 0 0;
+                 background-color: rgba(241, 241, 241, .28); }
+.bd-tile-stack--1 { top: -10px; left: 20px; right: 20px; background-color: rgba(241, 241, 241, .14); }
 .bd-tile-frame { background: #212121; border-radius: 12px; }
 /* Sharper pictures are 4:3 with the 16:9 picture in the middle: cropped to it. The background keeps the crop
    while a picture fades in: the TV's browser draws a bare picture on its own layer (as during the fade) whole and
@@ -204,7 +190,6 @@ html, body { background: #0f0f0f; }
 .by-list-vote-icon { width: 18px; height: 18px; margin: -3px 7px 0 0; }
 .by-list-about { margin-top: 8px; max-height: 66px; font-size: 15px; line-height: 22px; color: #aaa; }
 .by-peek-ring.by-peek-ring--stage { box-shadow: 0 0 0 6px #0f0f0f; }
-.by-black .by-peek-ring.by-peek-ring--stage { box-shadow: 0 0 0 6px #000; }
 .bd-page--list .by-page-button--wide { width: auto; padding-right: 22px; }
 .bd-page--list .by-page-button--wide .by-page-button-icon { margin: 12px 8px 12px 14px; }
 .bd-page--list .by-page-button--wide span { display: inline-block; vertical-align: middle; font-size: 17px; }
@@ -234,7 +219,6 @@ html, body { background: #0f0f0f; }
 .by-list-item-label { right: 6px; bottom: 6px; padding: 1px 5px; border-radius: 4px; background: rgba(0, 0, 0, .78); font-size: 13px; font-weight: 500; color: #fff; }
 .by-list-panel--side { right: 0; top: 0; width: 420px; height: 720px; background: rgba(15, 15, 15, .86); }
 .by-list-panel--beside { background: #0f0f0f; }
-.by-black .by-list-panel--beside { background: #000; }
 .by-list-panel--side .by-list-panel-head { left: 28px; right: 24px; top: 34px; font-size: 15px; line-height: 22px; color: #aaa; }
 .by-list-panel--side .by-list-panel-name { display: block; overflow: hidden; text-overflow: ellipsis; font-size: 22px; line-height: 30px; color: #f1f1f1; }
 .by-list-panel--side .by-list-panel-place { margin: 0 12px 0 0; }
@@ -259,7 +243,6 @@ html, body { background: #0f0f0f; }
 .by-list-shade { left: 0; top: 0; width: 1280px; height: 720px; background: linear-gradient(to bottom, rgba(0, 0, 0, .7), rgba(0, 0, 0, 0) 34%),
     linear-gradient(to top, rgba(0, 0, 0, .85), rgba(0, 0, 0, 0) 46%), linear-gradient(to right, rgba(0, 0, 0, .6), rgba(0, 0, 0, .15) 50%); }
 .by-list-band { left: 560px; top: 0; width: 720px; height: 720px; background: linear-gradient(to right, rgba(15, 15, 15, 0), rgba(15, 15, 15, .82) 64px, rgba(15, 15, 15, .9)); }
-.by-black .by-list-band { background: linear-gradient(to right, rgba(0, 0, 0, 0), rgba(0, 0, 0, .82) 64px, rgba(0, 0, 0, .9)); }
 .bd-page--backdrop .by-list-info { top: 392px; width: 440px; text-shadow: 0 1px 3px rgba(0, 0, 0, .6); }
 .bd-page--backdrop .by-list-votes { font-size: 18px; line-height: 26px; }
 .bd-page--backdrop .by-list-about { max-height: 72px; font-size: 16px; line-height: 24px; color: #d0d0d0; }
@@ -347,8 +330,11 @@ html, body { background: #0f0f0f; }
 .by-settings-button { width: 417px; height: 64px; margin: 0 auto 8px; padding: 0 64px 0 40px; box-sizing: border-box;
                       border-radius: 32px; background: #3f3f3f; line-height: 64px; font-size: 20px; color: #f1f1f1; }
 .by-settings-button .by-check { right: 28px; }
+/* An icon's style may draw a little past its box (Bubble's badge, App tiles' tile, Glass's disc): not cut there */
+[data-icon] svg, .by-icons-sample svg, .by-icons-cell svg { overflow: visible; }
 /* After the item's and button's own colours, which it replaces */
-.by-settings-item--focused, .by-settings-button--focused { background: #f1f1f1; color: #0f0f0f; }
+/* (the logo's menu too: base.css draws it white; here, so the highlight's rules are made for it: tools/light_theme.mjs) */
+.by-settings-item--focused, .by-settings-button--focused, .bd-menu-drop-item--focused { background: #f1f1f1; color: #0f0f0f; }
 .by-settings-note { margin-top: 27px; font-size: 17px; line-height: 24px; color: #aaa; }
 /* About's lines, under its description */
 .by-settings-info { margin: 40px auto 0; max-width: 620px; font-size: 20px; line-height: 28px; color: #aaa; }
@@ -406,6 +392,15 @@ html, body { background: #0f0f0f; }
 .by-settings-body--grid .by-settings-summary, .by-settings-panel--narrow .by-settings-body--grid .by-settings-summary {
     margin-top: 4px; font-size: 14px; line-height: 19px; }
 .by-settings-body--grid .by-settings-buttons, .by-settings-panel--narrow .by-settings-body--grid .by-settings-buttons { margin-top: 18px; }
+/* A list that grows (Theme's looks, Who's watching): a smaller picture and slimmer buttons, beside the middle or over
+   the app alike */
+.by-settings-panel .by-settings-body--compact .by-settings-picture { width: 72px; height: 72px; margin-bottom: 8px; }
+.by-settings-panel .by-settings-body--compact .by-settings-heading { font-size: 30px; line-height: 38px; }
+.by-settings-panel .by-settings-body--compact .by-settings-summary { font-size: 17px; line-height: 24px; }
+.by-settings-panel .by-settings-body--compact .by-settings-buttons { margin-top: 20px; }
+.by-settings-panel .by-settings-body--compact .by-settings-button { height: 46px; line-height: 46px; border-radius: 23px; margin-bottom: 6px;
+                                                                  font-size: 18px; }
+.by-settings-panel .by-settings-body--compact .by-settings-note { margin-top: 14px; }
 /* A Branding setting's choices as a grid of tiles (ui/choice-button.ts choiceTile): a logo's picture, a plus (add one)
    or a struck circle (none); the focused one white, the set one ticked in its corner; four across */
 .by-settings-buttons--grid { width: 420px; margin-left: auto; margin-right: auto; font-size: 0; text-align: left; }
@@ -417,21 +412,112 @@ html, body { background: #0f0f0f; }
 .by-settings-tile-picture--round { left: 18px; width: 60px; border-radius: 30px; object-fit: cover; }
 .by-settings-tile-sign { position: absolute; left: 30px; top: 22px; width: 36px; height: 36px; color: #aaa; }
 .by-settings-tile-sign svg { display: block; width: 36px; height: 36px; }
-.by-settings-tile-sign--none { box-sizing: border-box; border: 3px solid #aaa; border-radius: 18px;
-                               background: linear-gradient(to top right, transparent 45%, #aaa 45%, #aaa 55%, transparent 55%); }
+.by-settings-tile-sign--none { box-sizing: border-box; border: 3px solid currentColor; border-radius: 18px;
+                               background: linear-gradient(to top right, transparent 45%, currentColor 45%, currentColor 55%, transparent 55%); }
 .by-settings-button--focused .by-settings-tile-sign { color: #0f0f0f; }
-.by-settings-button--focused .by-settings-tile-sign--none { border-color: #0f0f0f;
-                               background: linear-gradient(to top right, transparent 45%, #0f0f0f 45%, #0f0f0f 55%, transparent 55%); }
 .by-settings-tile .by-check { right: 4px; top: 4px; width: 20px; height: 20px; margin-top: 0; border-radius: 10px; background: #0f0f0f;
                               color: #f1f1f1; }
 .by-settings-tile .by-check svg { width: 20px; height: 20px; }
-/* Tile colour: twelve small tiles across, each the colour itself; the focused one ringed, its colour kept */
-.by-settings-buttons--grid12 .by-settings-tile { width: 30px; height: 30px; margin: 0 5px 5px 0; border-radius: 8px; }
-.by-settings-buttons--grid12 .by-settings-tile:nth-child(12n) { margin-right: 0; }
-/* (a thin edge: the darkest ones are the panel's own colour) */
-.by-settings-tile--color { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .22); }
-.by-settings-tile--color.by-settings-button--focused { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .22), 0 0 0 3px #0f0f0f, 0 0 0 6px #f1f1f1; }
-.by-settings-buttons--grid12 .by-settings-tile .by-check { right: 5px; top: 5px; }
+/* A Theme setting's choices shown on the app (views/settings.ts preview): Settings narrows to them, at the right on the
+   page's own colour (ui/theme.ts gives a chosen background), over Home brought into view behind it */
+.by-settings--preview { z-index: 2; }
+/* (the screen behind fading in as the preview starts: main.ts fadeIn) */
+.by-fade-in-now { -webkit-animation: by-fade-in .25s ease; }
+.by-settings--preview .by-settings-title, .by-settings--preview .by-settings-menu, .by-settings--preview .by-settings-line,
+.by-settings--preview .by-settings-middle { visibility: hidden; }
+.by-settings--preview > .by-settings-panel { left: auto; top: 0; height: 720px; width: 480px; box-shadow: -24px 0 48px rgba(0, 0, 0, .5); }
+.by-settings-backdrop { background: #0f0f0f; }
+.by-settings--preview .by-settings-body { width: 420px; padding-top: 72px; }
+/* Settings › Theme › Colours (views/colour-page.ts): a panel at the right over the app, YouTube's grey whatever the look
+   (kept dark: tools/light_theme.mjs OVER). Settings' own parts hidden meanwhile (by-settings--colours). Its tabs as
+   pills; the named, logo and recent colours as round swatches; the colour slider a rainbow with a mark that slides (a
+   transform); the 54 shades in nine columns; the focus a white ring, the set colour ticked with a dot in the colour
+   that reads on it. Its name on a line of its own left of the clock, its tabs on the line under it */
+.by-settings--colours > .by-settings-panel, .by-settings--colours > .by-settings-backdrop { visibility: hidden; }
+.by-colours { position: absolute; right: 0; top: 0; width: 540px; height: 720px; box-sizing: border-box; padding: 26px 40px 0;
+              background: #212121; color: #f1f1f1; will-change: transform; }
+/* (no blurred shadow under the page, nor under the Icons page's window: on the TV a blurred shadow is drawn anew with
+   every change near it, about half of what its keys lost, 2026-11-17: 1257-1548 ms lost a walk with them, 625-649
+   without; each its own layer (will-change), put away by by-standby (a transform: nothing drawn anew), not hidden:
+   both, 372-448 ms) */
+.by-colours-head { margin-bottom: 12px; white-space: nowrap; font-size: 0; }
+.by-colours-title { display: inline-block; vertical-align: middle; margin-right: 18px; font-size: 28px; font-weight: 500; line-height: 40px; }
+.by-colours-tabs { margin-top: 10px; }
+.by-colours-tab { display: inline-block; margin-right: 8px; padding: 0 14px; height: 34px; line-height: 34px; border-radius: 17px;
+                  background: #333; color: #ddd; font-size: 16px; font-weight: 500; }
+.by-colours-tab--on { background: #f1f1f1; color: #0f0f0f; }
+.by-colours-tile { display: none; vertical-align: middle; width: 56px; height: 56px; margin-top: -8px; border-radius: 10px; }
+.by-colours--tile .by-colours-tile { display: inline-block; }
+.by-colours-tile-logo { width: 44px; height: 44px; margin: 6px; object-fit: contain; }
+.by-colours-groups { white-space: nowrap; font-size: 0; }
+.by-colours-group { display: inline-block; vertical-align: top; margin-right: 36px; }
+/* (the style's row and the recent one each a line of their own, also where the style's row is empty) */
+.by-colours > .by-colours-group { display: block; margin-right: 0; }
+.by-colours-label { margin-bottom: 4px; font-size: 14px; line-height: 20px; color: #aaa; }
+.by-colours-swatches { height: 42px; margin-bottom: 8px; white-space: nowrap; font-size: 0; }
+.by-colours-swatch { display: inline-block; position: relative; width: 40px; height: 40px; margin-right: 14px; border-radius: 20px;
+                     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .22); }
+.by-colours-swatch--same { background: repeating-linear-gradient(135deg, #444 0, #444 5px, #2c2c2c 5px, #2c2c2c 10px) !important; color: #f1f1f1 !important; }
+.by-colours-slider-name { width: 460px; margin: 4px 0 6px; font-size: 14px; line-height: 20px; color: #aaa; }
+.by-colours-degrees { float: right; color: #f1f1f1; }
+.by-colours-track { position: relative; width: 460px; height: 26px; margin-bottom: 16px; border-radius: 13px;
+                    background: linear-gradient(to right, #f00 0%, #ff0 16.67%, #0f0 33.33%, #0ff 50%, #00f 66.67%, #f0f 83.33%, #f00 100%); }
+.by-colours-mark { position: absolute; left: -7px; top: -5px; width: 14px; height: 36px; box-sizing: border-box; border: 3px solid #fff;
+                   border-radius: 7px; box-shadow: 0 0 0 2px #000; }
+.by-colours-shades { width: 460px; height: 191px; margin-bottom: 12px; font-size: 0; }
+.by-colours-shade { display: inline-block; position: relative; width: 44px; height: 26px; margin: 0 8px 7px 0; border-radius: 7px;
+                    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .12); }
+.by-colours-shade:nth-child(9n) { margin-right: 0; }
+.by-colours-styles { height: 62px; margin-bottom: 6px; white-space: nowrap; font-size: 0; }
+.by-colours-style { display: inline-block; vertical-align: top; width: 64px; margin-right: 12px; text-align: center; }
+.by-colours-style-square { position: relative; width: 64px; height: 38px; border-radius: 8px; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .18); }
+.by-colours-style-name { margin-top: 3px; font-size: 13px; line-height: 18px; color: #bbb; }
+.by-colours-style.by-colours--focused .by-colours-style-name { color: #f1f1f1; }
+.by-colours-foot { height: 44px; white-space: nowrap; font-size: 0; }
+.by-colours-code { display: inline-block; vertical-align: middle; height: 42px; line-height: 42px; padding: 0 18px; border-radius: 21px;
+                   background: #333; font-size: 17px; font-weight: 500; }
+/* (the text's switch, "Sidebar too", in the styles' place: as the code's button, ticked while on) */
+.by-colours-toggle { margin-top: 10px; }
+.by-colours-toggle--on:after { content: '  \2713'; }
+.by-colours-now { display: inline-block; vertical-align: middle; width: 30px; height: 30px; margin-left: 24px; border-radius: 8px;
+                  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .25); }
+.by-colours-now-text { display: inline-block; vertical-align: middle; margin-left: 10px; font-size: 16px; }
+/* (the focus: a ring round a swatch, a shade or the slider; the code's button white, as a focused button) */
+.by-colours-swatch.by-colours--focused:after { content: ''; position: absolute; left: -7px; top: -7px; right: -7px; bottom: -7px;
+                                               border-radius: 27px; box-shadow: 0 0 0 3px #f1f1f1; }
+.by-colours-style.by-colours--focused .by-colours-style-square:after { content: ''; position: absolute; left: -6px; top: -6px; right: -6px; bottom: -6px;
+                                                                      border-radius: 12px; box-shadow: 0 0 0 3px #f1f1f1; }
+.by-colours-shade.by-colours--focused:after { content: ''; position: absolute; left: -6px; top: -6px; right: -6px; bottom: -6px;
+                                              border-radius: 11px; box-shadow: 0 0 0 3px #f1f1f1; }
+.by-colours-track.by-colours--focused, .by-colours-tab.by-colours--focused { box-shadow: 0 0 0 3px #212121, 0 0 0 6px #f1f1f1; }
+.by-colours-code.by-colours--focused { background: #f1f1f1; color: #0f0f0f; }
+/* (the set one: a dot in its middle, in the colour that reads on it) */
+.by-colours--set:before { content: ''; position: absolute; left: 50%; top: 50%; width: 10px; height: 10px; margin: -5px 0 0 -5px;
+                          border-radius: 5px; background: currentColor; }
+.by-colours-shade.by-colours--set:before { width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 4px; }
+/* Settings › Theme › Icons (views/icon-page.ts): Colours' panel (by-colours), its sets in rows, each its name and five
+   of its icons, the chosen one ticked; under them the focused one's line. On System, a window over the app with all the
+   icons in the focused set. Each tab's rows and line in a box of their own, one over the other, the shown tab's in sight */
+.by-icons-list { position: relative; margin-top: 4px; }
+.by-icons-rows { position: absolute; left: -6px; right: -6px; top: -6px; padding: 6px; will-change: transform; }
+/* (6 px of room round the rows, so the focus ring on the first row does not grow the layer: a layer that grows is
+   drawn anew whole) */
+.by-icons-set { position: relative; height: 56px; margin-bottom: 8px; padding: 0 16px; border-radius: 12px; background: #2a2a2a;
+                white-space: nowrap; font-size: 0; }
+.by-icons-name { display: inline-block; vertical-align: middle; width: 160px; overflow: hidden; text-overflow: ellipsis;
+                 font-size: 18px; line-height: 56px; color: #f1f1f1; }
+.by-icons-samples { display: inline-block; vertical-align: middle; height: 30px; }
+.by-icons-sample { display: inline-block; vertical-align: middle; width: 26px; height: 26px; margin-right: 22px; color: #f1f1f1; }
+.by-icons-set.by-colours--focused { box-shadow: 0 0 0 3px #212121, 0 0 0 6px #f1f1f1; }
+.by-icons-set.by-colours--set .by-icons-name:after { content: '  \2713'; }
+.by-icons-note { margin-top: 8px; font-size: 16px; line-height: 22px; color: #aaa; white-space: normal; }
+/* (centred between the closed sidebar's 104 px and the page at 740 px: clear of both; ten icons a row take 538 px) */
+.by-icons-all { position: absolute; left: 112px; top: 80px; width: 620px; box-sizing: border-box; padding: 24px 30px 10px; border-radius: 18px;
+                background: #181818; color: #f1f1f1; will-change: transform; }
+.by-icons-all-title { margin-bottom: 20px; font-size: 22px; font-weight: 500; line-height: 30px; }
+.by-icons-grid { font-size: 0; }
+.by-icons-cell { display: inline-block; width: 34px; height: 34px; margin: 0 22px 22px 0; color: #f1f1f1; }
+.by-icons-cell:nth-child(10n) { margin-right: 0; }
 .by-question { padding-top: 122px; box-sizing: border-box; background: #0f0f0f; }
 /* Settings › Shortcuts: Settings' look, its list wider for each entry's button (on the right, small and grey, a colour
    button's dot before it), "Now:" in white under what it does, every button's two places as lines; setting one: as
@@ -584,14 +670,19 @@ html, body { background: #0f0f0f; }
 .by-chat-line--gone, .by-chat--faded { opacity: 0; -webkit-transition: opacity .6s ease; }
 
 /* Live chat settings (player/chat-settings.ts): see-through, on the side away from the chat; over Settings an example
-   picture behind it (a night sky over snow: the chat's text over dark and bright) */
+   picture behind it (a night sky over snow: the chat's text over dark and bright). The page follows the look: its panel
+   the page's colour see-through, its text the text's and its steps, its focus the highlight; the example and the chat
+   stay as over a video (OVER). Over a stream (in by-player) it is the player's, dark on every look, its focus the
+   highlight's (INSIDE). How see-through, one pair in three places, kept the same: the panel .6 on a dark page (here),
+   .85 on a light one (youtube-light-own.css), Move and resize's hint .9 (here); a colour of one's own the same
+   (ui/theme.ts backgroundRules) */
 .by-chatset-panel { left: 40px; top: 60px; width: 520px; padding: 18px 0 14px; border-radius: 16px; background: rgba(15, 15, 15, .6);
                     color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, .8); }
 .by-chatset--right .by-chatset-panel { left: auto; right: 40px; }
 .by-chatset--low .by-chatset-panel { top: auto; bottom: 16px; }
 .by-chatset-title { padding: 0 24px 10px; font-size: 24px; font-weight: 500; }
 .by-chatset-row { height: 44px; padding: 0 24px; font-size: 20px; line-height: 44px; }
-.by-chatset-value { top: 0; right: 14px; color: #e0e0e0; }
+.by-chatset-value { top: 0; right: 14px; color: #d0d0d0; }
 .by-chatset-arrow { display: inline-block; width: 24px; text-align: center; font-size: 26px; opacity: 0; }
 .by-chatset-row--focused { background: #f1f1f1; color: #0f0f0f; text-shadow: none; }
 .by-chatset-row--focused .by-chatset-value { color: #0f0f0f; }
@@ -790,7 +881,6 @@ html, body { background: #0f0f0f; }
    time, this one ~0.1 s; no difference to see in a 1280 px picture shown 1.5 times its size) */
 .by-channel-banner { left: 0; top: 0; width: 1280px; height: 573px; object-fit: cover; background-color: #0f0f0f; image-rendering: -webkit-optimize-contrast;
                      -webkit-transition: opacity .3s ease; }
-.by-black .by-channel-banner { background-color: #000; }
 .by-channel-shade { height: 573px; background-image: -webkit-linear-gradient(left, rgba(0, 0, 0, .35), rgba(0, 0, 0, 0) 720px); }
 .by-channel--rows .by-channel-banner, .by-channel--rows .by-channel-shade { opacity: 0; }
 .by-channel-banner, .by-channel-shade, .by-channel-top { pointer-events: none; }
@@ -849,10 +939,110 @@ html, body { background: #0f0f0f; }
                                      border-radius: 64px; box-shadow: 0 0 0 4px #f1f1f1, 0 0 0 7px #000; }
 .by-loader--round .by-loader-box, .by-loader--round .by-loader-inner { -webkit-transition: -webkit-transform .2s linear; }
 .by-loader--round .by-loader-image { width: 128px; height: 128px; border-radius: 64px; object-fit: cover; }
+/* Your logo at a video's start (Settings › Theme › Loading spinner): the logo in its own shape, still, as the channel's
+   picture there; its fill one slide as that */
+.by-loader--still .by-loader-pulse { -webkit-animation: none; }
 /* The account's picture as the logo: a circle the logo box's height, centred */
 .by-loader--account .by-loader-pulse { width: 181px; margin-left: -90px; }
 .by-loader--account .by-loader-image { width: 181px; border-radius: 91px; object-fit: cover; }
 @-webkit-keyframes by-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .65; } }
+
+/* The loading signs that turn while a video starts (Settings › Theme › Loading spinner; ui/spinner.ts; their place: app.css
+   by-loader-spin): each a theme's own art in its own colours, as a logo is (YouTube's white as YouTube's), the same on
+   every look. As their sketches, their sizes times 1.6 (about the channel's picture's 128). While a
+   video starts the page draws next to nothing, so a moving part only turns, slides or fades (-webkit-transform,
+   opacity: the compositor runs it alone), each a layer of its own from the frame it shows (will-change) painted once;
+   a still part a layer of its own too (translateZ), painted once, so that nothing is painted again as the others move.
+   A glow is a gradient: no blurred shadow (the TV takes most of a second to draw one: app.css by-screen-off). A chase or a
+   blink is held keyframes, not steps(): Chrome 38 runs steps() on the page's thread, which a start keeps busy; each jump
+   a thousandth of a per cent long (~10 µs), so no frame lands in the middle of one (a tenth's: one frame in fourteen had
+   the bulbs between their places, seen in a still). Their
+   animations only under by-loader-spin--on (hidden: none ticks). Measured on the TV: ui/spinner.ts */
+/* Settings › Theme › Loading spinner's preview (views/sign-preview.ts): the sign on a black plate, as on the player's black
+   screen at a start, whatever the look behind (a layer of its own, painted once); a spinner inside it, cut off at its
+   edge (VHS's tracking bar rolled across the whole app there, seen on the TV 2026-11-17) */
+.by-loader-plate { display: none; position: absolute; left: 50%; top: 50%; width: 240px; height: 240px; margin: -120px 0 0 -120px; border-radius: 28px;
+                   background: #000; z-index: 4; overflow: hidden; -webkit-transform: translateZ(0); }
+.by-loader-plate.by-loader-plate--on { display: block; }
+/* YouTube: a white arc turning on a faint ring. 1 part, turning */
+.by-loader-spin-youtube-ring { position: absolute; left: -44px; top: -44px; width: 74px; height: 74px; border: 7px solid rgba(255, 255, 255, .15);
+                               border-top-color: #fff; border-radius: 50%; will-change: transform; }
+.by-loader-spin--on .by-loader-spin-youtube-ring { -webkit-animation: by-spin-turn .9s linear infinite; }
+@-webkit-keyframes by-spin-turn { from { -webkit-transform: rotate(0deg); } to { -webkit-transform: rotate(360deg); } }
+/* Midnight: two soft rings breathing out of a glowing dot. 3 parts: the dot still, the rings growing and fading in
+   turn */
+.by-loader-spin-midnight-glow { position: absolute; left: -50px; top: -50px; width: 100px; height: 100px; -webkit-transform: translateZ(0);
+                                background: radial-gradient(circle, #9fc0ff 11px, rgba(79, 140, 255, .55) 13px, rgba(79, 140, 255, .18) 30px, rgba(79, 140, 255, 0) 50px); }
+.by-loader-spin-midnight-ring, .by-loader-spin-midnight-ring2 { position: absolute; left: -56px; top: -56px; width: 106px; height: 106px;
+                                                                border: 3px solid #7aa7ff; border-radius: 50%; opacity: 0; will-change: transform, opacity; }
+.by-loader-spin--on .by-loader-spin-midnight-ring { -webkit-animation: by-spin-breathe 2s ease-out infinite; }
+.by-loader-spin--on .by-loader-spin-midnight-ring2 { -webkit-animation: by-spin-breathe 2s ease-out 1s infinite; }
+@-webkit-keyframes by-spin-breathe { from { opacity: .9; -webkit-transform: scale(.25); } to { opacity: 0; -webkit-transform: scale(1.1); } }
+/* Arcade: eight pixel blocks round a square, one lit at a time chasing round. 2 parts: the eight dim blocks still (one
+   element, its copies hard shadows), the lit one jumping from place to place */
+.by-loader-spin-arcade-blocks, .by-loader-spin-arcade-lit { position: absolute; left: -50px; top: -50px; width: 22px; height: 22px; background: #ff2e88; }
+.by-loader-spin-arcade-blocks { opacity: .25; -webkit-transform: translateZ(0);
+                                box-shadow: 37px 0 #ff2e88, 74px 0 #ff2e88, 74px 37px #ff2e88, 74px 74px #ff2e88, 37px 74px #ff2e88, 0 74px #ff2e88, 0 37px #ff2e88,
+                                            5px 5px #ffe066, 42px 5px #ffe066, 79px 5px #ffe066, 79px 42px #ffe066, 79px 79px #ffe066, 42px 79px #ffe066,
+                                            5px 79px #ffe066, 5px 42px #ffe066; }
+.by-loader-spin-arcade-lit { box-shadow: 5px 5px #ffe066; will-change: transform; }
+.by-loader-spin--on .by-loader-spin-arcade-lit { -webkit-animation: by-spin-chase .8s linear infinite; }
+@-webkit-keyframes by-spin-chase {
+    0%, 12.499% { -webkit-transform: translate3d(0, 0, 0); } 12.5%, 24.999% { -webkit-transform: translate3d(37px, 0, 0); }
+    25%, 37.499% { -webkit-transform: translate3d(74px, 0, 0); } 37.5%, 49.999% { -webkit-transform: translate3d(74px, 37px, 0); }
+    50%, 62.499% { -webkit-transform: translate3d(74px, 74px, 0); } 62.5%, 74.999% { -webkit-transform: translate3d(37px, 74px, 0); }
+    75%, 87.499% { -webkit-transform: translate3d(0, 74px, 0); } 87.5%, 100% { -webkit-transform: translate3d(0, 37px, 0); } }
+/* VHS: the recorder's PLAY (VT323's letters as paths: no font loaded) in its phosphor green, a red and a blue copy
+   either side; its triangle blinking, a faint tracking bar rolling down the screen. 3 parts: the word still, the
+   triangle fading on and off, the bar sliding */
+.by-loader-spin-vhs-word, .by-loader-spin-vhs-play { position: absolute; top: -17px; height: 34px; }
+.by-loader-spin-vhs-word { left: -82px; width: 112px; -webkit-transform: translateZ(0); }
+.by-loader-spin-vhs-play { left: 51px; width: 32px; will-change: opacity; }
+.by-loader-spin-vhs-pixels { display: block; width: 100%; height: 100%; }
+.by-loader-spin-vhs-green { fill: #9cf2b0; }
+.by-loader-spin-vhs-red { fill: rgba(255, 0, 80, .5); }
+.by-loader-spin-vhs-blue { fill: rgba(0, 200, 255, .5); }
+.by-loader-spin-vhs-bar { position: absolute; left: -640px; top: -360px; width: 1280px; height: 130px; background: rgba(255, 255, 255, .06);
+                          -webkit-transform: translate3d(0, -130px, 0); will-change: transform; }
+.by-loader-spin--on .by-loader-spin-vhs-play { -webkit-animation: by-spin-blink 1s linear infinite; }
+.by-loader-spin--on .by-loader-spin-vhs-bar { -webkit-animation: by-spin-roll 2.6s linear infinite; }
+@-webkit-keyframes by-spin-blink { 0%, 49.999% { opacity: 1; } 50%, 100% { opacity: 0; } }
+@-webkit-keyframes by-spin-roll { from { -webkit-transform: translate3d(0, -130px, 0); } to { -webkit-transform: translate3d(0, 720px, 0); } }
+/* Mission Control: a small moon orbiting a planet. 3 parts: the dashed orbit and the planet still, the moon (its glow a
+   gradient) turning round the planet's middle */
+.by-loader-spin-mission-orbit { position: absolute; left: -59px; top: -59px; width: 114px; height: 114px; border: 2px dashed rgba(0, 209, 255, .45);
+                                border-radius: 50%; -webkit-transform: translateZ(0); }
+.by-loader-spin-mission-planet { position: absolute; left: -18px; top: -18px; width: 36px; height: 36px; border-radius: 50%;
+                                 background: radial-gradient(circle at 35% 30%, #7ff0ff, #00839e); -webkit-transform: translateZ(0); }
+.by-loader-spin-mission-moon { position: absolute; left: -20px; top: -79px; width: 40px; height: 40px; -webkit-transform-origin: 20px 79px; will-change: transform;
+                               background: radial-gradient(circle, #d9f6ff 7px, rgba(0, 209, 255, .6) 9px, rgba(0, 209, 255, 0) 20px); }
+.by-loader-spin--on .by-loader-spin-mission-moon { -webkit-animation: by-spin-turn 1.6s linear infinite; }
+/* Paper: three ink dots rising and settling in turn. 3 parts, each sliding, growing and fading */
+.by-loader-spin-paper-dot, .by-loader-spin-paper-dot2, .by-loader-spin-paper-dot3 { position: absolute; left: -55px; top: -13px; width: 26px; height: 26px;
+                                                                                    border-radius: 50%; background: #c2410c; opacity: .35; will-change: transform, opacity; }
+.by-loader-spin-paper-dot2 { left: -13px; }
+.by-loader-spin-paper-dot3 { left: 29px; }
+.by-loader-spin--on .by-loader-spin-paper-dot { -webkit-animation: by-spin-drop 1.2s ease-in-out infinite; }
+.by-loader-spin--on .by-loader-spin-paper-dot2 { -webkit-animation: by-spin-drop 1.2s ease-in-out .15s infinite; }
+.by-loader-spin--on .by-loader-spin-paper-dot3 { -webkit-animation: by-spin-drop 1.2s ease-in-out .3s infinite; }
+@-webkit-keyframes by-spin-drop { 0%, 100% { opacity: .35; -webkit-transform: translate3d(0, 0, 0) scale(1); }
+                                  40% { opacity: 1; -webkit-transform: translate3d(0, -19px, 0) scale(1.15); } }
+/* Cinema: twelve gold marquee bulbs round a ring, the lit ones chasing round. 2 parts: the twelve dim bulbs still (one
+   element, its copies hard shadows), the lit bulb and its fading tail (one element) turning a bulb at a time round the
+   ring's middle */
+.by-loader-spin-cinema-bulbs, .by-loader-spin-cinema-lit { position: absolute; left: 44px; top: -7px; width: 14px; height: 14px; border-radius: 50%; background: #e8b04b; }
+.by-loader-spin-cinema-bulbs { opacity: .25; -webkit-transform: translateZ(0);
+                               box-shadow: -6.8px 25.5px #e8b04b, -25.5px 44.2px #e8b04b, -51px 51px #e8b04b, -76.5px 44.2px #e8b04b, -95.2px 25.5px #e8b04b,
+                                           -102px 0 #e8b04b, -95.2px -25.5px #e8b04b, -76.5px -44.2px #e8b04b, -51px -51px #e8b04b, -25.5px -44.2px #e8b04b,
+                                           -6.8px -25.5px #e8b04b; }
+.by-loader-spin-cinema-lit { -webkit-transform-origin: -44px 7px; will-change: transform;
+                             box-shadow: -6.8px -25.5px rgba(232, 176, 75, .72), -25.5px -44.2px rgba(232, 176, 75, .44), -51px -51px rgba(232, 176, 75, .16); }
+.by-loader-spin--on .by-loader-spin-cinema-lit { -webkit-animation: by-spin-marquee 1.2s linear infinite; }
+@-webkit-keyframes by-spin-marquee {
+    0%, 8.332% { -webkit-transform: rotate(0deg); } 8.333%, 16.666% { -webkit-transform: rotate(30deg); } 16.667%, 24.999% { -webkit-transform: rotate(60deg); }
+    25%, 33.332% { -webkit-transform: rotate(90deg); } 33.333%, 41.666% { -webkit-transform: rotate(120deg); } 41.667%, 49.999% { -webkit-transform: rotate(150deg); }
+    50%, 58.332% { -webkit-transform: rotate(180deg); } 58.333%, 66.666% { -webkit-transform: rotate(210deg); } 66.667%, 74.999% { -webkit-transform: rotate(240deg); }
+    75%, 83.332% { -webkit-transform: rotate(270deg); } 83.333%, 91.666% { -webkit-transform: rotate(300deg); } 91.667%, 100% { -webkit-transform: rotate(330deg); } }
 
 /* Subscriptions with the channels at the top, as in YouTube's phone app: round channel pictures in a row (a blue dot
    on those with new videos, All at its end in blue), the pills under them (the chosen one white, the focused one

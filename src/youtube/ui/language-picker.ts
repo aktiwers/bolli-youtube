@@ -1,11 +1,11 @@
-// "More languages" in Settings › Subtitles: a searchable list of every
-// language YouTube translates subtitles to (api/languages.ts), shown over
-// Settings. Typed text at the top, matches left of the on-screen keyboard
-// (src/ui/keyboard.ts): names (or a word of them; the English name too in
-// another app language) starting with the text first, then names containing
-// it; with no text, all by name. Left at the
-// keyboard's left edge moves to the list, Right back; OK picks a language;
-// Back closes. Styled by themes/<id>.css (by-langs).
+// "More languages" in Settings › Subtitles and Audio language: a searchable
+// list of every language YouTube translates subtitles to (api/languages.ts),
+// shown over Settings, its title saying which of the two it is for. Typed
+// text at the top, matches left of the on-screen keyboard (src/ui/keyboard.ts):
+// names (or a word of them; the English name too in another app language)
+// starting with the text first, then names containing it; with no text, all
+// by name. Left at the keyboard's left edge moves to the list, Right back; OK
+// picks a language; Back closes. Styled by themes/<id>.css (by-langs).
 
 import { h, setShown, setText, toggleClass } from '../core/dom.js';
 import { tr } from '../core/i18n.js';
@@ -22,6 +22,7 @@ var ROWS = 9;
 export class LanguagePicker {
     el: HTMLElement;
     shown = false;
+    private title: HTMLElement;
     private field: HTMLElement;
     private keyboard: Keyboard;
     private rows: { el: HTMLElement; name: HTMLElement; check: HTMLElement }[] = [];
@@ -38,7 +39,7 @@ export class LanguagePicker {
     constructor(parent: HTMLElement) {
         var self = this;
         this.el = h('div', 'by-langs');
-        this.el.appendChild(h('div', 'by-langs-title', tr('Subtitles: more languages')));
+        this.title = this.el.appendChild(h('div', 'by-langs-title')) as HTMLElement;
         this.field = this.el.appendChild(h('div', 'by-langs-field')) as HTMLElement;
         var list = this.el.appendChild(h('div', 'by-langs-list')) as HTMLElement;
         for (var i = 0; i < ROWS; i++) {
@@ -67,8 +68,10 @@ export class LanguagePicker {
         });
     }
 
-    /** Show over Settings with empty text (set: the current language); chosen: called with the picked code */
-    open(set: string, chosen: (code: string) => void): void {
+    /** Show over Settings with empty text (title: what it is for; set: the current language); chosen: called with the
+     * picked code */
+    open(title: string, set: string, chosen: (code: string) => void): void {
+        setText(this.title, title);
         this.set = set;
         this.chosen = chosen;
         this.shown = true;

@@ -5,9 +5,15 @@
 // views, age...) when the user opened the bar (not when it appears by itself on a
 // channel change or seek), a line for what comes next or the keys (led by the
 // playing quality, e.g. "1080p · 50 fps"), and a message line for problems. It
-// hides after a few seconds unless the player wants it to stay.
+// hides after a few seconds unless the player wants it to stay. Hidden while the
+// player is open, it is put away below the screen (core/dom.ts standsBy) and kept
+// drawn on a layer of its own (app.css osd--kept), so it shows again with nothing
+// drawn anew (on the TV, 2026-11-17: frames lost over four OK and two Right, the
+// forced collections taken out, 559 -> 237 ms; every key that shows it 30-110 ms
+// quicker); only when the player closes is it hidden (display none: close) and its
+// layer let go. A tile preview's player hides it all the same (by-player--peek).
 
-import { h, setSrc, setText } from '../core/dom.js';
+import { h, setSrc, setText, standsBy, toggleClass } from '../core/dom.js';
 
 var SHOW_MS = 5000;
 
@@ -26,6 +32,10 @@ export class PlayerOsd {
     private lineText: HTMLElement;
     private message: HTMLElement;
     private timer = 0;
+    /** Shown in its place; false: put away, or hidden */
+    private on = false;
+    /** Laid out and kept drawn (osd--kept: shown, or put away); false: hidden, not shown since the player opened */
+    private kept = false;
     /** The fill's scale as last written */
     private filled = '';
     /** The description was requested for this showing of the bar */
@@ -86,7 +96,7 @@ export class PlayerOsd {
     }
 
     get shown(): boolean {
-        return this.el.style.display === 'block';
+        return this.on;
     }
 
     /** Shown at the user's request (with the description) */
@@ -99,8 +109,16 @@ export class PlayerOsd {
     show(withText?: boolean): void {
         this.withText = this.withText || !!withText;
         this.showText();
-        if (!this.shown) {
-            this.el.style.display = 'block';
+        if (!this.on) {
+            this.on = true;
+            // (put away: back in its place, nothing drawn anew; else laid out by its class, no inline display, which
+            // would win over the preview's rule)
+            if (this.kept) {
+                standsBy(this.el, false);
+            } else {
+                this.kept = true;
+                toggleClass(this.el, 'osd--kept', true);
+            }
         }
         clearTimeout(this.timer);
         this.timer = setTimeout(this.later, SHOW_MS) as unknown as number;
@@ -122,15 +140,31 @@ export class PlayerOsd {
         }
     }
 
+    /** Out of sight: put away below the screen, kept drawn (until the player closes: close) */
     hide(): void {
         clearTimeout(this.timer);
         this.withText = false;
         this.topAt = 0;
-        if (this.shown) {
-            this.el.style.display = 'none';
+        if (this.on) {
+            this.on = false;
+            standsBy(this.el, true);
+            // (put away as it shows next, without the description asked for: nothing then to lay out and draw anew; the
+            // chapters close at once too: onHide)
+            this.showText();
             if (this.onHide) {
                 this.onHide();
             }
+        }
+    }
+
+    /** The player closed: hidden with nothing kept drawn (display none, its layer let go), laid out anew when it shows
+     * next */
+    close(): void {
+        this.hide();
+        if (this.kept) {
+            this.kept = false;
+            standsBy(this.el, false);
+            toggleClass(this.el, 'osd--kept', false);
         }
     }
 

@@ -4,13 +4,13 @@
 // TV a few hundred ms and would stutter on every section passed; a section that stands ready (drawn out of sight:
 // the app says so) has nothing to draw and shows with the step. Right or OK enter a section at once. A click (the Magic
 // Remote's pointer) is OK on the item, the logo or a menu entry under it. Icons: ui/icons.ts. With no logo chosen
-// (Settings › Look › Logo) the logo's place is empty but still takes the focus (an empty square then) and opens the
+// (Settings › Theme › Logo) the logo's place is empty but still takes the focus (an empty square then) and opens the
 // menu as ever.
 
 import { h, setClass, setShown, setSrc, setText } from '../core/dom.js';
 import { KEY, KeyHandler } from '../core/keys.js';
 import { takesPointer } from '../core/pointer.js';
-import { icon } from '../ui/icons.js';
+import { railIcon } from '../ui/icons.js';
 import { drawLogo } from '../ui/logo.js';
 import { metrics } from '../ui/theme.js';
 
@@ -46,7 +46,7 @@ export class Rail implements KeyHandler {
     private logo: HTMLElement;
     /** The logo is the account's picture, drawn round */
     private logoRound = false;
-    /** No logo is drawn (Settings › Look › Logo): its place is empty, an empty square while focused */
+    /** No logo is drawn (Settings › Theme › Logo): its place is empty, an empty square while focused */
     private noLogo = false;
     private drop: HTMLElement;
     private dropEls: HTMLElement[] = [];
@@ -90,7 +90,7 @@ export class Rail implements KeyHandler {
             var item = h('div', 'by-rail-item');
             this.tops.push(top);
             item.style.top = y + 'px';
-            item.appendChild(icon(items[i].icon, 'by-rail-icon'));
+            item.appendChild(railIcon(items[i].icon, items[i].label, i + 1, 'by-rail-icon'));
             item.appendChild(h('div', 'by-rail-label', items[i].label));
             this.els.push(this.el.appendChild(item) as HTMLElement);
             this.pointTo(item, i);
@@ -101,7 +101,7 @@ export class Rail implements KeyHandler {
         this.el.appendChild(this.drop);
         this.clock = h('div', 'by-clock');
         this.el.appendChild(this.clock);
-        // The chosen logo (Settings › Look › Logo), drawn anew when another is chosen (the account's picture round),
+        // The chosen logo (Settings › Theme › Logo), drawn anew when another is chosen (the account's picture round),
         // marked with the rest
         var self = this;
         drawLogo(function (file, round) {

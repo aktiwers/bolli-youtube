@@ -1,7 +1,17 @@
 // The app's icons: Material Design icons (Apache 2.0) as 24x24 SVG paths, drawn in the text
-// colour set by the theme.
+// colour set by the theme, in the style chosen (Settings › Theme › Icons › System: setIconStyle): the same shapes
+// filled (as YouTube's TV app), outlined, in a bubble, on a coloured tile, as pixel art (made at build time:
+// ui/pixels.gen.ts), in 3D (a block of shaded copies behind) or as an old video tape's picture (its scanlines, made at
+// build time: ui/vhs.gen.ts). What one looks at is as big as the filled shape in each
+// (a badge or a tile round it reaching past the box). No picture files: a style is how a shape is drawn. The
+// sidebar's may be a set of drawings of their own instead (Settings › Theme › Icons › Sidebar: ui/rail-icons.ts).
 
 import { h } from '../core/dom.js';
+import { pixelRects, svg } from './icon-svg.js';
+import { elementLetters, OWN_RAIL_SETS, railMarkup } from './rail-icons.js';
+import { softMarkup } from './soft-icons.js';
+import { PIXEL_GRID, PIXELS } from './pixels.gen.js';
+import { VHS, VHS_PITCH } from './vhs.gen.js';
 
 var ICONS: { [name: string]: string } = {
     language: 'M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zm6.93 6h-2.95c-.32-1.25-.78-2.45-1.38-3.56 1.84.63 3.37 1.91 4.33 3.56zM12 4.04c.83 1.2 1.48 2.53 1.91 3.96h-3.82c.43-1.43 1.08-2.76 1.91-3.96zM4.26 14C4.1 13.36 4 12.69 4 12s.1-1.36.26-2h3.38c-.08.66-.14 1.32-.14 2 0 .68.06 1.34.14 2H4.26zm.82 2h2.95c.32 1.25.78 2.45 1.38 3.56-1.84-.63-3.37-1.9-4.33-3.56zm2.95-8H5.08c.96-1.66 2.49-2.93 4.33-3.56C8.81 5.55 8.35 6.75 8.03 8zM12 19.96c-.83-1.2-1.48-2.53-1.91-3.96h3.82c-.43 1.43-1.08 2.76-1.91 3.96zM14.34 14H9.66c-.09-.66-.16-1.32-.16-2 0-.68.07-1.35.16-2h4.68c.09.65.16 1.32.16 2 0 .68-.07 1.34-.16 2zm.25 5.56c.6-1.11 1.06-2.31 1.38-3.56h2.95c-.96 1.65-2.49 2.93-4.33 3.56zM16.36 14c.08-.66.14-1.32.14-2 0-.68-.06-1.34-.14-2h3.38c.16.64.26 1.31.26 2s-.1 1.36-.26 2h-3.38z',
@@ -71,19 +81,237 @@ export function icon(name: string, className: string): HTMLElement {
     return el;
 }
 
-/** Icons parsed once, by name: each box gets a copy (cloning took half the time of parsing the markup again) */
-var parsed: { [name: string]: Node } = {};
+/** The icon styles besides filled ('') */
+export var ICON_STYLES = ['outline', 'bubble', 'tiles', 'pixel', 'iso', 'glass', 'soft', 'solid', 'vhs'];
+
+/** The style the icons are drawn in now ('' filled) */
+var style = '';
+
+/** An icon's markup in a style: filled; outline (a thin line round each shape);
+ * bubble (as filled, inside a faint round badge reaching a little past its box); tiles (white on a rounded square in
+ * its group's colour, past its box); pixel (its pixel art); iso (the shape in front, five faint copies stepping down to
+ * the right behind it: together a solid block, its depth); glass (on a frosted disc: glass); vhs (its scanlines, its
+ * colours bleeding apart: vhs) */
+export function markup(name: string, how: string): string {
+    var d = ICONS[name] || '';
+    if (how === 'glass') {
+        return glass(d);
+    }
+    // (its own box: not one svg inside another)
+    if (how === 'pixel' && PIXELS[name]) {
+        return pixelRects(PIXELS[name], PIXEL_GRID);
+    }
+    if (how === 'vhs' && VHS[name]) {
+        return vhs(VHS[name]);
+    }
+    // (Fruit soft and solid: drawings of their own: ui/soft-icons.ts)
+    if (how === 'soft' || how === 'solid') {
+        var own = softMarkup(name, how === 'solid');
+        if (own) {
+            return own;
+        }
+    }
+    var path = function (attrs: string): string { return '<path d="' + d + '" ' + attrs + '/>'; };
+    var line = 'stroke="currentColor" stroke-linejoin="round"';
+    var inner = how === 'outline' ? path('fill="none" ' + line + ' stroke-width="1.3"') :
+        how === 'bubble' ? '<circle cx="12" cy="12" r="14.5" fill="currentColor" fill-opacity=".16"/>' + path('fill="currentColor"') :
+        how === 'tiles' ? '<rect x="-3.5" y="-3.5" width="31" height="31" rx="8" fill="' + tileColour(name) + '"/>' + path('fill="#ffffff"') :
+        how === 'iso' ? DEPTH.map(function (at) { return path('transform="translate(' + at + ' ' + at + ')" fill="currentColor" fill-opacity=".3"'); }).join('') +
+            path('fill="currentColor"') :
+        path('fill="currentColor"');
+    return svg(inner);
+}
+
+/** 3D's copies behind the shape: how far each steps down and to the right (layout units of the 24 box) */
+var DEPTH = [2.5, 2, 1.5, 1, 0.5];
+
+/** VHS's copies, back to front: a red one a little to the left and a blue one to the right (a tape's colours bleeding
+ * apart, as the VHS logo's and loading sign's: their red and blue), the shape in front in the text's colour. Each its
+ * paint, its shift right (layout units) and its shift on the tracking line (TRACKING: the shape a little, its colours
+ * further apart) */
+var VHS_COPIES = [
+    { paint: 'fill="#ff0050" fill-opacity=".6"', dx: -0.8, track: -1.1 },
+    { paint: 'fill="#00c8ff" fill-opacity=".6"', dx: 0.8, track: 2.5 },
+    { paint: 'fill="currentColor"', dx: 0, track: 0.7 }
+];
+/** The tracking line: the scanline (from the top, from 0) shifted as a tape's tracking out of true, at the same height
+ * in every icon, so that a row of them shares it */
+var TRACKING = 9;
+/** A scanline's height: 4/3 of the 2 between them (at the TV's zoom of 1.5: 2 pixels lit, 1 dark, on whole pixels) */
+var SCANLINE = 1.333;
+
+/** VHS: an icon's scanlines (rows: ui/vhs.gen.ts, from tools/vhs_icons.mjs), each piece a bar, in the three copies of
+ * VHS_COPIES: three paths, no mask, filter or id */
+function vhs(rows: string): string {
+    var lines = rows.split('/');
+    var d = ['', '', ''];
+    for (var n = 0; n < lines.length; n++) {
+        var x = lines[n] ? lines[n].split(' ') : [];
+        for (var i = 0; i + 1 < x.length; i += 2) {
+            var w = Math.round((+x[i + 1] - +x[i]) * 100) / 100;
+            var bar = ' ' + n * VHS_PITCH + 'h' + w + 'v' + SCANLINE + 'h-' + w + 'z';
+            for (var c = 0; c < 3; c++) {
+                var dx = n === TRACKING ? VHS_COPIES[c].track : VHS_COPIES[c].dx;
+                d[c] += 'M' + (dx ? Math.round((+x[i] + dx) * 100) / 100 : x[i]) + bar;
+            }
+        }
+    }
+    return svg(d.map(function (one, c) { return '<path d="' + one + '" ' + VHS_COPIES[c].paint + '/>'; }).join(''));
+}
+
+/** Glass: the symbol (as big as the filled one) on a frosted disc round it: a faint tint of the text's colour, a soft
+ * light over its upper half, a thin bright rim, a soft shadow under it (the sidebar's Glass too: the same style) */
+function glass(path: string): string {
+    return svg('<ellipse cx="12" cy="28" rx="10" ry="2" fill="#000000" fill-opacity=".28"/>' +
+        '<circle cx="12" cy="12" r="15" fill="currentColor" fill-opacity=".13"/>' +
+        '<ellipse cx="12" cy="4.6" rx="10.5" ry="6" fill="#ffffff" fill-opacity=".13"/>' +
+        '<circle cx="12" cy="12" r="15" fill="none" stroke="#ffffff" stroke-opacity=".38" stroke-width=".8"/>' +
+        '<path d="' + path + '" fill="currentColor"/>');
+}
+
+/** App tiles' colours by the icon's group (the sidebar's App tiles too): the sidebar's sections each their own, playing
+ * red, sound and words blue, what one does to a video orange, the rest grey */
+var GROUPS: { [colour: string]: string[] } = {
+    '#e53935': ['play', 'pause', 'previous', 'next', 'loop', 'shuffle', 'playlist', 'list', 'pausecircle', 'playcircle', 'home'],
+    '#3949ab': ['volume', 'volumeoff', 'subtitles', 'comments', 'language', 'keyboard', 'mic', 'movies'],
+    '#fb8c00': ['like', 'liked', 'dislike', 'disliked', 'save', 'saved', 'bell', 'pin', 'flag', 'subscriptions'],
+    '#546e7a': ['search', 'history', 'back', 'backspace'],
+    '#8e24aa': ['library', 'bookmark', 'album'],
+    '#43a047': ['gaming'],
+    '#00897b': ['podcasts'],
+    '#d81b60': ['music'],
+    '#f9a825': ['sports', 'paid']
+};
+
+function tileColour(name: string): string {
+    for (var colour in GROUPS) {
+        if (GROUPS[colour].indexOf(name) >= 0) {
+            return colour;
+        }
+    }
+    return '#6d6d6d';
+}
+
+/** Icons parsed once, by style and name (the filled ones by name alone): each box gets a copy (cloning took half the
+ * time of parsing the markup again). No prototype: a key is never one of Object's own names */
+var parsed: { [key: string]: Node } = Object.create(null);
+/** Of the icons kept, those that cut a mask (Fruit solid's), each copy given its own mask id: maskCount */
+var masked: { [key: string]: number } = Object.create(null);
+var maskCount = 0;
 
 /** Changes the box's icon (rewritten only if different) */
 export function setIcon(el: HTMLElement, name: string): void {
     if (el.getAttribute('data-icon') !== name) {
         el.setAttribute('data-icon', name);
-        if (!parsed[name]) {
-            var box = document.createElement('div');
-            box.innerHTML = '<svg viewBox="0 0 24 24" width="100%" height="100%"><path fill="currentColor" d="' + (ICONS[name] || '') + '"/></svg>';
-            parsed[name] = box.firstChild as Node;
+        draw(el, name);
+    }
+}
+
+/** The icons' names */
+export function iconNames(): string[] {
+    return Object.keys(ICONS);
+}
+
+/** Icon name drawn into box el in style how ('' filled), kept by both: the filled one by its name alone, so that on the
+ * default look (setIcon at a key: play and pause, like) no key is made and no function */
+export function drawIcon(el: HTMLElement, name: string, how: string): void {
+    var key = how ? how + ' ' + name : name;
+    if (!parsed[key]) {
+        keep(key, markup(name, how));
+    }
+    copyKept(el, key);
+}
+
+/** An icon's markup parsed and kept under key (each box gets a copy of it: copyKept) */
+function keep(key: string, html: string): void {
+    var box = document.createElement('div');
+    box.innerHTML = html;
+    parsed[key] = box.firstChild as Node;
+    masked[key] = html.indexOf('<mask') >= 0 ? 1 : 0;
+}
+
+/** A copy of the icon kept under key in box el, in place of what was in it */
+function copyKept(el: HTMLElement, key: string): void {
+    el.textContent = '';
+    var copy = el.appendChild(parsed[key].cloneNode(true)) as Element;
+    if (masked[key]) {
+        // (each copy its own mask id: the first of a shared id may be in a box hidden, where old Chrome draws no mask)
+        // (the mask the svg's first child, the shapes it cuts after it: ui/soft-icons.ts)
+        var mask = copy.firstChild as Element;
+        var id = mask.getAttribute('id') + '-' + (++maskCount);
+        mask.setAttribute('id', id);
+        for (var n = mask.nextSibling as Element | null; n; n = n.nextSibling as Element | null) {
+            if (n.getAttribute('mask')) {
+                n.setAttribute('mask', 'url(#' + id + ')');
+            }
         }
-        el.textContent = '';
-        el.appendChild(parsed[name].cloneNode(true));
+    }
+}
+
+/** Draws icon name in box el in the style now (a sidebar entry's in the sidebar's set, if one is chosen: railIcon) */
+function draw(el: HTMLElement, name: string): void {
+    var entry = railSet ? el.getAttribute('data-rail') : null;
+    if (entry) {
+        drawRail(el, name, railSet, entry, style);
+    } else {
+        drawIcon(el, name, style);
+    }
+}
+
+/** Draws a sidebar entry's icon (its place and name: entry, "n name") in set ('' none: in style): a set of the
+ * sidebar's own in its drawing, kept by entry; another (App tiles, Glass, Fruit, VHS) as the system's style of that name */
+export function drawRail(el: HTMLElement, name: string, set: string, entry: string, how: string): void {
+    if (set && OWN_RAIL_SETS.indexOf(set) >= 0) {
+        var key = set + ' ' + entry;
+        if (!parsed[key]) {
+            var at = entry.indexOf(' ');
+            keep(key, railMarkup(set, name, entry.slice(at + 1), +entry.slice(0, at)) || markup(name, how));
+        }
+        copyKept(el, key);
+        return;
+    }
+    drawIcon(el, name, set || how);
+}
+
+/** A sidebar entry's icon: the icon name, the entry's name and place (n, from 1), drawn in the sidebar's set when one
+ * is chosen (setRailSet), else as any icon */
+export function railIcon(name: string, label: string, n: number, className: string): HTMLElement {
+    var el = h('div', className);
+    el.setAttribute('data-rail', n + ' ' + label);
+    // (Elements' letters reserved in the rail's order, whichever entry is drawn first)
+    elementLetters(label);
+    setIcon(el, name);
+    return el;
+}
+
+/** The sidebar's set ('' the app's icons) */
+var railSet = '';
+
+/** The sidebar's icons drawn in a set of their own ('' the app's icons in the style now; ui/rail-icons.ts RAIL_SETS),
+ * once, when it changes */
+export function setRailSet(set: string): void {
+    if (set === railSet) {
+        return;
+    }
+    railSet = set;
+    var all = document.querySelectorAll('[data-rail]');
+    for (var i = 0; i < all.length; i++) {
+        draw(all[i] as HTMLElement, all[i].getAttribute('data-icon') || '');
+    }
+}
+
+/** The icons' style ('' filled, or one of ICON_STYLES): every icon on the page drawn anew in it, once, when it
+ * changes (a choice in Settings, a look shown in place of the chosen one) */
+export function setIconStyle(how: string): void {
+    if (how === style) {
+        return;
+    }
+    style = how;
+    var all = document.querySelectorAll('[data-icon]');
+    for (var i = 0; i < all.length; i++) {
+        // (the sidebar's in a set of their own do not change with the style)
+        if (!railSet || !all[i].hasAttribute('data-rail')) {
+            draw(all[i] as HTMLElement, all[i].getAttribute('data-icon') || '');
+        }
     }
 }

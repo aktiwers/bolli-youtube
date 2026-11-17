@@ -10,8 +10,8 @@
 // open pages. Back from a video returns to where it was picked; Back in the
 // rail goes to the start page, then exits. Debug hooks live in window.__bolli (debug.ts).
 
-import { fadeInImages, h, isStandingBy, LAYOUT_HEIGHT, LAYOUT_WIDTH, toggleClass } from './core/dom.js';
-import { tr } from './core/i18n.js';
+import { fadeInImages, h, isStandingBy, LAYOUT_HEIGHT, LAYOUT_WIDTH, standsBy, toggleClass } from './core/dom.js';
+import { language, setLanguage, tr } from './core/i18n.js';
 import { ASK_MS, initKeys, isTyping, KEY, keyCame, lastKeyAt, ownPress, setActive, setHoldOk } from './core/keys.js';
 import { initPerf, mark, noteKey } from './core/perf.js';
 import { android, exitApp, ignorePointer } from './core/platform.js';
@@ -28,10 +28,11 @@ import { Channel, channelAhead, isChannel, keptChannel } from './api/channel.js'
 import { dearrowFetch, dearrowOn, saveDearrow, Wanted } from './api/dearrow.js';
 import { allVideos, first, get, home, keepable, keptPage, listNext, page, Page, pageAhead as fetchPageAhead, PageButton, PlaylistInfo, Rows, searchAhead as fetchSearchAhead, sized, SubChannel, subscriptions, tabAhead, tapAhead, text, toastOf, Video } from './api/feed.js';
 import { freshGuideNames, guideNames } from './api/guide.js';
-import { visited } from './api/looked.js';
+import { forgetLooks, visited } from './api/looked.js';
 import { forgetKept, pruneKept } from './api/kept-pages.js';
 import { prepareNames } from './api/languages.js';
-import { prefs, Shortcut, ShortcutTarget } from './api/prefs.js';
+import { ownerIs, ownKey, prefs, Shortcut, ShortcutTarget } from './api/prefs.js';
+import { forgetRecentSearches } from './api/suggest.js';
 import { checkAgain, checkVersion } from './api/version-check.js';
 import { keyName, PLAYER, SCREENS, shortcutAt } from './api/shortcuts.js';
 import { forgetSaves, run, Subscribe, watchInfo } from './api/watch.js';
@@ -47,7 +48,7 @@ import { TvApp } from './player/tv-app.js';
 import { apply, askToClear, flipSubscription } from './ui/account.js';
 import { Question } from './ui/question.js';
 import { SidePanel } from './ui/side-panel.js';
-import { applyBlack, applyTheme, metrics } from './ui/theme.js';
+import { applyTheme, metrics, MINE, plainLook, prepareSheets } from './ui/theme.js';
 import { openTileMenu } from './ui/tile-menu.js';
 import { ACCOUNT_PICTURE_PX, setLogoAccount } from './ui/logo.js';
 import './ui/themes/youtube.js';
@@ -61,7 +62,7 @@ import { ChannelView, KnownChannel } from './views/channel.js';
 import { playerPlaylists, SettingsView } from './views/settings.js';
 import { FeedOptions, FeedTexts, FeedView, KeptFeed } from './views/videos.js';
 import { shuffle } from './views/list-stage.js';
-import { noteWatched, startPicture, watchedAt } from './views/tiles.js';
+import { forgetWatched, noteWatched, startPicture, watchedAt } from './views/tiles.js';
 import { SubscriptionsView } from './views/subscriptions.js';
 import { ShortcutPrompt, wayLines } from './views/shortcuts.js';
 import { LibraryView } from './views/library.js';
@@ -75,7 +76,6 @@ var root = document.getElementById('app') as HTMLElement;
 var stage = h('div', 'bd-stage');
 // Theme first: screens are laid out with its sizes
 applyTheme(prefs().theme);
-applyBlack(prefs().pureBlack);
 /** Screens that are one YouTube browse page: Library and the topic pages from the TV app's rail (/guide). Films are
  * left out: mostly paid films, which the app's player cannot play */
 var BROWSE: { [id: string]: { label: string; browseId: string } } = {
@@ -374,11 +374,65 @@ function section(id: string): Screen {
             toggleClass(sections[id].el, 'by-section', true);
         }
         stage.appendChild(sections[id].el);
+        if (id === 'settings') {
+            (sections[id] as SettingsView).onPreview = previewBehind;
+        }
     }
     return sections[id];
 }
 
-/** Settings › Look › Bigger focused row on Home changed since Home was made: it goes, to be made anew from its stored
+/** el fades in (themes/youtube.css by-fade-in-now, PREVIEW_FADE_MS) */
+function fadeIn(el: HTMLElement): void {
+    clearTimeout(fadeTimer);
+    // (no layout read to run it anew: on again within its time, it simply runs on)
+    toggleClass(el, 'by-fade-in-now', true);
+    fadeTimer = setTimeout(function () { toggleClass(el, 'by-fade-in-now', false); }, PREVIEW_FADE_MS) as unknown as number;
+}
+
+var fadeTimer = 0;
+var PREVIEW_FADE_MS = 300;
+
+/** The screen shown behind Settings while it shows a choice on the app (its Theme settings), and whether it stood by
+ * (else it was hidden), or null */
+var behind: { view: Screen; stood: boolean } | null = null;
+
+/** Settings shows a choice on the app (on), or no longer: Home comes into view under Settings' narrowed choices (standing
+ * by: drawn already; else shown in passing, as the rail does), and goes back to how it was after */
+function previewBehind(on: boolean): void {
+    if (on) {
+        // (the look's other stylesheet parsed now: a change to it then only switches it on)
+        prepareSheets();
+        var home = section('home');
+        if (home !== screen()) {
+            var stood = isStandingBy(home.el);
+            behind = { view: home, stood: stood };
+            if (stood) {
+                standsBy(home.el, false);
+            } else {
+                home.show(true);
+            }
+            // (its focus drawn, so a highlight shows on it)
+            if (home.showFocus) {
+                home.showFocus(true);
+            }
+            // Fading in, so the change of view reads as one (it is so fast that people may not see what
+            // happened); an opacity animation, on its own layer
+            fadeIn(home.el);
+        }
+    } else if (behind) {
+        if (behind.view.showFocus) {
+            behind.view.showFocus(false);
+        }
+        if (behind.stood) {
+            standsBy(behind.view.el, true);
+        } else {
+            behind.view.hide();
+        }
+        behind = null;
+    }
+}
+
+/** Settings › Screens › Bigger focused row on Home changed since Home was made: it goes, to be made anew from its stored
  * rows (beside the rail's focus: buildNeighbour, as the rail rests; else when it is shown) */
 function homeFresh(): void {
     var made = sections.home as FeedView | undefined;
@@ -388,7 +442,7 @@ function homeFresh(): void {
     }
 }
 
-/** Home's focused row has big tiles: where the theme has them and Settings › Look says so (off by default: each Up or
+/** Home's focused row has big tiles: where the theme has them and Settings › Screens says so (off by default: each Up or
  * Down then lays two rows anew, which halves Home's frames on the TV) */
 function homeBig(): boolean {
     return metrics().ways.homeBig && prefs().homeBig;
@@ -856,6 +910,7 @@ function pageAhead(p: Page): void {
 
 /** The YouTube account may have changed: reload feeds fetched for another account */
 function accountChanged(): void {
+    forgetWatched();
     dropBuilt();
     forgetSaves();
     forgetKept();
@@ -938,6 +993,10 @@ var RAIL_PICTURE_PX = 64;
 function knowAccount(): void {
     keptProfiles().then(function (list) {
         me = list[0] && list[0].current ? list[0] : null;
+        if (ownSettings(me ? me.key : '')) {
+            return;
+        }
+        switchDone();
         logoAccount();
         if (!me) {
             guestChosen().then(function (guest) {
@@ -952,12 +1011,58 @@ function knowAccount(): void {
                 logoAccount();
             }, function () { return undefined; });
         }
-    }, function () { return undefined; });
+    }, function () {
+        switchDone();
+    });
 }
 
 /** Tells the logo the current account and its picture's address (ui/logo.ts: Settings' "Your YouTube avatar") */
 function logoAccount(): void {
     setLogoAccount(me ? { key: me.key, url: me.picture ? sized(me.picture, ACCOUNT_PICTURE_PX) : '' } : null);
+}
+
+/** The account signed in now (its key, '' a guest) takes its own settings (api/prefs.ts ownerIs), where they are:
+ * its look, its logo, Home's row size, its start page (Subscriptions takes its layout when it shows next); its
+ * language or theme, where they differ, by starting the app again (true: it is starting again) */
+function ownSettings(account: string): boolean {
+    var before = prefs();
+    var was = { theme: before.theme, startPage: before.startPage };
+    var theirs = ownerIs(account, language());
+    if (!theirs) {
+        return false;
+    }
+    forgetRecentSearches();
+    forgetLooks();
+    if (theirs.language !== language() || prefs().theme !== was.theme) {
+        setLanguage(theirs.language);
+        restartApp();
+        return true;
+    }
+    // (the look: the logo with it, drawn anew where theirs is another (ui/logo.ts showLogo); their picture as the logo:
+    // logoAccount, once the account is told)
+    applyTheme(prefs().theme);
+    homeAnew();
+    // (the start page the account switch showed was the one leaving's)
+    if (startPage() !== was.startPage && current === was.startPage && !pages.length) {
+        switchSection(startPage());
+    }
+    return false;
+}
+
+/** Home made with another row size than the one set now: made anew (shown now: in place) */
+function homeAnew(): void {
+    var made = sections.home as FeedView | undefined;
+    if (!made || made.big === homeBig()) {
+        return;
+    }
+    var shown = current === 'home' && screen() === made;
+    if (shown) {
+        made.hide();
+    }
+    homeFresh();
+    if (shown) {
+        bring(section('home'));
+    }
 }
 
 /** Starts the app again (what it keeps across starts saved first) */
@@ -987,6 +1092,37 @@ function logoEntries(): RailEntry[] {
 var accountsView: AccountsView | null = null;
 var signInView: SignInView | null = null;
 
+/** Which of the two is shown, and whether an account chosen there is on its way in (its own look comes with it:
+ * ownSettings) */
+var whoShown = { accounts: false, signIn: false };
+var switching = false;
+var whoTimer = 0;
+
+/** "Who's watching?" and its sign-in are the TV's, not one account's: drawn in the look the account in use chose there
+ * (Settings › Theme › Who's watching: one of Theme's looks, YouTube dark by default), or in its own. Back to the account's look once neither
+ * shows (in the next task: going from one to the other swaps nothing) */
+function whoLook(which: 'accounts' | 'signIn', on: boolean): void {
+    whoShown[which] = on;
+    clearTimeout(whoTimer);
+    if (on) {
+        plainLook(prefs().whoLook === MINE ? null : prefs().whoLook);
+        return;
+    }
+    whoTimer = setTimeout(function () {
+        if (!switching && !whoShown.accounts && !whoShown.signIn) {
+            plainLook(null);
+        }
+    }, 0) as unknown as number;
+}
+
+/** An account chosen there is in (or did not come): its own look shown */
+function switchDone(): void {
+    switching = false;
+    if (!whoShown.accounts && !whoShown.signIn) {
+        plainLook(null);
+    }
+}
+
 /** Opens "Who's watching?" (or brings it back on top): OK on an account uses it, Add account signs one in */
 function openAccounts(): void {
     leaveMenu();
@@ -996,28 +1132,36 @@ function openAccounts(): void {
         }
         return;
     }
-    accountsView = accountsView || new AccountsView(function (p) {
-        if (p.current) {
-            closePage();
-        } else {
-            useAccount(p.identity);
-        }
-    }, function () {
-        signInView = signInView || new SignInView(signedIn);
-        takeOut(signInView);
-        pushPage(signInView);
-    }, function (current) {
-        if (current) {
-            closePage();
-            return;
-        }
-        useGuest().then(function () {
-            forgetRows();
-            switched();
+    if (!accountsView) {
+        accountsView = new AccountsView(function (p) {
+            if (p.current) {
+                closePage();
+            } else {
+                useAccount(p.identity);
+            }
         }, function () {
-            toast(tr('Could not switch the account. Try again.'), undefined, PROBLEM);
+            if (!signInView) {
+                signInView = new SignInView(signedIn);
+                signInView.onShown = function (on) { whoLook('signIn', on); };
+            }
+            takeOut(signInView);
+            pushPage(signInView);
+        }, function (current) {
+            if (current) {
+                closePage();
+                return;
+            }
+            switching = true;
+            useGuest().then(function () {
+                forgetRows();
+                switched();
+            }, function () {
+                switchDone();
+                toast(tr('Could not switch the account. Try again.'), undefined, PROBLEM);
+            });
         });
-    });
+        accountsView.onShown = function (on) { whoLook('accounts', on); };
+    }
     // If open in another section, move it here; focus starts on the current account, as in YouTube
     takeOut(accountsView);
     accountsView.focusOn(null);
@@ -1056,7 +1200,9 @@ function signedIn(identity: Identity): void {
 
 /** Uses identity's account (the app starts over on it); if youtube.com's page fails, says so (orElse: then runs it) */
 function useAccount(identity: Identity, orElse?: () => void): void {
+    switching = true;
     useIdentity(identity).then(switched, function () {
+        switchDone();
         toast(tr('Could not switch the account. Try again.'), undefined, PROBLEM);
         if (orElse) {
             orElse();
@@ -1757,10 +1903,13 @@ function subscribeShortcut(): void {
     }
 }
 
-/** The video closed last, where it stopped (kept across starts by own.onClosed; as it was if closed a moment ago) */
+/** The video closed last, where it stopped: each account's own (api/prefs.ts ownKey), kept across starts by
+ * own.onClosed */
 var LAST_KEY = 'youtube.lastVideo';
+
+/** Plays the video closed last, where it stopped (as it was if closed a moment ago) */
 function playLast(): void {
-    var video = load<Video>(LAST_KEY);
+    var video = load<Video>(ownKey(LAST_KEY));
     var now = own.now;
     if (!video) {
         toast(tr('No video to continue yet'), 'info');
@@ -2150,7 +2299,7 @@ own.onClosed = function () {
     // Kept for the shortcut that continues it (also after a restart; one that ended: none), stored once the screen is
     // back
     var last = own.lastLeft;
-    setTimeout(function () { save(LAST_KEY, last); }, 0);
+    setTimeout(function () { save(ownKey(LAST_KEY), last); }, 0);
     // Back on a playlist's page: its focus on the video closed (the list may have played on), which plays on in the frame
     // at once from where it was (the closed video kept loaded)
     var list = listScreen();
@@ -2176,7 +2325,8 @@ own.onWatched = function (id, progress, t) {
         });
     }, 0);
 };
-/** The video the app's player handed to YouTube's player ('' if none, or once released) */
+/** The video the viewer chose to play in YouTube's player after the app's player offered it ('' if none, or once
+ * released) */
 var handedOver = '';
 // Near the end, prefetch the next video (Up next or queue): streams, headers and SponsorBlock segments
 own.onAhead = function (video, kept) {
@@ -2198,18 +2348,26 @@ own.onStarted = function (id, channel) {
 own.onPageAhead = pageAhead;
 // A video's comments shown: offered to a phone signed in to the same account, as YouTube's TV app does
 own.onComments = function (id) { cast.commentsHandoff(id); };
-own.onFallback = function (id, t) {
+// A video only YouTube's player may play (paid, members-only, protected), the player closed: asked, never by itself.
+// YouTube's player may show ads, so it is the viewer's choice each time
+own.onOfferYouTube = function (id, t, reason) {
     if (!tv.runs) {
-        return false;
+        toast((reason ? reason + ' ' : '') + tr('Bolli\'s player cannot play this video, and YouTube\'s player does not run on this TV.'), undefined, PROBLEM);
+        return;
     }
-    handedOver = id;
-    tv.play(id, function () {
-        handedOver = '';
-        // Shut YouTube's app down again (also if it gave up before showing, without onShown)
-        tv.shutDown();
-        updateMenu();
-    }, t);
-    return true;
+    question.open({
+        title: tr('Play it in YouTube\'s player?'),
+        subtitle: (reason ? reason + '\n\n' : '') + tr('Bolli\'s player cannot play this video. YouTube\'s player may, but it may show ads.'),
+        picture: '', yes: tr('Play in YouTube\'s player'), no: tr('Cancel')
+    }, function () {
+        handedOver = id;
+        tv.play(id, function () {
+            handedOver = '';
+            // Shut YouTube's app down again (also if it gave up before showing, without onShown)
+            tv.shutDown();
+            updateMenu();
+        }, t);
+    });
 };
 // A channel page opened from the watch page, over the screen the video was picked on (Back resumes the video)
 var fromPlayer: { view: View; id: string } | null = null;
@@ -2302,7 +2460,7 @@ switchSection(startPage());
 knowAccount();
 updateMenu();
 // Once the first screen is drawn and keys rest: the cast receiver, the pages left open and the sections built ahead.
-// YouTube's app starts only when needed (a film, or a video nothing else plays: readyForFilms, own.onFallback), since
+// YouTube's app starts only when needed (a film, or a video nothing else plays: readyForFilms, own.onOfferYouTube), since
 // its warm-up video holds the TV's video decoder
 whenScreenRests(function () {
     // Start the cast receiver once the first screen shows

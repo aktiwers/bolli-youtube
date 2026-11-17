@@ -14,7 +14,7 @@
 // Each waiting phase has a deadline. Videos open with _yttv's resolveCommand (as YouTube
 // AdFree and TizenTube do); "Who's watching?" is skipped as YouTube AdFree's auto account
 // select does; SponsorBlock segments (api/sponsorblock.ts) are skipped with a toast. Never on webOS TV 2.x's engine
-// (runs): YouTube's code needs a newer one (the page fails and the web process crashes); films and fallbacks say so
+// (runs): YouTube's code needs a newer one (the page fails and the web process crashes); films and offers of it say so
 // (main.ts, own-player.ts).
 
 import { h, setShown } from '../core/dom.js';

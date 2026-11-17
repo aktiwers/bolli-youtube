@@ -1,10 +1,10 @@
-// The viewer's own logos: pictures from web addresses typed in Settings › Look, each a tile there named Custom 1,
-// Custom 2 ... in the order they were added, offered for the logo in the app and for the home screen's alike (one
-// set). A picture is downloaded once when its address is typed (ui/pictures.ts: in the background, within a time
-// and a size, only a picture the engine shows), made no bigger than a logo is drawn, and kept in the app's storage
-// as a data URL: every start draws it from there with no request. A host that refuses the app a read of the bytes:
-// kept by its address alone (data ''), shown by it where a picture can be (the logo in the app). At most
-// CUSTOMS_MAX: they share the storage with the app's caches.
+// The viewer's own logos: pictures from web addresses typed in Settings › Theme › Logo (and Home screen logo), each a
+// tile there named Custom 1, Custom 2 ... in the order they were added, offered for the logo in the app and for the
+// home screen's alike (one set). A picture is downloaded once when its address is typed (ui/pictures.ts: in the
+// background, within a time and a size, only a picture the engine shows), made no bigger than a logo is drawn, and kept
+// in the app's storage as a data URL: every start draws it from there with no request. A host that refuses the app a
+// read of the bytes: kept by its address alone (data ''), shown by it where a picture can be (the logo in the app). At
+// most CUSTOMS_MAX: they share the storage with the app's caches.
 //
 // Kept as a short list (ids and addresses) and each picture under a key of its own, read when it is first drawn: a
 // start reads only the one it draws, not all of them.

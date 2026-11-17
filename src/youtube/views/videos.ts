@@ -702,6 +702,11 @@ export class FeedView implements View {
         }
     }
 
+    /** The focus drawn on its rows or not, nothing else asked or freshened (View.showFocus) */
+    showFocus(on: boolean): void {
+        this.stack.setFocused(on && this.at === 'rows');
+    }
+
     /** quiet: an automatic periodic retry, so the current message stays until the reply */
     retry(quiet?: boolean): boolean {
         if (!this.failed) {

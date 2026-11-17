@@ -1,4 +1,4 @@
-// The app's logo, as chosen in Settings › Look › Logo (prefs logo): drawn at the rail's top, on a screen's loading
+// The app's logo, as chosen in Settings › Theme › Logo (prefs logo): drawn at the rail's top, on a screen's loading
 // sign and while YouTube's player starts. Each built-in logo is two files in the app's folder, the same size as the
 // first's (216x181, so the layout stays): <file>.webp, and <file>.png for webOS TV 2.x's engine, which decodes no
 // WebP (promise.js marked it). Another logo: one entry in LOGOS, its two files and its two icons. About always shows
@@ -21,11 +21,16 @@
 // first screen's rows are drawn when the account's picture address differs from the kept one (a new picture, another
 // account). Until it is in: the old copy for the same account, else the first logo. Signed out, or no copy: the first
 // logo, the choice kept (the picture comes back with the account).
+//
+// A part of the look (ui/theme.ts LOOK_PARTS): the logo drawn is the look's where the look chosen names one (prefs
+// lookLogo, logoValue's: shown on top of the account's own, never written over it), else the account's own (prefs
+// logo); drawn anew as the look changes only where that is another (showLogo). One chosen here by hand is the account's
+// own and takes the look's place on top (ownLogo).
 
 import { tr } from '../core/i18n.js';
 import { oldEngine } from '../core/platform.js';
 import { load, save } from '../core/store.js';
-import { Choice, prefs, setPref } from '../api/prefs.js';
+import { Choice, prefs, setPref, setPrefs } from '../api/prefs.js';
 import { addChoice, addCustomLogo, customChoice, CustomLogo, customLogos, customOf, customValue, isCustom, onCustomRemoved } from './custom-logos.js';
 import { fetchPicture, loaded } from './pictures.js';
 
@@ -36,17 +41,27 @@ export interface Logo {
     file: string;
 }
 
-/** The built-in logos, the first the default */
+/** The built-in logos, the first the default. (Shield, Badge, Dark glass, Fire and Galaxy taken out, 2026-11-16: one
+ * chosen falls back to the first, here and on the home screen; the Android shell keeps their entries, so that one
+ * showing is never taken off the launcher, and is switched to the first at the next start: ui/home-screen.ts) */
 export var LOGOS: Logo[] = [
     { id: 'red', name: tr('Red'), file: 'logo-3' },
-    { id: 'shield', name: tr('Shield'), file: 'logo-2' },
     { id: 'framed', name: tr('Framed'), file: 'logo-4' },
-    { id: 'badge', name: tr('Badge'), file: 'logo-5' },
-    { id: 'steel', name: tr('Steel'), file: 'logo-6' },
     { id: 'rust', name: tr('Rust'), file: 'logo-7' },
-    { id: 'glass', name: tr('Dark glass'), file: 'logo-8' },
-    { id: 'fire', name: tr('Fire'), file: 'logo-9' },
-    { id: 'galaxy', name: tr('Galaxy'), file: 'logo-10' }
+    // (Splash in Steel's place, 2026-11-17: the id kept, so one who chose Steel has Splash)
+    { id: 'steel', name: tr('Splash'), file: 'logo-6' },
+    // (the built-in themes' own, 2026-11-17: ui/theme.ts LOOKS names each; any can be picked with any theme)
+    { id: 'midnight', name: 'Midnight', file: 'logo-11' },
+    { id: 'arcade', name: 'Arcade', file: 'logo-12' },
+    { id: 'vhs', name: 'VHS', file: 'logo-13' },
+    { id: 'mission', name: 'Mission Control', file: 'logo-14' },
+    { id: 'paper', name: 'Paper', file: 'logo-15' }
+];
+
+/** Logos kept but off for now (not offered; one chosen falls back to the first, as a removed one): Cinema's;
+ * back on: its entry into LOGOS (its Android entry is there) */
+export var OFF_LOGOS: Logo[] = [
+    { id: 'cinema', name: 'Cinema', file: 'logo-16' }
 ];
 
 /** In prefs logo: the account's picture, and no logo */
@@ -83,6 +98,20 @@ var rowsIn = false;
 
 /** Drawers of the logo, called again when it changes (round: the account's picture, drawn as a circle) */
 var drawers: ((file: string, round: boolean) => void)[] = [];
+/** The logo the drawers drew last (null: none drawn yet) */
+var drawnId: string | null = null;
+
+/** The logo set: the look's on top, else the account's own */
+function logoId(): string {
+    return prefs().lookLogo || prefs().logo;
+}
+
+/** A logo chosen by hand (Settings › Theme › Logo): the account's own; where a look's is on top, it takes its place
+ * there (drawn; the look then Custom unless it names the same: ui/theme.ts matchingLook; the other parts the same way:
+ * ui/theme.ts setLookPart). One store write */
+function ownLogo(value: string): void {
+    setPrefs(prefs().lookLogo ? { logo: value, lookLogo: value } : { logo: value });
+}
 
 /** A built-in logo's picture: its WebP, or its PNG on the old engine */
 export function logoFile(one: Logo): string {
@@ -101,7 +130,7 @@ function listed(id: string): Logo | undefined {
     return LOGOS.filter(function (one) { return one.id === id; })[0];
 }
 
-/** Settings › Look › Logo's choices, each a tile with its picture: the built-in logos by file, the account's picture
+/** Settings › Theme › Logo's choices, each a tile with its picture: the built-in logos by file, the account's picture
  * while an account is signed in (round; its kept copy, by its address before one is kept), the custom ones, the tile
  * that adds one, and none */
 export function logoChoices(): Choice[] {
@@ -143,23 +172,34 @@ export function signedIn(): boolean {
     return !!accountNow();
 }
 
-/** The logo Settings shows as chosen: no logo; the account's picture only while an account is signed in; a custom one
- * only while it is there; a built-in one only while it is listed; else the first */
+/** The logo Settings shows as chosen, the one drawn (the look's on top, else the account's own): no logo; the
+ * account's picture only while an account is signed in; a custom one only while it is there; a built-in one only while
+ * it is listed; else the first */
 export function shownLogo(): string {
-    var id = prefs().logo;
+    var id = logoId();
     return id === NONE || id === ACCOUNT && signedIn() || isCustom(id) && customOf(id) || listed(id) ? id : LOGOS[0].id;
+}
+
+/** A logo as a look names it (ui/theme.ts: a theme carries the logo): no logo, the account's picture, a custom one
+ * while it is there, a built-in one while it is listed; one no longer there (a custom one removed, a built-in one
+ * taken out) the first, as the logo itself falls back; '' none named */
+export function logoValue(id: unknown): string {
+    if (typeof id !== 'string' || !id) {
+        return '';
+    }
+    return id === NONE || id === ACCOUNT || isCustom(id) && customOf(id) || listed(id) ? id : LOGOS[0].id;
 }
 
 /** Whether the logo drawn is the account's picture (drawn round) */
 export function logoRound(): boolean {
-    return prefs().logo === ACCOUNT && !!accountPicture();
+    return logoId() === ACCOUNT && !!accountPicture();
 }
 
-/** The chosen logo's picture ('': no logo); a custom one that is gone: the first, and the choice back to it; one kept
- * by its address: the first until it has loaded there; the account's picture without a copy (or signed out): the
- * first, the choice kept */
+/** The logo's picture ('': no logo): the one set; a custom one that is gone: the first, and the choice back to it (the
+ * account's own, the look's on top); one kept by its address: the first until it has loaded there; the account's
+ * picture without a copy (or signed out): the first, the choice kept */
 export function logo(): string {
-    var id = prefs().logo;
+    var id = logoId();
     if (id === NONE) {
         return '';
     }
@@ -168,7 +208,12 @@ export function logo(): string {
         if (c) {
             return c.data || byAddress[c.id] && c.url || logoFile(LOGOS[0]);
         }
-        setPref('logo', LOGOS[0].id);
+        if (id === prefs().logo) {
+            setPref('logo', LOGOS[0].id);
+        }
+        if (id === prefs().lookLogo) {
+            setPref('lookLogo', LOGOS[0].id);
+        }
     } else if (id === ACCOUNT) {
         return accountPicture() || logoFile(LOGOS[0]);
     }
@@ -179,6 +224,7 @@ export function logo(): string {
 export function drawLogo(draw: (file: string, round: boolean) => void): void {
     drawers.push(draw);
     draw(logo(), logoRound());
+    drawnId = logoId();
 }
 
 /** Draws the chosen logo anew where drawLogo draws it (after the pref changed, or a custom one went); the others take
@@ -186,7 +232,22 @@ export function drawLogo(draw: (file: string, round: boolean) => void): void {
 export function applyLogo(): void {
     var file = logo();
     var round = logoRound();
+    drawnId = logoId();
     drawers.forEach(function (draw) { draw(file, round); });
+}
+
+/** The look shown changed (ui/theme.ts applyLook): the logo set drawn anew where drawLogo draws it only when it is not
+ * the one drawn there (a look chosen that names another); before anything draws it, the first drawLogo does */
+export function showLogo(): void {
+    if (drawnId !== null && logoId() !== drawnId) {
+        applyLogo();
+        // (a custom one kept by its address and not asked for yet this run, the account's picture set without a copy:
+        // loaded now, as the viewer chose them, as a start does once the rows are in)
+        if (rowsIn) {
+            byItsAddress();
+            refreshAccountLogo(false).then(null, function () { return undefined; });
+        }
+    }
 }
 
 /** The first screen's rows are drawn: a custom logo kept by its address loads now (once), swapped in once loaded; the
@@ -197,9 +258,9 @@ export function rowsDrawn(): void {
     byItsAddress();
 }
 
-/** Loads the chosen custom logo by its address if only that is kept (once a run), then draws it */
+/** Loads the custom logo drawn by its address if only that is kept (once a run), then draws it */
 function byItsAddress(): void {
-    var c = customOf(prefs().logo);
+    var c = customOf(logoId());
     if (!c || c.data || addressAsked[c.id]) {
         return;
     }
@@ -222,9 +283,9 @@ export function takeCustomLogo(url: string): Promise<CustomLogo> {
     });
 }
 
-/** Chooses a logo for the app (a built-in one's id, a custom one's value, or NONE) and draws it */
+/** Chooses a logo for the app by hand (a built-in one's id, a custom one's value, or NONE: ownLogo) and draws it */
 export function chooseLogo(value: string): void {
-    setPref('logo', value);
+    ownLogo(value);
     var c = customOf(value);
     if (c && !c.data) {
         // (typed just now, so its picture is in the browser's cache: shown by its address at once)
@@ -244,7 +305,7 @@ export function setLogoAccount(account: { key: string; url: string } | null): vo
         seen = key;
         save(SEEN_KEY, key);
     }
-    if (prefs().logo === ACCOUNT || key !== before) {
+    if (logoId() === ACCOUNT || key !== before) {
         applyLogo();
     }
     if (rowsIn) {
@@ -255,17 +316,17 @@ export function setLogoAccount(account: { key: string; url: string } | null): vo
 /** Chooses the account's picture: the first logo until its kept copy is in (fetched now if missing or changed);
  * rejects if that fetch fails (the choice stays: the next start tries again) */
 export function takeAccountLogo(): Promise<void> {
-    setPref('logo', ACCOUNT);
+    ownLogo(ACCOUNT);
     applyLogo();
     return refreshAccountLogo(true);
 }
 
-/** Fetches the signed-in account's picture if it is the logo and the kept copy is missing, another account's or from
- * another address (once per address and run, unless again), keeps it and draws it. Rejects when the download fails,
- * the storage does not take it, or a later download overtook this one. */
+/** Fetches the signed-in account's picture if it is the logo drawn and the kept copy is missing, another account's or
+ * from another address (once per address and run, unless again), keeps it and draws it. Rejects when the download
+ * fails, the storage does not take it, or a later download overtook this one. */
 function refreshAccountLogo(again: boolean): Promise<void> {
     var account = who;
-    if (prefs().logo !== ACCOUNT || !account || !account.url) {
+    if (logoId() !== ACCOUNT || !account || !account.url) {
         return Promise.resolve();
     }
     accountPicture();

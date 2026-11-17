@@ -43,6 +43,11 @@ var watched: { [id: string]: { progress: number; t: number } } = {};
 /** Watched this far: restart from the beginning (as YouTube does) */
 var WATCHED_ALL = 0.95;
 
+/** Another account came: what was watched is no longer its own to show */
+export function forgetWatched(): void {
+    watched = {};
+}
+
 export function noteWatched(id: string, progress: number, t: number): void {
     watched[id] = { progress: progress, t: t };
 }

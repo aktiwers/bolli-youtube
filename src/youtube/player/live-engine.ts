@@ -140,6 +140,8 @@ export class LiveEngine implements Engine {
     private landing = -1;
     /** The start's window (lift): the segment no track feeds until the stream plays (-1: none) */
     private windowSq = -1;
+    /** The line is down: no request is made (wait) */
+    private lineWait = false;
     /** The start fetched ahead this one takes (null: none) */
     private early: typeof early = null;
     /** Since when a segment to come is waited for with none come meanwhile (ms; 0: none is) */
@@ -193,6 +195,67 @@ export class LiveEngine implements Engine {
                 self.onFail(e === 403 ? 'expired' : e === 'media' ? e : 'network');
             }
         });
+    }
+
+    /** The line back after a drop that stood the picture (own-player.ts lineBack): what was asked before or during it is
+     * let go, the head asked anew, and the stream goes on from the segment the picture stands in (whatever of it is in
+     * already comes again: nothing is left out), or START_BEHIND segments behind the head if that is further on: nothing
+     * played twice, and as live as a start: the engine's own jump (goTo), on the buffers it has, so the picture it
+     * stands on stays until the next one plays (no black, no streams asked anew; a start anew lands START_BEHIND behind
+     * the head, which after a short drop is before where the picture stood). False: nothing to go on with (stopped, ended, nothing played yet) */
+    resume(): boolean {
+        if (this.stopped || this.live.over || !this.pipe || this.latest < 0) {
+            return false;
+        }
+        this.lineWait = false;
+        var self = this;
+        var from = Math.max(0, this.segmentAt(this.video.currentTime));
+        this.tracks.forEach(function (t) { self.restart(t); });
+        this.waitingSince = 0;
+        // (no catch-up meanwhile: it would judge by the head from before the drop, and its jump empties the buffers)
+        this.following = false;
+        var url = this.tracks[1].format.url;
+        // (once more at once on a passing error, as a start's head is asked: a network left hanging by the drop is
+        // passed over for another of the stream's)
+        fetchSegment(url, -1, undefined, true).then(null, function (e: unknown): Promise<Got> {
+            if (e === 403 || self.stopped) {
+                throw e;
+            }
+            return fetchSegment(url, -1, undefined, true);
+        }).then(function (got) {
+            if (self.stopped) {
+                return;
+            }
+            self.head = got.head;
+            self.headAt = Date.now();
+            var to = got.head >= 0 ? Math.min(got.head, Math.max(from, got.head - START_BEHIND)) : from;
+            note('live', 'went on at ' + to + ' (stood in ' + from + ', head ' + got.head + ')');
+            self.following = true;
+            // Further on: a jump there on the buffers it has (goTo, keep); else on from the segment it stands in
+            if (to > from) {
+                self.goTo(to, true);
+            } else {
+                self.tracks.forEach(function (t) { t.sq = to; });
+                self.pump();
+            }
+        }, function (e) {
+            if (!self.stopped) {
+                self.onFail(e === 403 ? 'expired' : 'network');
+            }
+        });
+        return true;
+    }
+
+    /** Engine.wait: none of its requests while the line is down (resume asks again after a stall) */
+    wait(on: boolean, ask?: boolean): void {
+        var self = this;
+        this.lineWait = on;
+        if (on) {
+            this.tracks.forEach(function (t) { self.restart(t); });
+            this.waitingSince = 0;
+        } else if (ask !== false) {
+            this.pump();
+        }
     }
 
     /** Takes new URLs for the same formats and goes on where it was */
@@ -376,7 +439,7 @@ export class LiveEngine implements Engine {
      * come; of a stream that has ended not past its head: none comes); both at once (the audio's first waits to be
      * appended until the video's sets the shift) */
     private pump(): void {
-        if (this.stopped) {
+        if (this.stopped || this.lineWait) {
             return;
         }
         var last = this.head + (this.live.over ? 0 : 1);
@@ -550,7 +613,7 @@ export class LiveEngine implements Engine {
 
     /** Plays from segment sq (within the window and up to the head): from the buffer if it holds it, else fetched
      * anew */
-    private goTo(sq: number): void {
+    private goTo(sq: number, keep?: boolean): void {
         this.lift();
         sq = Math.min(this.head, Math.max(this.first(), sq));
         var at = this.starts[sq];
@@ -564,7 +627,8 @@ export class LiveEngine implements Engine {
         this.tracks.forEach(function (t) {
             self.restart(t);
             t.sq = sq;
-            if (t.sb && t.sb.buffered.length) {
+            // (keep: the picture it stands on stays until the next one plays; the old data goes as trimmed)
+            if (!keep && t.sb && t.sb.buffered.length) {
                 try {
                     if (t.sb.updating) {
                         t.sb.abort();

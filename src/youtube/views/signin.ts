@@ -55,7 +55,13 @@ export class SignInView implements View {
         this.said = right.appendChild(h('div', 'by-signin-small')) as HTMLElement;
     }
 
+    /** Told when it shows (true) or hides (main.ts: the look it is drawn in) */
+    onShown: ((on: boolean) => void) | null = null;
+
     show(): void {
+        if (this.onShown) {
+            this.onShown(true);
+        }
         this.shown = true;
         setShown(this.el, true);
         // A code is on its way: polling starts when it arrives
@@ -74,6 +80,9 @@ export class SignInView implements View {
         this.shown = false;
         clearTimeout(this.timer);
         setShown(this.el, false);
+        if (this.onShown) {
+            this.onShown(false);
+        }
     }
 
     setFocused(): void {

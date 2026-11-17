@@ -25,6 +25,8 @@ export interface View extends KeyHandler {
     menuHidden?(): boolean;
     /** False while the menu has focus: the view then shows no focus of its own */
     setFocused?(focused: boolean): void;
+    /** Draws its focus or not, and nothing else (Settings › Theme's live preview of the highlight on the screen behind) */
+    showFocus?(on: boolean): void;
     /** OK on a screen whose content failed to load: try again (false if it had not failed) */
     retry?(): boolean;
     /** Whether OK held on what the screen has focused means something (onHold): OK then acts on its release, not as

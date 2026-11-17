@@ -263,6 +263,8 @@ export class SabrEngine implements Engine {
 
     /** onFail: 'expired', 'protection', 'sabr', 'network', 'media' */
     private onFail: (why: string) => void;
+    /** The line is down: no request is made (wait) */
+    private lineWait = false;
 
     constructor(private video: HTMLVideoElement, private sabr: Sabr, onFail: (why: string) => void) {
         // A failed decoder's pipeline is not kept for the next video
@@ -422,6 +424,21 @@ export class SabrEngine implements Engine {
         return this.pending >= 0 && this.landed >= 0;
     }
 
+    /** Engine.wait: none of its requests while the line is down */
+    wait(on: boolean, ask?: boolean): void {
+        this.lineWait = on;
+        if (on) {
+            this.letGo();
+        } else if (ask !== false) {
+            this.pump();
+        }
+    }
+
+    /** Engine.letGo: each track's request on its way and what it holds unappended dropped (the next pump asks anew) */
+    letGo(): void {
+        this.tracks.forEach(function (track) { track.restart(); });
+    }
+
     stop(): void {
         this.stopped = true;
         clearInterval(this.timer);
@@ -517,6 +534,9 @@ export class SabrEngine implements Engine {
     }
 
     private ask(track: Track): void {
+        if (this.lineWait) {
+            return;
+        }
         var self = this;
         var gen = track.gen;
         var contexts: { type: number; value: Uint8Array }[] = [];

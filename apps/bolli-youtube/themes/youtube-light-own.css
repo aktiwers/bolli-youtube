@@ -1,0 +1,18 @@
+/* The light page's own colours where tools/light_theme.mjs's are not the right ones: it puts these last in
+   youtube-light.css. Only colours here; the sizes and places are youtube.css's */
+
+/* The clock: a faint pill, dark text (the dark page's: white on a dark one) */
+.by-clock { background: rgba(0, 0, 0, .05); color: #0f0f0f; }
+
+/* Library's cards: their names stay white on the cards' own colours */
+.by-library-card { color: #fff; }
+
+/* What is drawn dark (the player and all over the video, the side panel): its text white, as on the dark page (base.css's
+   body), not the light page's that it would inherit */
+.by-player, .by-panel { color: #fff; }
+
+/* Live chat settings over Settings' example picture (mostly a dark night): the light panel less see-through than the
+   dark one, so its dark text and its greys read over the dark (white at .6 over it was a murky grey: its #373737 keys
+   4.3:1 over the sky's top, at .85 8.5:1; the pair: youtube.css by-chatset-panel); no dark shadow under the dark text
+   (ui/theme.ts backgroundRules: a light colour of one's own the same) */
+.by-chatset-panel { background: rgba(255, 255, 255, .85); text-shadow: none; }

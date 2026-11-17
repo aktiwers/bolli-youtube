@@ -117,7 +117,8 @@ export class TilePreview {
         startOf(streams(id), id, 0).then(function (start) {
             var s = start.streams;
             var chosen = start.formats;
-            var format = chosen && shownFormat(s, chosen.video, s.audios[0].format.mime, !android());
+            // (the audio a start would take: Settings › Audio language's, so the player taking this preview over plays on in it)
+            var format = chosen && shownFormat(s, chosen.video, chosen.track.format.mime, !android());
             // Only if the tile is still in the page (its row may have been rebuilt meanwhile)
             if (gen !== self.gen || !chosen || !format || !document.body.contains(frame)) {
                 return;
@@ -131,14 +132,14 @@ export class TilePreview {
                 self.id = id;
                 // (the tile's picture, laid over the video until it moves)
                 var picture = (frame.tagName === 'IMG' ? frame : frame.querySelector('.bd-tile-img')) as HTMLImageElement | null;
-                self.player.peekStart(id, s, format, chosen.video, s.audios[0], start.t, at, sound, stopped, how, picture && picture.getAttribute('src') || '');
+                self.player.peekStart(id, s, format, chosen.video, chosen.track, start.t, at, sound, stopped, how, picture && picture.getAttribute('src') || '');
                 // The whole video (its end tells), else until PREVIEW_MS or the video's end if that comes first
                 if (!how.whole) {
                     var left = format.duration > 0 ? (format.duration - start.t) * 1000 : 0;
                     self.limit(left > 0 ? Math.min(PREVIEW_MS, left) : PREVIEW_MS);
                 }
             };
-            if (replacesPipeline([format.mime, s.audios[0].format.mime])) {
+            if (replacesPipeline([format.mime, chosen.track.format.mime])) {
                 self.timer = setTimeout(begin, OTHER_KIND_MS) as unknown as number;
             } else {
                 begin();

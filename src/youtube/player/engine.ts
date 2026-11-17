@@ -43,6 +43,13 @@ export interface Engine {
      * picture has moved) and until the TV has the real one again, else 0: the element's length is the window's end
      * meanwhile */
     realLength?(): number;
+    /** Lets go of every request on its way (made before or during a drop: the line back, the jump that follows asks
+     * anew, rather than one of those failing late and the player starting the video anew) */
+    letGo?(): void;
+    /** The line is down (on): its requests on their way dropped and none made until it is up again (each that times
+     * out leaves the browser trying to connect, and the first requests after the line's return queued behind those:
+     * 11 s once, on the TV 2026-11-15). Off: asked again from where it is (ask false: not yet, a jump follows) */
+    wait?(on: boolean, ask?: boolean): void;
 }
 
 /** A part the player will skip (s) */

@@ -1,10 +1,10 @@
 // The player's fallback ladder: what a failed engine leads to (nextStep), from what the start has tried so far (Tries)
 // and what the failure is of (cause): new URLs (in place first) for expired ones, a reload for a playback that keeps
 // stalling, another codec where a decoder or format failed, then the other way of getting the streams, and only then
-// YouTube's player. That takes over only where the TV is online and YouTube refuses this player, or the format does
-// not play here: never for the connection. A failure of the TV's line keeps the video, started anew where it was
-// again and again (retryWait); so does YouTube failing on a line that answers, until that has lasted
-// YOUTUBE_GIVE_UP_MS (it then counts as a refusal).
+// giving up: the player stops with the reason, and OK tries again (own-player.ts giveUp; YouTube's player is only
+// offered, never taken, for what only it plays: paid, members-only, protected). A failure of the TV's line keeps the
+// video, started anew where it was again and again (retryWait); so does YouTube failing on a line that answers, until
+// that has lasted YOUTUBE_GIVE_UP_MS (it then gives up).
 
 /** A start's ways tried after its engine failed: when its streams were last fetched anew (expired URLs, a playback that
  * keeps stalling; 0: not yet; again only own-player.ts's RENEW_AGAIN_MS later, or after the line was lost: renewal),
@@ -111,7 +111,7 @@ export function lineAt(now: number, down: boolean, lostAt: number, answeredAt: n
  * without an answer */
 var UNANSWERED = ['network', 'nothing came', 'stalled', 'no answer'];
 /** Failures that are YouTube's answer and its refusal of this player where the line holds: a video's URLs answered
- * with HTTP 403 ('expired': new ones, the other method, then YouTube's player), a streams request so ('refused') */
+ * with HTTP 403 ('expired': new ones, the other method, then giving up), a streams request so ('refused') */
 var REFUSED = ['expired', 'refused'];
 /** Failures that are YouTube's answer and its own trouble: a streams request answered with another HTTP error; and
  * SABR's server answering with an error or with nothing new (ofSabr) */
@@ -149,8 +149,8 @@ export function unsure(why: string, line: Line): boolean {
 }
 
 /** YouTube failing a video on a line that answers (server errors, SABR's empty answers, requests that hang) for this
- * long without the picture playing on, and the other method tried: it counts as YouTube refusing this player (one
- * hand-over, not tries without end) */
+ * long without the picture playing on, and the other method tried: the player gives up (one stop, not tries without
+ * end; OK tries again) */
 export var YOUTUBE_GIVE_UP_MS = 120000;
 
 /** A failure known to be of's (not one a probe has yet to tell), noted at now: YouTube's begins the time YouTube alone
@@ -176,9 +176,8 @@ export function retryWait(tries: number): number {
 }
 
 /** A failed engine's next step: wait (the other track expired too, new URLs on the way), new URLs in place, another
- * codec, new URLs or the other method from the same position, a try anew after a wait (retryWait), or YouTube's
- * player */
-export type Step = 'wait' | 'renewInPlace' | 'codec' | 'renew' | 'switch' | 'retry' | 'fallback';
+ * codec, new URLs or the other method from the same position, a try anew after a wait (retryWait), or giving up */
+export type Step = 'wait' | 'renewInPlace' | 'codec' | 'renew' | 'switch' | 'retry' | 'giveUp';
 
 /** The player when its engine fails, for nextStep */
 export interface Failing {
@@ -196,7 +195,7 @@ export interface Failing {
     codec: boolean;
     /** The other method (SABR or not) is not tried yet for this video and the streams allow it */
     switchable: boolean;
-    /** A video with streams (else a try anew, or for a video that cannot be played only YouTube's player, is left) */
+    /** A video with streams (else a try anew, or for a video that cannot be played giving up, is left) */
     playing: boolean;
     /** The line as the failure finds it */
     line: Line;
@@ -214,11 +213,11 @@ export interface Failing {
  * start waits for it).
  * A failure of the video's in this player (cause: the decoder, a format, a frozen picture, YouTube's refusal, its
  * HTTP 403 on a line that holds) tries another codec of the same streams (not for a 403: no codec helps), then the
- * other method, once; YouTube's player after all.
+ * other method, once; then it gives up.
  * A failure of the line's is tried anew by the method that played ('retry'), without end.
  * YouTube's trouble on a line that answers is tried anew too: SABR's server failing after another codec (it may be
  * the format's) and the other method, any other after one try anew and then the other method, once. Lasting
- * YOUTUBE_GIVE_UP_MS with the other method tried, it ends as a refusal: YouTube's player */
+ * YOUTUBE_GIVE_UP_MS with the other method tried, it gives up (one stop, not tries without end) */
 export function nextStep(why: string, f: Failing): Step {
     var expired = why === 'expired';
     if (expired && f.renewing) {
@@ -231,14 +230,14 @@ export function nextStep(why: string, f: Failing): Step {
         of = 'youtube';
     }
     if (!f.playing) {
-        return of === 'cannot play' ? 'fallback' : 'retry';
+        return of === 'cannot play' ? 'giveUp' : 'retry';
     }
     var renew = (expired || why === 'stalled' || why === 'frozen') && f.renewDue || why === 'network' && f.lostDue;
     if (renew) {
         return expired && f.inPlace ? 'renewInPlace' : 'renew';
     }
     if (of === 'cannot play') {
-        return REFUSED.indexOf(why) < 0 && f.codec ? 'codec' : f.switchable ? 'switch' : 'fallback';
+        return REFUSED.indexOf(why) < 0 && f.codec ? 'codec' : f.switchable ? 'switch' : 'giveUp';
     }
     if (of === 'line') {
         return 'retry';
@@ -251,5 +250,5 @@ export function nextStep(why: string, f: Failing): Step {
     if (f.switchable && (server || f.retried || over)) {
         return 'switch';
     }
-    return over ? 'fallback' : 'retry';
+    return over ? 'giveUp' : 'retry';
 }

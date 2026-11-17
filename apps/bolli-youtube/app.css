@@ -1,6 +1,9 @@
 /* The app's structure, the same under every theme (src/youtube/ui/theme.ts);
    themes/<id>.css draws the look over it and over the base themes/base.css. */
 
+/* The page's own colour where one is chosen (ui/theme.ts pageLook): under the app, the size of the screen */
+.by-canvas { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; }
+
 /* The hidden youtube.com page that API requests are sent from (api/youtube.ts) */
 .by-hidden { position: absolute; left: -9999px; top: 0; width: 10px; height: 10px; border: 0; }
 /* A screen standing by (core/dom.ts standsBy): drawn but below the screen's foot, where the stage cuts it off */
@@ -71,6 +74,10 @@
 .by-settings-menu { position: absolute; bottom: 0; overflow: hidden; }
 .by-settings-list { position: relative; }
 .by-settings-panel { position: absolute; top: 0; right: 0; height: 720px; overflow: hidden; }
+/* The colour under Settings' panel while it shows over the app (the Theme settings: by-settings--preview), a layer of its
+   own: a change of colour (ui/theme.ts) repaints this plain layer, not the panel's tiles over it */
+.by-settings-backdrop { display: none; position: absolute; top: 0; right: 0; width: 480px; height: 720px; -webkit-transform: translateZ(0); }
+.by-settings--preview > .by-settings-backdrop { display: block; }
 .by-settings-middle { position: absolute; bottom: 0; overflow: hidden; }
 .by-settings-middle > .by-settings-list { position: absolute; left: 0; right: 0; top: 0; }
 .by-settings-count { float: right; }
@@ -85,7 +92,8 @@
 .by-settings-body--picture .by-settings-picture, .by-question .by-settings-picture { display: block; }
 .by-settings-body--steps .by-settings-link, .by-settings-body--code .by-settings-link { display: inline-block; vertical-align: top; }
 .by-settings-body--code .by-settings-code { display: block; }
-.by-settings-link, .by-settings-button { text-align: left; }
+/* (a group's settings on the right are rows as the middle's: left-aligned there too) */
+.by-settings-link, .by-settings-button, .by-settings-buttons .by-settings-item { text-align: left; }
 .by-settings-button { position: relative; }
 /* The choices and their note: for a grid of tiles they alone scroll (by-settings-scroll, views/settings.ts
    scrollPanel) under the setting's name and description, which stay, their box clipping them there; other settings
@@ -165,6 +173,13 @@
 .by-watch-bar { position: relative; clear: both; }
 /* The bar's fills are scaled (no layout as the video plays), the knob is its own */
 .by-watch-loaded, .by-watch-played { position: absolute; left: 0; top: 0; width: 100%; height: 100%; -webkit-transform-origin: 0 0; -webkit-transform: scaleX(0); }
+/* The info bar (player/osd.ts; base.css .osd: display none): laid out once shown (osd--kept), then put away below the
+   screen while hidden (core/dom.ts standsBy) and kept drawn on a layer of its own, so it shows again with nothing drawn
+   anew (on the TV, 2026-11-17: frames lost over four OK and two Right 559 -> 237 ms); display none again once the
+   player closes. A tile preview's player hides it all the same (by-player--peek, below; its "> *" alone would lose to
+   this rule) */
+.osd.osd--kept { display: block; will-change: transform; }
+.by-player--peek > .osd.osd--kept { display: none; }
 /* The info bar's loaded stretch (own-player.ts setLoaded), under its played part (positioned to stay over it) */
 .by-osd-loaded { position: absolute; left: 0; top: 0; width: 100%; height: 100%; -webkit-transform-origin: 0 0; -webkit-transform: scaleX(0); }
 .by-player .osd-fill { position: relative; }
@@ -261,6 +276,13 @@
 .by-loader-inner { width: 100%; height: 100%; }
 .by-loader-image { display: block; }
 .by-loader.by-loader--snap .by-loader-box, .by-loader.by-loader--snap .by-loader-inner { -webkit-transition: none; }
+/* The loading signs that turn (ui/spinner.ts): a point in the middle of the screen, as the loading sign's place, each
+   part placed from it (themes/youtube.css draws them); shown only with by-loader-spin--on, under which their animations
+   are named: hidden, nothing of theirs ticks. Never in a tile's preview (by-player--peek, below: its "> *" alone would
+   lose to the rule that shows it, as the info bar's) */
+.by-loader-spin { display: none; position: absolute; left: 50%; top: 50%; width: 0; height: 0; z-index: 5; }
+.by-loader-spin.by-loader-spin--on { display: block; }
+.by-player--peek > .by-loader-spin { display: none; }
 
 /* A song's music screen over its picture (player/own-player.ts showMusic, coverOf): a blur of the cover (a small
    canvas made from it, stretched: no filter), darkened; the cover in the middle (a canvas of its size); its title

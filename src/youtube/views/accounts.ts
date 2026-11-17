@@ -36,7 +36,13 @@ export class AccountsView implements View {
         this.el.appendChild(this.row);
     }
 
+    /** Told when it shows (true) or hides (main.ts: the look it is drawn in) */
+    onShown: ((on: boolean) => void) | null = null;
+
     show(): void {
+        if (this.onShown) {
+            this.onShown(true);
+        }
         var self = this;
         setShown(this.el, true);
         Promise.all<any>([keptProfiles(), guestChosen()]).then(function (got) {
@@ -48,6 +54,9 @@ export class AccountsView implements View {
 
     hide(): void {
         setShown(this.el, false);
+        if (this.onShown) {
+            this.onShown(false);
+        }
     }
 
     /** Focuses this account the next time it shows (e.g. one just signed in; '' Add account; null: the current one) */

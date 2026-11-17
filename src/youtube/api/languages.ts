@@ -93,7 +93,17 @@ export function offeredLanguages(): string[] {
 
 /** Settings' subtitle languages in order: the offered ones, the current one */
 export function subtitleLanguages(): string[] {
-    return once(offeredLanguages().concat([prefs().captions]));
+    return withSet(prefs().captions);
+}
+
+/** Settings' audio languages in order (Audio language): the offered ones, the one set */
+export function audioLanguages(): string[] {
+    return withSet(prefs().audioLanguage);
+}
+
+/** The offered languages, then the one set (if not among them; '' none) */
+function withSet(code: string): string[] {
+    return once(offeredLanguages().concat([code]));
 }
 
 function once(codes: string[]): string[] {

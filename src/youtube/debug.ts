@@ -4,6 +4,7 @@
 
 import { Page, Video } from './api/feed.js';
 import { offThreadStats } from './api/off-thread.js';
+import { tryLook } from './ui/theme.js';
 import { prefs, reloadPrefs, setPref } from './api/prefs.js';
 import { forgetStreams, sabrStreams, streams, takeLiveAsOver } from './api/streams.js';
 import { identities, innertube, innertubeAs } from './api/youtube.js';
@@ -78,6 +79,8 @@ export function debugHooks(app: DebugApp): void {
     debug.prefs = prefs;
     debug.setPref = setPref;
     debug.reloadPrefs = reloadPrefs;
+    // (a look's part shown without being kept: the TV checks try fonts, colours and icons and leave the settings be)
+    debug.tryLook = tryLook;
     // toast(text, icon): shows a toast
     debug.toast = toast;
     // innertube(endpoint, body): an InnerTube request as the app makes it (signed in)

@@ -10,8 +10,10 @@
 // one from before its new video) is remembered a while (visited), and counts when a list that marks it comes.
 
 import { load, save } from '../core/store.js';
+import { ownKey } from './prefs.js';
 import { browseText, Page, pageKey, SubChannel } from './feed.js';
 
+/** Each account's own (api/prefs.ts ownKey) */
 var KEY = 'youtube.looked';
 /** Between two channels told to YouTube */
 var SPACE_MS = 3000;
@@ -40,7 +42,7 @@ export function channelKey(c: SubChannel): string {
 }
 
 function noted(): { [key: string]: number } {
-    notes = notes || load<{ [key: string]: number }>(KEY) || {};
+    notes = notes || load<{ [key: string]: number }>(ownKey(KEY)) || {};
     return notes;
 }
 
@@ -69,7 +71,7 @@ function note(key: string, at: number): void {
     if (keys.length > NOTES) {
         keys.sort(function (a, b) { return all[a] - all[b]; }).slice(0, keys.length - NOTES).forEach(function (k) { delete all[k]; });
     }
-    save(KEY, all);
+    save(ownKey(KEY), all);
 }
 
 function tell(): void {
@@ -143,16 +145,15 @@ export function settle(channels: SubChannel[], asked: number): void {
         });
     }
     if (changed) {
-        save(KEY, all);
+        save(ownKey(KEY), all);
     }
 }
 
-/** Another account from now on: what was looked at was the one before's (its notes, its pages opened, the channels
- * still waiting to be told) */
+/** Another account from now on: what was looked at was the one before's (its pages opened, the channels still waiting
+ * to be told; its notes stay its own, the new one's read when next needed) */
 export function forgetLooks(): void {
     account++;
-    notes = {};
-    save(KEY, notes);
+    notes = null;
     telling = {};
     waiting = [];
     visits = {};

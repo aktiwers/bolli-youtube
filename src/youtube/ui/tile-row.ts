@@ -38,7 +38,8 @@ export interface TileItem {
     chips?: string[];
     /** The chip that marks an offer, e.g. "Buy or rent" (bd-tile-chip--offer, coloured by the theme) */
     offerChip?: string;
-    /** Draws a stack (a playlist, a mix): edges above the image in these colours, nearest first (bd-tile-stack) */
+    /** Draws a stack (a playlist, a mix): edges above the image in these colours, nearest first ('' the stylesheet's:
+     * bd-tile-stack) */
     stack?: string[];
     /** The image used while the tile is the wide one (a row with a wideShape) */
     wideImage?: string;
@@ -685,7 +686,10 @@ function buildTile(item: TileItem, shape: TileShape, textH: number): Tile {
     var el = h('div', item.round ? 'bd-tile bd-tile--round' : 'bd-tile');
     (item.stack || []).forEach(function (color, i) {
         var edge = el.appendChild(h('div', 'bd-tile-stack bd-tile-stack--' + i)) as HTMLElement;
-        edge.style.backgroundColor = color;
+        // ('' YouTube gave none: the stylesheet's)
+        if (color) {
+            edge.style.backgroundColor = color;
+        }
     });
     var frame = h('div', 'bd-tile-frame');
     el.appendChild(frame);

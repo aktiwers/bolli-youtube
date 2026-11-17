@@ -304,6 +304,12 @@ export function aboutTheVideo(e: NoStreams): boolean {
     return e.status === 'NO_SABR' || noneCanPlay(e) || /\b(age|members?|private|premium|purchase|rent(al|ed)?|country)\b/i.test(e.reason || '');
 }
 
+/** A refusal only YouTube's player may get past: paid (bought, rented, Premium) or members-only, by YouTube's reason
+ * (the first way's, else the one for the log). Offered to the viewer, never handed over (own-player.ts giveUp) */
+export function onlyYouTubePlays(e: NoStreams): boolean {
+    return /\b(members?|premium|purchase[sd]?|payment|rent(al|ed)?|paid)\b/i.test(e.first || e.reason || '');
+}
+
 /** Removed, or a live stream not live yet: no method plays it, nor YouTube's player */
 export function noneCanPlay(e: NoStreams): boolean {
     return e.status === 'ERROR' || e.status === 'LIVE_STREAM_OFFLINE';
@@ -360,7 +366,10 @@ export function playableStreams(id: string, sabrFirst: boolean, asking?: Asking)
                 throw { status: tv.status, reason: tv.reason, refused: true, ended: guest.ended } as NoStreams;
             }
             var by = [streamsFailure(e), streamsFailure(other)];
-            throw { status: e.status, first: e.reason, reason: e.reason + (other.reason ? ' (' + (sabr ? 'as a guest' : 'SABR') + ': ' + other.reason + ')' : ''),
+            // (SABR having no stream for a live one says nothing of the video: the other way's reason leads, as
+            // members-only, which YouTube's player is offered for, and as the viewer is told)
+            var lead = e.status === 'NO_SABR' && other.reason ? other : e;
+            throw { status: lead.status, first: lead.reason, reason: e.reason + (other.reason ? ' (' + (sabr ? 'as a guest' : 'SABR') + ': ' + other.reason + ')' : ''),
                 failed: ['no answer', 'http', 'refused'].filter(function (one) { return by.indexOf(one) >= 0; })[0] } as NoStreams;
         });
     });
@@ -447,6 +456,15 @@ function letGo(e: NoStreams): boolean {
     return e.status === 'HTTP' && e.reason === ABORTED;
 }
 
+/** Whether the TV's line is down now (the player's: player/networks.ts lineDown, given by setLineDown): while it is,
+ * a hanging request is not asked again on a timer (it could not be answered, and would hold one of the browser's few
+ * connections to YouTube that the line's return needs); the return asks at once (askAnew) */
+var lineDownNow: () => boolean = function () { return false; };
+
+export function setLineDown(f: () => boolean): void {
+    lineDownNow = f;
+}
+
 /** ask(false)'s streams, asked again while none have come (ask(true): a new request, past the cache): wait (by
  * default STUCK_MS) later, then after twice as long each time, AGAIN times, and at once, with all of that anew, when
  * the line comes back (askAnew: right after one the first wait is BACK_STUCK_MS at most); again() first, false once
@@ -479,6 +497,11 @@ export function patient(ask: (fresh: boolean) => Promise<Streams>, again: () => 
         };
         var anew = function (): void {
             if (done) {
+                return;
+            }
+            // (the line down: no ask that cannot be answered; its return asks at once, back)
+            if (lineDownNow() && open) {
+                plan();
                 return;
             }
             if (!again()) {
@@ -881,6 +904,55 @@ function audioTracks(formats: any[]): AudioTrack[] {
         }
     });
     return list;
+}
+
+/** The audio track a start plays (Settings › Audio language): the video's own (the first: audioTracks puts it there),
+ * or the dub in the language chosen where the video has one: in that very code first ("pt-PT" before "pt-BR",
+ * "zh-Hant" before "zh-CN"), else in a variant of it ("pt" takes "pt-BR"); in each, one made by people before one
+ * YouTube made, never an audio description; its own where none is (its own in that language: itself). Old and new codes
+ * of a language are one (sameCode: "iw" from the subtitles' list takes a "he" track). Picked from the list there is:
+ * nothing asked, and for its own (the default) nothing looked through */
+export function startTrack(audios: AudioTrack[]): AudioTrack {
+    var want = prefs().audioLanguage;
+    var own = audios[0];
+    if (!want || audios.length < 2) {
+        return own;
+    }
+    var full = sameCode(want);
+    var code = base(full);
+    // (the best so far: 0 that code by people, 1 by YouTube, 2 a variant by people, 3 by YouTube)
+    var best: AudioTrack | null = null;
+    var rank = 4;
+    for (var i = 0; i < audios.length; i++) {
+        var t = audios[i];
+        var language = sameCode(t.id.split('.')[0]);
+        if (base(language) === code) {
+            // (its kind read only for a track in the language: YouTube's tags, acont)
+            var kind = t.original ? '' : xtag(t.format.xtags, 'acont');
+            if (kind !== 'descriptive') {
+                var r = (language === full ? 0 : 2) + (kind === 'dubbed-auto' ? 1 : 0);
+                if (!r) {
+                    return t;
+                }
+                if (r < rank) {
+                    best = t;
+                    rank = r;
+                }
+            }
+        }
+    }
+    return best || own;
+}
+
+/** Languages' old codes by their new ones, and Norwegian's and Filipino's two (the subtitles' list has "iw", "in", "no"
+ * and "fil"; a track may have the other) */
+var OLD_CODES: { [code: string]: string } = { he: 'iw', id: 'in', yi: 'ji', nb: 'no', tl: 'fil' };
+
+/** A language code with its base in one form of those two may have (OLD_CODES): "he-IL" as "iw-IL" */
+function sameCode(language: string): string {
+    var b = base(language);
+    var old = OLD_CODES.hasOwnProperty(b) ? OLD_CODES[b] : '';
+    return old ? old + language.slice(b.length) : language;
 }
 
 /** Media Source's answers by codec, height and frame rate (asked once each: a video with dubs has ~100 formats of a

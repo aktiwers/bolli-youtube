@@ -1,4 +1,4 @@
-// Loading sign: a dimmed picture (the app logo
+// Loading spinner: a dimmed picture (the app logo
 // while a screen loads, the channel avatar while a video starts) with a
 // bright copy over it that fills in from the left: as steps complete, or in
 // one slide of a given length (the TV's browser draws next to no frame of the
@@ -12,6 +12,10 @@
 
 import { h, toggleClass } from '../core/dom.js';
 
+/** The ease of a fill given in one slide (step's ease): quick at first, slowing as it fills (player/own-player.ts, a
+ * start's: about 90 % full when the video is due; views/sign-preview.ts, Settings' preview of it) */
+export var GLIDE_EASE = 'cubic-bezier(.1, .3, .25, 1)';
+
 export class FillLoader {
     private el: HTMLElement;
     private dim: HTMLImageElement;
@@ -21,9 +25,10 @@ export class FillLoader {
     /** The hide once full (finish) */
     private finishing = 0;
 
-    /** Adds the sign to parent; round shows the picture as a circle */
-    constructor(parent: HTMLElement, round: boolean) {
-        this.el = h('div', 'by-loader' + (round ? ' by-loader--round' : ''));
+    /** Adds the sign to parent; round shows the picture as a circle; still: the logo without its pulse (a video's
+     * start: Your logo, as the channel's picture there) */
+    constructor(parent: HTMLElement, round: boolean, still?: boolean) {
+        this.el = h('div', 'by-loader' + (round ? ' by-loader--round' : '') + (still ? ' by-loader--still' : ''));
         var pulse = h('div', 'by-loader-pulse');
         this.dim = h('img', 'by-loader-image') as HTMLImageElement;
         var box = h('div', 'by-loader-box');

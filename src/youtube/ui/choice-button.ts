@@ -16,10 +16,8 @@ export function choiceButton(c: Choice): { el: HTMLElement; check: HTMLElement }
 
 /** The tile of choice c, and its tick */
 export function choiceTile(c: Choice): { el: HTMLElement; check: HTMLElement } {
-    var el = h('div', 'by-settings-tile' + (c.color ? ' by-settings-tile--color' : ''));
-    if (c.color) {
-        el.style.backgroundColor = c.color;
-    } else if (c.picture) {
+    var el = h('div', 'by-settings-tile');
+    if (c.picture) {
         var img = h('img', 'by-settings-tile-picture' + (c.round ? ' by-settings-tile-picture--round' : '')) as HTMLImageElement;
         img.src = c.picture;
         el.appendChild(img);

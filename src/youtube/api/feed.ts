@@ -781,8 +781,9 @@ export function sized(url: string, px: number): string {
     return url.replace(/=s\d+/, '=s' + px);
 }
 
-/** A stack's edges when YouTube gives no colours */
-var STACK = ['rgba(241, 241, 241, .28)', 'rgba(241, 241, 241, .14)'];
+/** A stack's edges when YouTube gives no colours: drawn in the stylesheet's (themes/youtube.css bd-tile-stack, which
+ * the light look turns), none set on them */
+var STACK = ['', ''];
 
 /** YouTube's colour number (ARGB) as CSS */
 function argb(n: number): string {

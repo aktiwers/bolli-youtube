@@ -27,22 +27,41 @@ var lostAt = 0;
 var answeredAt = 0;
 var down = false;
 var backs: (() => void)[] = [];
-/** A small address of YouTube's that is not a video's host, for the probe */
-var PROBE = 'https://www.youtube.com/generate_204';
+/** Google's addresses for a connection check (an empty 204, nothing of the viewer's sent), taken in turn by the probe:
+ * none is one the app waits on otherwise (the TV's browser opens at most 6 connections to a host, and during a drop
+ * www.youtube.com's fill with requests that hang: a probe there waited behind them, on the TV 2026-11-15); and the
+ * browser keeps trying to connect for a probe that timed out, on a growing wait (1, 2, 4, 8 s…), so 6 probes to one
+ * host during a drop leave the next one after the line's return waiting for one of those: one probe on its way at a
+ * time (due), spread over eight, leave each host fewer than 6 through a drop of minutes */
+var PROBES = ['https://www.gstatic.com/generate_204', 'https://connectivitycheck.gstatic.com/generate_204',
+    'https://clients3.google.com/generate_204', 'https://www.google.com/generate_204', 'https://play.googleapis.com/generate_204',
+    'https://clients1.google.com/generate_204', 'https://connectivitycheck.android.com/generate_204', 'https://google.com/generate_204'];
+var probeTurn = 0;
+/** A probe still on its way when the next is due is looked at again this often (ms) */
+var PROBE_POLL_MS = 100;
 /** A probe is asked at most this often (ms: until then the last one's answer stands), and waits this long for its
  * answer */
 var PROBE_GAP_MS = 10000;
 var PROBE_WAIT_MS = 5000;
+/** A probe for a picture that stands (awaitLine, a stall's look) waits this long: a line that holds answers within a
+ * second; the viewer is told sooner, and fewer probes hang at once (at most three, PROBE_STANDING_MS apart) */
+var PROBE_STANDING_WAIT_MS = 3000;
 /** While a picture stands for the line (awaitLine) the probe is asked this often (ms), and only then: the line coming
- * back is seen at most this much later, and the video starts anew at once. One still on its way then (it hangs on a
- * connection from before the loss) is not waited for: the next is a request of its own */
-var PROBE_STANDING_MS = 3500;
+ * back is seen at most this much later, and the video starts anew at once (a viewer waiting: an empty answer of
+ * YouTube's each time). One still on its way then (it hangs on a connection from before the loss) is not waited for:
+ * the next is a request of its own */
+var PROBE_STANDING_MS = 1000;
+/** How often a picture that stands asks the probe after it has stood so long (ms; before the first: PROBE_STANDING_MS):
+ * fewer probes waiting to connect per host through a long drop (above), and few through a TV left standing offline */
+var PROBE_BACKOFF: number[][] = [[60000, 5000], [300000, 30000]];
+
 /** The last probe: when it was asked, its answer once in (null: on its way), and the ask itself */
 var probing: { at: number; answered: boolean | null; asked: Promise<boolean> } | null = null;
 /** Whether a picture stands for the line (awaitLine), the timer of its next probe, and whether one of its probes
  * without an answer was noted yet (the first is, not each one all through a loss) */
 var awaited = false;
 var awaitTimer = 0;
+var awaitSince = 0;
 var awaitNoted = false;
 
 /** The line is lost now: a media request got no answer, or the window went offline */
@@ -79,15 +98,37 @@ export function awaitLine(on: boolean): void {
     clearTimeout(awaitTimer);
     awaitTimer = 0;
     if (on) {
+        awaitSince = Date.now();
         awaitOn();
     }
 }
 
+/** The wait before a standing picture's next probe, after it has stood so long (ms) */
+function standingGap(stood: number): number {
+    var gap = PROBE_STANDING_MS;
+    PROBE_BACKOFF.forEach(function (step) {
+        if (stood >= step[0]) {
+            gap = step[1];
+        }
+    });
+    return gap;
+}
+
 function awaitOn(): void {
-    awaitTimer = setTimeout(function () {
-        awaitOn();
-        probe(true);
-    }, PROBE_STANDING_MS) as unknown as number;
+    awaitTimer = setTimeout(due, standingGap(Date.now() - awaitSince)) as unknown as number;
+}
+
+/** A standing picture's probe is due: asked, unless one is still on its way. One at a time: each that times out
+ * leaves the browser trying to connect for ~2 min, and a pile of those on a host has the probe after the line's
+ * return wait behind them (a flaky line's drops took 2-4 s to be seen, on the TV 2026-11-15); the one on its way is
+ * waited for (its connect is retried 1 and 3 s after it went: the line's return is seen within ~2 s) */
+function due(): void {
+    if (probing && probing.answered === null) {
+        awaitTimer = setTimeout(due, PROBE_POLL_MS) as unknown as number;
+        return;
+    }
+    awaitOn();
+    probe(true);
 }
 
 /** Something answered (a media request, whatever its status, or the probe): the line is up */
@@ -109,27 +150,37 @@ export function lastAnswered(): number {
 /** Whether the line answers, asked of an address that is not a video's host (so a failing video server is told from a
  * line that is down): true for any answer, an error's too (the line then counts as answered), false for none within
  * PROBE_WAIT_MS. Asked at most every PROBE_GAP_MS: until then the last probe's answer is given again. standing: for
- * a picture that stands for the line (awaitLine), at most every PROBE_STANDING_MS. Noted with how long it took (no
- * answer at once: the TV refuses the request itself; after PROBE_WAIT_MS: it hangs) */
+ * a picture that stands (awaitLine, a stall's look), at most every PROBE_STANDING_MS, waiting PROBE_STANDING_WAIT_MS. Noted with how long it took (no
+ * answer at once: the TV refuses the request itself; after PROBE_WAIT_MS: it hangs). An answer marks the line up; no
+ * answer for a picture that stands (standing) marks it lost */
 export function probe(standing?: boolean): Promise<boolean> {
     var now = Date.now();
     if (probing && now >= probing.at && now - probing.at < (standing ? PROBE_STANDING_MS : PROBE_GAP_MS)) {
         return probing.asked;
     }
     var one = probing = { at: now, answered: null as boolean | null, asked: null as unknown as Promise<boolean> };
-    var asking: Promise<unknown> = fakedProbe() || getText(PROBE, PROBE_WAIT_MS);
-    one.asked = asking.then(function () {
-        return true;
-    }, function (e: HttpError) {
-        return !!e && e.status > 0;
-    }).then(function (answered) {
+    // (refused, as a host a filter on the network blocks is: the next host is asked once before it counts; one that
+    // hangs or times out is a line that drops what it is sent)
+    var ask = function (again: boolean): Promise<boolean> {
+        var asking: Promise<unknown> = fakedProbe() || getText(PROBES[probeTurn++ % PROBES.length], standing ? PROBE_STANDING_WAIT_MS : PROBE_WAIT_MS);
+        return asking.then(function () {
+            return true;
+        }, function (e: HttpError) {
+            return !!e && e.status > 0 || (standing && !again && !!e && e.message === 'network error' ? ask(true) : false);
+        });
+    };
+    one.asked = ask(false).then(function (answered) {
         one.answered = answered;
         if (answered || !standing || !awaitNoted) {
             note('probe', (answered ? 'the line answers' : 'no answer') + ' (' + (Date.now() - one.at) + ' ms)');
             awaitNoted = awaitNoted || !!standing;
         }
+        // (no answer for a picture that stands, from hosts nothing else waits on: the line is lost, so what waits on it
+        // holds its asks; a probe for a failure's cause alone tells nothing more)
         if (answered) {
             lineAnswered();
+        } else if (standing) {
+            lineLost();
         }
         return answered;
     });
