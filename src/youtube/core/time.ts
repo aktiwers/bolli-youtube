@@ -68,6 +68,11 @@ export class Retries {
         this.next = 0;
     }
 
+    /** How long from now the next try is due (0: now; -1: no more until it begins anew) */
+    wait(now: number): number {
+        return this.made >= this.most ? -1 : Math.max(0, this.next - now);
+    }
+
     /** How many tries were made since it began */
     get count(): number {
         return this.made;

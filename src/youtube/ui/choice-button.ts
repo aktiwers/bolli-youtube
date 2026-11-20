@@ -10,7 +10,7 @@ import { icon } from './icons.js';
 
 /** The button of choice c, and its tick */
 export function choiceButton(c: Choice): { el: HTMLElement; check: HTMLElement } {
-    var el = h('div', 'by-settings-button', c.name);
+    var el = h('div', 'by-settings-button' + (c.off ? ' by-settings-button--off' : ''), c.name);
     return { el: el, check: el.appendChild(icon('check', 'by-check')) as HTMLElement };
 }
 

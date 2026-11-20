@@ -50,6 +50,10 @@ var DOT = 'dot.png';
  * handed over (the app's largest, a 130 px picture of noise, is 90682 bytes) */
 var EXEC_MS = 10000;
 var COMMAND_MAX = 120000;
+/** What alone goes into paths and commands run as root: a plain folder path (with its last slash), and file names as
+ * the app makes them */
+var PLAIN_DIR = /^\/[\w\/.-]+\/$/;
+var PNG_NAME = /^[\w-]+\.png$/;
 
 /** The app's id on a webOS TV ('' elsewhere) */
 export function appId(): string {
@@ -93,7 +97,7 @@ export function asRoot(command: string): Promise<string> {
 export function writePngs(names: string[], pngs: string[], sizes: number[], rootFirst?: boolean): Promise<void> {
     var dir = folder();
     // (the folder goes into paths and a command: only a plain path)
-    if (!/^\/[\w\/.-]+\/$/.test(dir)) {
+    if (!PLAIN_DIR.test(dir)) {
         return Promise.reject(new Error(NO_FILE));
     }
     var store = function (): Promise<void> { return within(byStore(dir, names, pngs, sizes), STORE_MS); };
@@ -111,7 +115,7 @@ export function blank(names: string[], root?: boolean): void {
     var dir = folder();
     if (root) {
         // (into a command run as root: only a plain path and names as the app makes them)
-        if (/^\/[\w\/.-]+\/$/.test(dir) && names.every(function (name) { return /^[\w-]+\.png$/.test(name); })) {
+        if (PLAIN_DIR.test(dir) && names.every(function (name) { return PNG_NAME.test(name); })) {
             asRoot('cd "' + dir + '" && rm -f ' + names.join(' ')).then(null, function () { return undefined; });
         }
         return;
@@ -208,7 +212,7 @@ function blobsOf(dir: string, sizes: number[]): Promise<string[] | null> {
 function byChannel(dir: string, names: string[], pngs: string[]): Promise<void> {
     // (into a command run as root: only names and base64 as the app makes them)
     for (var i = 0; i < names.length; i++) {
-        if (!/^[\w-]+\.png$/.test(names[i]) || !/^[A-Za-z0-9+\/=]+$/.test(pngs[i])) {
+        if (!PNG_NAME.test(names[i]) || !/^[A-Za-z0-9+\/=]+$/.test(pngs[i])) {
             return Promise.reject(new Error(NO_FILE));
         }
     }

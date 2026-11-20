@@ -6,7 +6,8 @@
 // you're not a bot"), taken from youtube.com's sw.js_data and kept a week; a
 // bot check is retried once with a new one. Formats kept: H.264/MP4 up to
 // 1080p60, VP9/WebM up to 2160p60 (4K60 plays without dropped frames on the
-// TV) and AAC per audio track (original, dubs, stable volume), each with its
+// TV) and per audio track (original, dubs) every sound the device plays (AAC,
+// Opus, signed in also the surround ones; stable volume), each with its
 // init and index byte ranges. Captions are YouTube's timed text as WebVTT,
 // with YouTube translations for the Settings languages. Videos a guest may
 // not watch (age check, members only) are fetched as the account
@@ -72,9 +73,19 @@ export interface Format {
     /** Last-modified version and tags (dub language, stable volume): SABR identifies a format by them */
     lmt: string;
     xtags: string;
-    /** Audio: the dub's id ('' the original) and whether it has stable volume */
+    /** Audio: the dub's id ('' the original), whether it has stable volume or is YouTube's Voice boost copy (speech
+     * lifted over the rest), and its channels (6: 5.1) */
     track?: string;
     drc?: boolean;
+    boost?: boolean;
+    channels?: number;
+}
+
+/** A track's formats in one sound (soundOf): the best, its stable-volume copy and its Voice boost copy (null: none) */
+export interface SoundFormats {
+    format: Format;
+    stable: Format | null;
+    boost: Format | null;
 }
 
 export interface Caption {
@@ -99,8 +110,11 @@ export interface AudioTrack {
     format: Format;
     /** The stable-volume version (null: none) */
     stable: Format | null;
-    /** With Dolby as format: the track's best stereo AAC (audioOf takes it once Dolby failed here; null: none) */
+    /** With Dolby as format: the track's best stereo AAC (null: none) */
     stereo?: Format | null;
+    /** Its formats by sound, every one the video has and the device plays: what plays is picked from these (audioOf;
+     * format, stable and stereo above are Auto's) */
+    sounds: { [sound: string]: SoundFormats };
 }
 
 export interface Streams {
@@ -331,6 +345,13 @@ export function reasonInLanguage(id: string, e: NoStreams): Promise<string> {
     }, function () {
         return '';
     });
+}
+
+/** The streams asked ahead of a start, and for a tile's preview: as a guest (age-restricted videos are not prepared:
+ * SABR needs YouTube's player script), or SABR first where a start would ask so (signedInFirst), or for a video only
+ * SABR played lately (sabrFirstNow) */
+export function firstStreams(id: string): Promise<Streams> {
+    return sabrFirstNow(signedInFirst(), id) ? playableStreams(id, true) : streams(id);
 }
 
 /** A video's streams for the own player: as a guest, else via SABR (age check, members only); sabrFirst reverses
@@ -816,7 +837,7 @@ export function streamsOf(reply: any, sabr?: boolean): Streams {
         // (a WebM video needs its length: its last segment ends there; a live stream's segments are numbered, SABR's
         // come whole)
         return (f.url || sabr) && (live ? f.targetDurationSec : f.initRange && f.indexRange && (sabr || !/webm/.test(f.mimeType || '') || +f.contentLength > 0)) &&
-            /^((video|audio)\/mp4;|video\/webm; codecs="vp9")/.test(f.mimeType || '') && shown(f) && supported(f);
+            /^((video|audio)\/mp4;|video\/webm; codecs="vp9"|audio\/webm; codecs="opus")/.test(f.mimeType || '') && shown(f) && supported(f);
     });
     // VP9 before AV1 before H.264 at the same height and frame rate: VP9 goes up to 4K, so most videos use one codec
     // and the TV's pipeline can be reused for the next video (a codec change tears it down: player/pipeline.ts); AV1
@@ -824,11 +845,12 @@ export function streamsOf(reply: any, sabr?: boolean): Streams {
     var videos = playable.filter(function (f) { return /^video\/(mp4; codecs="(avc1|av01)|webm)/.test(f.mimeType); }).map(formatOf);
     var rank = function (f: Format): number { return /webm/.test(f.mime) ? 2 : /av01/.test(f.mime) ? 1 : 0; };
     videos.sort(function (a, b) { return b.height - a.height || b.fps - a.fps || rank(b) - rank(a) || b.bitrate - a.bitrate; });
-    // Stereo AAC, and with SABR Dolby Digital 5.1 (ac-3), which YouTube's TV app takes first where the TV plays it
-    // (html5_enable_ac3; never Dolby Digital Plus here, nor 5.1 AAC); YouTube offers Dolby for some videos, to the
-    // signed-in TV client only (its start's audio cut is handled in the SABR engine: containers.ts wholeFrames)
+    // Every sound the device plays: stereo AAC and Opus, and with SABR the surround ones (Dolby Digital 5.1 and Plus,
+    // 5.1 AAC, Eclipsa), which YouTube offers for some videos, to the signed-in TV client only (a surround start's
+    // audio cut is handled in the SABR engine: containers.ts wholeFrames)
     var audios = audioTracks(playable.filter(function (f) {
-        return sabr && /^audio\/mp4; codecs="ac-3"/.test(f.mimeType) || /^audio\/mp4; codecs="mp4a\./.test(f.mimeType) && !(+f.audioChannels > 2);
+        var sound = soundOf(f.mimeType, +f.audioChannels || 2);
+        return !!sound && (sabr || sound === 'aac' || sound === 'opus');
     }));
     var tracklist = reply.captions && reply.captions.playerCaptionsTracklistRenderer || {};
     var paid = reply.paidContentOverlay && reply.paidContentOverlay.paidContentOverlayRenderer;
@@ -857,8 +879,123 @@ export function streamsOf(reply: any, sabr?: boolean): Streams {
     return s;
 }
 
-/** Per audio track the best bitrate (Dolby Digital over AAC, itag 140 over 139) and the best stable-volume one (isDrc;
- * none with Dolby: as YouTube's "Unavailable with surround sound"); the original first, then dubs by name */
+/** The sounds YouTube has a video's audio in, as Settings › Audio codec lists them: stereo AAC and Opus, 5.1 AAC,
+ * Dolby Digital 5.1 and Dolby Digital Plus 5.1, Eclipsa Audio 5.1 (IAMF) */
+export var SOUNDS = ['aac', 'opus', 'aac51', 'ac3', 'eac3', 'iamf'];
+var SOUND_NAMES: { [sound: string]: string } = { aac: 'AAC', opus: 'Opus', aac51: 'AAC 5.1', ac3: 'Dolby Digital 5.1', eac3: 'Dolby Digital Plus 5.1', iamf: 'Eclipsa Audio 5.1' };
+/** A format of each sound, as YouTube names its (the device is asked about these: soundPlays) */
+var SOUND_SAMPLES: { [sound: string]: string } = {
+    aac: 'audio/mp4; codecs="mp4a.40.2"', opus: 'audio/webm; codecs="opus"', aac51: 'audio/mp4; codecs="mp4a.40.2"',
+    ac3: 'audio/mp4; codecs="ac-3"', eac3: 'audio/mp4; codecs="ec-3"', iamf: 'audio/mp4; codecs="iamf.001.001.Opus"'
+};
+
+/** The sound of an audio format (one of SOUNDS; '' none the player takes: Opus with more than two channels, or a codec
+ * not known here) */
+export function soundOf(mime: string, channels: number): string {
+    var codec = (/^audio\/(?:mp4|webm); codecs="([a-z0-9-]+)/.exec(mime) || [])[1] || '';
+    var wide = channels > 2;
+    return codec === 'mp4a' ? (wide ? 'aac51' : 'aac') : codec === 'opus' ? (wide ? '' : 'opus') : codec === 'ac-3' ? 'ac3' : codec === 'ec-3' ? 'eac3' :
+        codec === 'iamf' ? 'iamf' : '';
+}
+
+/** A sound as viewers name it ("AAC", "Dolby Digital 5.1"; '' one not known) */
+export function soundName(sound: string): string {
+    return SOUND_NAMES[sound] || '';
+}
+
+/** Whether this device plays the sound, asked as its formats are (supported): Settings say so on one it does not play
+ * (chosen all the same, videos play as with Auto: audioOf) */
+export function soundPlays(sound: string): boolean {
+    var mime = SOUND_SAMPLES[sound];
+    return !!mime && supported({ mimeType: mime });
+}
+
+/** Whether Settings ask for sound only signed-in streams have: Voice boost, or a surround codec the device plays */
+export function soundSignedIn(): boolean {
+    var sound: string = prefs().sound;
+    return prefs().voiceBoost || sound !== 'auto' && sound !== 'aac' && sound !== 'opus' && soundPlays(sound);
+}
+
+/** Whether a start asks for a video's streams signed in first (by SABR): Settings › Streams by SABR, or sound only
+ * those streams have */
+export function signedInFirst(): boolean {
+    return prefs().sabr || soundSignedIn();
+}
+
+/** The sounds the decoder would not take in this run of the app (soundFailed): not played again */
+var failed: { [sound: string]: boolean } = {};
+
+/** The sound a track plays in: the one Settings › Audio codec chose where the track has it; else Auto's: Dolby Digital
+ * 5.1 where it has it (as YouTube's TV app takes it first), else stereo AAC, else what there is. None that failed in
+ * this run while another is left */
+function played(track: AudioTrack): SoundFormats {
+    var want: string = prefs().sound;
+    var order = (want === 'auto' ? [] : [want]).concat(['ac3', 'aac'], SOUNDS);
+    var first: SoundFormats | null = null;
+    for (var i = 0; i < order.length; i++) {
+        var has = track.sounds[order[i]];
+        if (has && !failed[order[i]]) {
+            return has;
+        }
+        first = first || has || null;
+    }
+    return first || { format: track.format, stable: track.stable, boost: null };
+}
+
+/** A track's Voice boost copy (null: none): in the sound it plays in where that has one, else its stereo one's (AAC
+ * before Opus; YouTube boosts a video's own stereo audio only) */
+function boostOf(track: AudioTrack): Format | null {
+    var own = played(track).boost;
+    if (own) {
+        return own;
+    }
+    for (var i = 0; i < 2; i++) {
+        var stereo = track.sounds[SOUNDS[i]];
+        if (stereo && stereo.boost && !failed[SOUNDS[i]]) {
+            return stereo.boost;
+        }
+    }
+    return null;
+}
+
+/** A track's format to play: its Voice boost copy if on and it has one (before the codec chosen: surround has none);
+ * else in the sound it plays in (played), the stable-volume copy if on and there is one (YouTube has each as a copy of
+ * its own, none with both) */
+export function audioOf(track: AudioTrack): Format {
+    var boost = prefs().voiceBoost ? boostOf(track) : null;
+    if (boost) {
+        return boost;
+    }
+    var sound = played(track);
+    return prefs().stableVolume && sound.stable ? sound.stable : sound.format;
+}
+
+/** Whether a track has a stable-volume copy in the sound it plays in (none in surround) */
+export function stableFor(track: AudioTrack): boolean {
+    return !!played(track).stable;
+}
+
+/** Whether a track has a Voice boost copy (YouTube sends them signed in only, of the video's own stereo audio) */
+export function boostFor(track: AudioTrack): boolean {
+    return !!boostOf(track);
+}
+
+/** The decoder would not take a track's format playing: its sound is not played again in this run of the app. False
+ * where that leaves the track nothing else to play (stereo AAC, or all it has failed) */
+export function soundFailed(track: AudioTrack, playing: Format): boolean {
+    var sound = soundOf(playing.mime, playing.channels || 2);
+    if (!sound || sound === 'aac') {
+        return false;
+    }
+    failed[sound] = true;
+    var next = audioOf(track);
+    return next !== playing && !failed[soundOf(next.mime, next.channels || 2)];
+}
+
+/** Per audio track its formats by sound (soundOf), in each the best bitrate (itag 140 over 139), the best
+ * stable-volume one (isDrc; none in surround: as YouTube's "Unavailable with surround sound") and the best Voice boost
+ * one (xtags vb); format, stable and stereo as Auto plays them (Dolby Digital over AAC); the original first, then dubs
+ * by name */
 function audioTracks(formats: any[]): AudioTrack[] {
     var tracks: { [id: string]: AudioTrack } = {};
     var ids: string[] = [];
@@ -873,25 +1010,33 @@ function audioTracks(formats: any[]): AudioTrack[] {
             var name = said && ours(said, id.split('.')[0]);
             var kind = name !== said ? xtag(f.xtags, 'acont') : '';
             name = kind === 'dubbed-auto' ? tr('{1} (auto-dubbed)', name) : kind === 'descriptive' ? tr('{1} (audio description)', name) : name;
-            track = tracks[id] = { id: id, name: name || tr('Original'), original: !f.audioTrack || !!about.audioIsDefault, format: null as unknown as Format, stable: null };
+            track = tracks[id] = { id: id, name: name || tr('Original'), original: !f.audioTrack || !!about.audioIsDefault, format: null as unknown as Format, stable: null, sounds: {} };
         }
         var format = formatOf(f);
-        var slot: 'stable' | 'format' = f.isDrc ? 'stable' : 'format';
-        var had = track[slot];
+        var sound = soundOf(format.mime, format.channels || 2);
+        format.boost = !f.isDrc && !!xtag(format.xtags, 'vb');
+        // (a copy alone is no sound to play: the sound is kept once its plain one came)
+        var has = track.sounds[sound] || (track.sounds[sound] = { format: null as unknown as Format, stable: null, boost: null });
+        var slot: 'stable' | 'boost' | 'format' = f.isDrc ? 'stable' : format.boost ? 'boost' : 'format';
+        var had = has[slot];
         if (!had || format.bitrate > had.bitrate) {
-            track[slot] = format;
-        }
-        if (!f.isDrc && /mp4a/.test(format.mime) && (!track.stereo || format.bitrate > track.stereo.bitrate)) {
-            track.stereo = format;
+            has[slot] = format;
         }
     });
-    var list = ids.map(function (id) { return tracks[id]; }).filter(function (t) { return t.format; });
-    list.forEach(function (t) {
-        if (/ac-3/.test(t.format.mime)) {
-            t.stable = null;
-        } else {
-            t.stereo = null;
+    var list = ids.map(function (id) { return tracks[id]; }).filter(function (t) {
+        for (var sound in t.sounds) {
+            if (!t.sounds[sound].format) {
+                delete t.sounds[sound];
+            }
         }
+        var aac = t.sounds.aac;
+        var auto = t.sounds.ac3 || aac || t.sounds[SOUNDS.filter(function (sound) { return !!t.sounds[sound]; })[0]];
+        if (auto) {
+            t.format = auto.format;
+            t.stable = auto.stable;
+            t.stereo = aac && auto !== aac ? aac.format : null;
+        }
+        return !!auto;
     });
     list.sort(function (a, b) {
         return (b.original ? 1 : 0) - (a.original ? 1 : 0) || (inEnglish() ? 0 : languageOrder(a.id.split('.')[0]) - languageOrder(b.id.split('.')[0])) ||
@@ -1238,7 +1383,8 @@ function formatOf(f: any): Format {
         lmt: String(f.lastModified || ''),
         xtags: f.xtags || '',
         track: f.audioTrack && f.audioTrack.id || '',
-        drc: !!f.isDrc
+        drc: !!f.isDrc,
+        channels: +f.audioChannels || 0
     };
 }
 

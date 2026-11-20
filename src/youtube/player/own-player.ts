@@ -32,12 +32,12 @@ import { knownAvatar } from '../api/avatars.js';
 import { liveNow } from '../api/channel.js';
 import { dearrowOn, dearrowPicture, dearrowTitle, dearrowWait } from '../api/dearrow.js';
 import { dots, Ended, Page, PlaylistInfo, thumbnail, thumbnailFallback, Video } from '../api/feed.js';
-import { CAPTION_SIZES, ChoiceSetting, prefs, setNames, setPref } from '../api/prefs.js';
+import { CAPTION_SIZES, ChoiceSetting, Prefs, prefs, setNames, setPref } from '../api/prefs.js';
 import { keyName, wakeKey } from '../api/shortcuts.js';
 import { Replays, replays } from '../api/replays.js';
 import { Segment, segmentAt, segments, skippedText } from '../api/sponsorblock.js';
 import { WatchReport } from '../api/stats.js';
-import { aboutTheVideo, onlyYouTubePlays, askAnew, setLineDown, Asking, AudioTrack, linesFor, musicArtists, musicTrack, base, Caption, captionIn, captionList, codecName, learnMethod, forgetOtherStreams, forgetStreams, Format, kindOf, noneCanPlay, NoStreams, patient, pickFormat, playableStreams, preferred, reasonInLanguage, sabrStreams, startTrack, Storyboard, storyboardFrame, streams, Streams, streamsFailure, stuckFor, unanswered } from '../api/streams.js';
+import { aboutTheVideo, onlyYouTubePlays, askAnew, setLineDown, Asking, audioOf, AudioTrack, boostFor, signedInFirst, soundFailed, SOUNDS, soundSignedIn, soundName, soundOf, stableFor, linesFor, musicArtists, musicTrack, base, Caption, captionIn, captionList, codecName, learnMethod, forgetOtherStreams, forgetStreams, Format, kindOf, noneCanPlay, NoStreams, patient, pickFormat, playableStreams, preferred, reasonInLanguage, sabrStreams, startTrack, Storyboard, storyboardFrame, streams, Streams, streamsFailure, stuckFor, unanswered } from '../api/streams.js';
 import { watchLaterAdd } from '../api/menu.js';
 import { channelPicture, run, watchInfo, WatchInfo } from '../api/watch.js';
 import { FillLoader, GLIDE_EASE } from '../ui/fill-loader.js';
@@ -69,13 +69,20 @@ import { paintFrame, SeekPreview } from './seek-preview.js';
 import { SabrEngine } from './sabr-engine.js';
 import { CountedVideo, StatsBox } from './stats-box.js';
 import { UpNext } from './up-next.js';
-import { paidChip, setPaid, WatchPage } from './watch-page.js';
+import { paidChip, setPaid, SoundNow, WatchPage } from './watch-page.js';
 
 /** How long a prepared start (startOf) waits for SponsorBlock's segments, and a start once its streams are in (they
  * are asked at once together, so they are usually in by then) */
 var SEGMENTS_WAIT_MS = 1000;
 var START_SEGMENTS_MS = 300;
 var JUMP_S = 10;
+/** The Sound panel's audio codec is taken once the choice has rested this long */
+var SOUND_REST_MS = 600;
+/** What a video's signed-in streams have for its sound is asked this long after it began to move; where the answer
+ * does not come, not again for NO_OFFER_MS (noOfferUntil) */
+var SOUND_AHEAD_MS = 5000;
+var NO_OFFER_MS = 120000;
+var noOfferUntil = 0;
 /** A jump's frame and marker stay until the picture moves there, at most this long (ms) */
 var LAND_MAX_MS = 5000;
 /** A start takes over a preview of its video only this near the start's resume point, if it has one (s) */
@@ -496,9 +503,29 @@ export class OwnPlayer {
     private speed = 1;
     private speedWorks: boolean | null = load<boolean>(SPEED_KEY);
     private speedTimer = 0;
-    /** The player's volume (0-1: setVolume), and the preview's fade out (0: none) */
+    /** The player's own volume (not the TV's) as the phone or the watch page's button set it: 0-100, and muted */
+    volumeLevel = 100;
+    volumeMuted = false;
+    /** The watch page's button changed the volume (the phone is told) */
+    onVolume: () => void = function () { return undefined; };
+    /** The video's volume for that level (0-1: setVolume), and the preview's fade out (0: none) */
     private volume = 1;
     private fadeTimer = 0;
+    /** The picture's shape the video element's box was last fitted for (its width by its height, in hundredths; 0:
+     * none), and whether that gave it a box of its own (fit); the playlist at the side has the pictures beside it */
+    private fitShape = 0;
+    private fitted = false;
+    private beside = false;
+    /** The Sound panel's codec choice waits for its rest (setSound); the audio format that played before its changes
+     * (null: none pending) */
+    private soundTimer = 0;
+    private soundWas: Format | null = null;
+    /** Incremented at each change of the sound's settings and with each video: an answer asked for before is dropped */
+    private soundGen = 0;
+    /** The audio tracks of video id's signed-in streams, asked for the Sound panel (soundAhead; none yet, or none to
+     * be had: empty) */
+    private soundOffer: { id: string; audios: AudioTrack[] } | null = null;
+    private aheadTimer = 0;
     /** The volume as the phone set it, shown for a moment as Apple TV shows it: a speaker and a level bar (null: not
      * shown yet) */
     private volumeShown: { el: HTMLElement; icon: HTMLElement; fill: HTMLElement } | null = null;
@@ -610,7 +637,10 @@ export class OwnPlayer {
                 audio: audio,
                 best: self.streams && self.streams.videos[0] || null,
                 audioName: self.audioTrack ? self.audioTrack.name : '-',
-                stable: !!audio && !!self.audioTrack && audio === self.audioTrack.stable
+                sound: audio ? soundName(soundOf(audio.mime, audio.channels || 2)) : '',
+                stable: !!audio && !!audio.drc,
+                boost: !!audio && !!audio.boost,
+                sabr: self.bySabr()
             };
         });
         setShown(this.el, false);
@@ -764,6 +794,13 @@ export class OwnPlayer {
             },
             subtitles: function () { self.watch.panel.open(tr('Subtitles'), function () { return self.subtitleLines(); }); },
             settings: function () { self.settingsPanel(); },
+            volume: function (level: number) {
+                self.setVolume(level, false);
+                self.onVolume();
+            },
+            sound: function () { return self.soundNow(); },
+            soundAhead: function () { self.soundAhead(); },
+            setSound: function (what: string, value: boolean | string) { self.setSound(what, value); },
             rest: function (video: Video) { self.onAhead(video, false); },
             restPage: function (page: Page) { self.onPageAhead(page); },
             live: function () { return self.liveSpan(); },
@@ -777,6 +814,7 @@ export class OwnPlayer {
             toggleClass(self.el, 'by-player--watch', shown);
             self.holdChat();
         };
+        made.setVolume(this.volumeLevel, this.volumeMuted);
         this.bars(made.bar);
         return made;
     }
@@ -1044,6 +1082,16 @@ export class OwnPlayer {
         return !!peek && kindOf(peek.video.mime) === kindOf(peek.target.mime);
     }
 
+    /** Whether its video element holds a pipeline (playing, paused or kept for the next start) */
+    get loaded(): boolean {
+        return !!this.video.getAttribute('src');
+    }
+
+    /** Where the playing preview of id stands (s; 0: none plays) */
+    peekAt(id: string): number {
+        return this.peeking(id) ? this.video.currentTime : 0;
+    }
+
     /** Whether a preview of id is playing (OK on its tile takes it over) */
     peeking(id: string): boolean {
         return !!this.peek && this.peek.id === id && this.video.style.display !== 'none' && !this.video.ended;
@@ -1057,15 +1105,51 @@ export class OwnPlayer {
         reset(this.el);
         reset(this.video);
         reset(this.ring);
+        // (the preview's box gone: the picture's own shape fitted in the player's, known as it has played)
+        this.fitShape = 0;
+        this.fitted = false;
+        this.fit(this.video.videoWidth, this.video.videoHeight);
         this.hidePoster();
         this.video.style.display = '';
-        this.video.muted = false;
+        this.video.muted = this.volumeMuted;
         // Full sound again (a preview taken over while its sound faded)
         clearInterval(this.fadeTimer);
         this.video.volume = this.volume;
         toggleClass(this.el, 'by-player--peek', false);
         toggleClass(this.ring, 'by-peek-ring--on', false);
         toggleClass(this.ring, 'by-peek-ring--stage', false);
+    }
+
+    /** The video element's box for a picture w by h (px): the player's whole box as the stylesheet has it, or for a
+     * picture of another shape (4:3, upright, wider than 16:9) the largest box of its shape, in the middle (pictureBox).
+     * The browser fits a picture into the element's box by itself, but not every TV's video layer follows it: some
+     * stretch it over the whole box. Not a preview's box, nor a place the live chat or the playlist at the side gave the
+     * picture (those are their own); fitted again where one of them let it go. A video taken over as it was loaded
+     * (ahead, Up next's, the one left) is fitted as it is taken (adopt): it showed in the box of the video before it
+     * for a moment, a 16:9 picture in a 4:3 or a wide box */
+    private fit(w: number, h: number): void {
+        var s = this.video.style;
+        if (this.peek || !w || !h) {
+            return;
+        }
+        // (the chat or the list has the pictures: their boxes are its own, and fitted anew once it lets them go)
+        if (this.beside || this.chat.placing) {
+            this.fitShape = 0;
+            this.fitted = false;
+            return;
+        }
+        var shape = Math.round(w / h * 100);
+        if (shape === this.fitShape && (!this.fitted || s.width)) {
+            return;
+        }
+        this.fitShape = shape;
+        var at = pictureBox(w, h);
+        if (at) {
+            box(this.video, at.left, at.top, at.width, at.height);
+        } else if (this.fitted) {
+            s.left = s.top = s.width = s.height = '';
+        }
+        this.fitted = !!at;
     }
 
     /** Close (Back, the end) and return to the app (the pipeline is kept for the next video) */
@@ -1227,7 +1311,9 @@ export class OwnPlayer {
      * one changes little near the top: each of the phone's steps of 3 is heard alike); shown: the level shows for a
      * moment */
     setVolume(level: number, muted: boolean, shown?: boolean): void {
-        var l = Math.max(0, Math.min(100, level)) / 100;
+        var to = this.volumeLevel = Math.max(0, Math.min(100, level));
+        this.volumeMuted = muted;
+        var l = to / 100;
         this.volume = l * l * l;
         this.video.volume = this.volume;
         if (this.hideUntil) {
@@ -1235,8 +1321,11 @@ export class OwnPlayer {
         } else {
             this.video.muted = muted;
         }
+        if (this.watchPage) {
+            this.watchPage.setVolume(to, muted);
+        }
         if (shown) {
-            this.showVolume(Math.round(level), muted);
+            this.showVolume(Math.round(to), muted);
         }
     }
 
@@ -1253,7 +1342,7 @@ export class OwnPlayer {
             this.el.appendChild(el);
         }
         setIcon(shown.icon, muted || !level ? 'volumeoff' : 'volume');
-        shown.fill.style.width = (muted ? 0 : level) + '%';
+        shown.fill.style.webkitTransform = 'scaleX(' + (muted ? 0 : level) / 100 + ')';
         toggleClass(shown.el, 'by-volume--shown', true);
         clearTimeout(this.volumeTimer);
         var box = shown.el;
@@ -1812,6 +1901,10 @@ export class OwnPlayer {
     /** The picture narrower beside the playlist at the side (width: its width), or as before (0: the live chat places it
      * again where it is beside it) */
     private room(width: number): void {
+        // (the video's own shape fitted anew once the list has let it go: fit)
+        this.beside = width > 0;
+        this.fitShape = 0;
+        this.fitted = false;
         this.pictures.forEach(function (picture) {
             var s = picture.style;
             s.left = s.top = '';
@@ -2039,36 +2132,49 @@ export class OwnPlayer {
                 }
             }
         });
-        this.osd.setHead('', want.channel);
-        this.osd.setTitle(dearrowTitle(want.id, want.title));
-        this.osd.setDescription('');
         this.osd.setQuality(0, 0);
         this.taggedHeight = 0;
-        this.closeChapters(false);
-        this.chapterRow.set([]);
-        this.showKeys();
-        this.osd.setTime('', 0);
-        this.setLoaded(0);
-        this.osd.setMessage('');
-        this.watch.setPlaylist(this.listNow);
-        this.watch.setVideo(want.id, want.title, want.channel);
-        this.listPanel.close();
         // A returning video keeps its details (laid out once it moves, as asked ones); else they are asked for now,
         // beside the streams
         if (want.info) {
             this.infoAsked = true;
             this.infoLater = want.info;
         }
-        this.askInfo();
-        // DeArrow's title for a video no tile asked it for (started from a phone, or the queue's next)
-        if (dearrowOn()) {
-            dearrowWait([want], DEARROW_START_MS).then(function () {
-                if (self.want === want) {
-                    var title = (self.streams && self.streams.title) || want.title;
-                    self.osd.setTitle(dearrowTitle(want.id, title));
-                    self.watch.setTitle(title);
-                }
-            });
+        // The player's texts and its watch page for this video, its details asked for. A start that asks for its
+        // streams has them made in the next turn (laters): the streams' answer and the first video request go out
+        // first, ~50 ms of this TV's thread sooner; the frame that shows the player comes after either way
+        var texts = function (): void {
+            if (self.want !== want) {
+                return;
+            }
+            self.osd.setHead('', want.channel);
+            self.osd.setTitle(dearrowTitle(want.id, want.title));
+            self.osd.setDescription('');
+            self.closeChapters(false);
+            self.chapterRow.set([]);
+            self.showKeys();
+            self.osd.setTime('', 0);
+            self.setLoaded(0);
+            self.osd.setMessage('');
+            self.watch.setPlaylist(self.listNow);
+            self.watch.setVideo(want.id, want.title, want.channel);
+            self.listPanel.close();
+            self.askInfo();
+            // DeArrow's title for a video no tile asked it for (started from a phone, or the queue's next)
+            if (dearrowOn()) {
+                dearrowWait([want], DEARROW_START_MS).then(function () {
+                    if (self.want === want) {
+                        var title = (self.streams && self.streams.title) || want.title;
+                        self.osd.setTitle(dearrowTitle(want.id, title));
+                        self.watch.setTitle(title);
+                    }
+                });
+            }
+            self.showOsd(false);
+        };
+        var later = !taken;
+        if (!later) {
+            texts();
         }
         // Hide the previous video's loading sign (its channel picture is not this one's)
         this.filling.hide();
@@ -2100,7 +2206,9 @@ export class OwnPlayer {
             }
         }
         this.view(true);
-        this.showOsd(false);
+        if (later) {
+            setTimeout(texts, 0);
+        }
         if (taken) {
             // Loaded ahead: hidden until it plays (in ~0.25 s once decoded), its start picture meanwhile; Android's
             // screen at its rate
@@ -2143,7 +2251,7 @@ export class OwnPlayer {
     private prime(video: Video): void {
         var self = this;
         var gen = this.gen;
-        startOf(playableStreams(video.id, prefs().sabr), video.id, video.start || 0).then(function (start) {
+        startOf(playableStreams(video.id, signedInFirst()), video.id, video.start || 0).then(function (start) {
             var s = start.streams;
             var f = start.formats;
             if (gen !== self.gen || !f || !self.upNext.counting || self.primed) {
@@ -2400,12 +2508,17 @@ export class OwnPlayer {
         this.engine = taken.engine;
         this.skipsFor(taken.engine);
         this.format = taken.video;
+        // (its box before it shows: the video before it may have left one of another shape)
+        this.fit(taken.video.width, taken.video.height);
         this.showDetails(s, want);
         if (taken.target.itag !== taken.video.itag && taken.engine.switchVideo) {
             taken.engine.switchVideo(taken.target, TAKEOVER_SWITCH_S, true);
             this.format = taken.target;
         }
-        // (the quality tag shows the picture playing: tick)
+        // (the quality tag shows the picture playing, drawn anew at the next tick: a playing preview may have had it
+        // drawn already at the start's showOsd, before its format and streams were the player's, and at the same
+        // height it was not drawn again: no codec, frame rate or SABR)
+        this.taggedHeight = 0;
         dropAhead(true);
         var c = captionFor(s, want);
         if (c) {
@@ -2462,7 +2575,7 @@ export class OwnPlayer {
         var asking: Asking = function (sabr, anew) { return self.stillAsking(gen, sabr, anew); };
         this.watchStart();
         this.watchLine();
-        (source ? source.ask(asking) : playableStreams(want.id, prefs().sabr, asking)).then(function (s) {
+        (source ? source.ask(asking) : playableStreams(want.id, signedInFirst(), asking)).then(function (s) {
             if (gen !== self.gen) {
                 return;
             }
@@ -2479,6 +2592,7 @@ export class OwnPlayer {
             }
             self.streams = s;
             self.audioTrack = s.audios.filter(function (t) { return t.id === audioId; })[0] || (fresh ? fresh.track : startTrack(s.audios));
+            self.soundChanged();
             self.showDetails(s, want);
             // SponsorBlock's segments (asked with the streams, at OK) waited for a moment if not in yet, so a start in a
             // skip begins past it instead of seeking there once they come. The format is set meanwhile (a quality or audio
@@ -2541,15 +2655,12 @@ export class OwnPlayer {
                 self.load(by(want.id, !source.sabr, ''), failure, source);
                 return;
             }
-            // Removed, not live yet, or refused to the TV client: YouTube's player could not play it either (after a
-            // switch it did play). Private, an age check, the country: closed with YouTube's reason too. What only
-            // YouTube's player may play is offered; anything else stops here (giveUp)
+            // An ended live stream refused alike to YouTube's player: its channel's stream live now; anything else
+            // YouTube said of the video ends the load (giveUp)
             if (!why && e.refused && e.ended && !want.standIn) {
                 self.followStream(want.id, e.ended, e);
-            } else if (!why && (noneCanPlay(e) || e.refused || aboutTheVideo(e) && e.status !== 'NO_SABR' && !onlyYouTubePlays(e))) {
-                self.cannotPlay(want.id, e);
             } else {
-                self.giveUp((why ? why + '; then ' : '') + (e.reason || e.status), e);
+                self.giveUp((why ? why + '; then ' : '') + (e.reason || e.status), e, !why);
             }
         });
     }
@@ -2744,8 +2855,9 @@ export class OwnPlayer {
         this.watchStart();
         // Drop data preloaded for another video
         dropAhead();
-        this.osd.setQuality(video.height, video.fps, codecName(video.mime));
+        this.osd.setQuality(video.height, video.fps, codecName(video.mime), this.bySabr());
         this.taggedHeight = 0;
+        this.fit(video.width, video.height);
         // Android: the screen at a rate that shows each frame evenly, where the user lets apps switch it (before the
         // picture, as the switch blanks the screen a moment)
         preferFrameRate(displayRate(video.fps));
@@ -2802,11 +2914,12 @@ export class OwnPlayer {
         var want = this.want as Want;
         var s = this.streams as Streams;
         var tries = this.tries;
-        // Dolby the decoder would not take: the same format again with the track's AAC, before other codecs or methods
+        // A sound the decoder would not take (Dolby, or the one Settings chose): the same format again with the track's
+        // next (stereo AAC in the end), before other codecs or methods
         var track = this.audioTrack;
-        if (why === 'media' && !noDolby && want && this.format && track && track.stereo && this.audioFormat() === track.format) {
-            noDolby = true;
-            note('codec', why + ': ac-3 -> AAC');
+        var sounding = this.audioFormat();
+        if (why === 'media' && want && this.format && track && sounding && soundFailed(track, sounding)) {
+            note('codec', why + ': ' + kindOf(sounding.mime) + ' -> ' + kindOf(audioOf(track).mime));
             want.t = this.position();
             this.playFormat(this.format, want.t);
             return;
@@ -3255,13 +3368,22 @@ export class OwnPlayer {
         }, restart);
     }
 
-    /** The ladder's end (why; e: the streams' refusal, where they did not come): what only YouTube's player may get past
-     * (paid, members-only: onlyYouTubePlays; SABR's protection) is offered to the viewer (offerYouTube); anything else
-     * stops here with the reason, and OK tries again (stopHere). Nothing is handed to YouTube's player by itself: a
+    /** The ladder's end, or the streams' (why; e: the streams' refusal, where they did not come; first: at the load's
+     * first asking, no failure before it). Where YouTube's player could not play it either (removed, not live yet,
+     * refused alike to it; after a switch it did play) or YouTube's reason is the video's own (private, an age check,
+     * the country), the player closes with that reason (cannotPlay). What only YouTube's player may get past (paid,
+     * members-only: onlyYouTubePlays; SABR's protection) is offered to the viewer (offerYouTube); anything else stops
+     * here with the reason, and OK tries again (stopHere). Nothing is handed to YouTube's player by itself: a
      * connection, YouTube's trouble, a decoder or a start that would not move never leave this player */
-    private giveUp(why: string, e?: NoStreams): void {
-        if (why === 'protection' || e && onlyYouTubePlays(e)) {
+    private giveUp(why: string, e?: NoStreams, first?: boolean): void {
+        var want = this.want;
+        var refusal = first ? e : undefined;
+        if (want && refusal && (noneCanPlay(refusal) || refusal.refused)) {
+            this.cannotPlay(want.id, refusal);
+        } else if (why === 'protection' || e && onlyYouTubePlays(e)) {
             this.offerYouTube(why, e);
+        } else if (want && refusal && aboutTheVideo(refusal) && refusal.status !== 'NO_SABR') {
+            this.cannotPlay(want.id, refusal);
         } else {
             this.stopHere(why, e);
         }
@@ -3346,6 +3468,11 @@ export class OwnPlayer {
     private reset(keep?: boolean): Want | null {
         this.showPaid(false);
         clearTimeout(this.endTimer);
+        // (a sound choice still resting, or its answer on its way, was the video before's)
+        clearTimeout(this.soundTimer);
+        clearTimeout(this.aheadTimer);
+        this.soundWas = null;
+        this.soundGen++;
         var was = this.want;
         // Drop the primed video and the poster over it, unless it is being taken over
         if (!keep) {
@@ -3590,7 +3717,9 @@ export class OwnPlayer {
             if (s && s.audios.length > 1) {
                 opens(tr('Audio track'), track ? track.name : '', function () { return self.audioLines(); });
             }
-            if (track && track.stable) {
+            // (Voice boost, on the watch page's Sound panel, plays its own copy, which has no stable volume: this switch
+            // is away meanwhile)
+            if (track && self.soundNow().stable !== null) {
                 flips(tr('Stable volume'), prefs().stableVolume, function () {
                     setPref('stableVolume', !prefs().stableVolume);
                     self.pickAudio(track as AudioTrack);
@@ -3797,7 +3926,7 @@ export class OwnPlayer {
         });
     }
 
-    /** Switch the audio track (or stable volume): in place if the MIME type matches (no stop; audible AUDIO_SWITCH_S
+    /** Switch the audio track (or stable volume, or Voice boost): in place if the MIME type matches (no stop; audible AUDIO_SWITCH_S
      * later), else restart at the current position */
     private pickAudio(t: AudioTrack): void {
         var was = this.audioFormat();
@@ -3807,6 +3936,164 @@ export class OwnPlayer {
             this.engine.switchAudio(f, AUDIO_SWITCH_S);
         } else {
             this.playFormat(this.format as Format, this.position());
+        }
+        this.soundChanged();
+    }
+
+    /** The sound's settings for the watch page's Sound panel, each only where the video has it (as its signed-in
+     * streams have it, once known: offered): Voice boost (also while it is on, so that it can be turned off), Stable
+     * volume where the sound playing has a copy with it, and the audio codec with the video's own to choose from (none
+     * where it has one alone, or while Voice boost plays its copy: that has no stable volume and comes before the
+     * codec) */
+    private soundNow(): SoundNow {
+        var track = this.audioTrack;
+        var has = track ? this.offered(track) : null;
+        var boosted = !!track && boostFor(track) && prefs().voiceBoost;
+        var chosen: string = prefs().sound;
+        var sounds = has && !boosted ? SOUNDS.filter(function (sound) { return !!(has as AudioTrack).sounds[sound]; }) : [];
+        return {
+            boost: has && boostFor(has) || prefs().voiceBoost ? prefs().voiceBoost : null,
+            stable: track && stableFor(track) && !boosted ? prefs().stableVolume : null,
+            codec: sounds.indexOf(chosen) < 0 ? 'auto' : chosen,
+            codecs: sounds.length < 2 ? [] : [{ value: 'auto', name: tr('Auto') }].concat(sounds.map(function (sound) { return { value: sound, name: soundName(sound) }; }))
+        };
+    }
+
+    /** The audio track as the video's signed-in streams have it (more sounds, Voice boost), once they are known
+     * (soundAhead); the track itself where the video plays signed in, or they are not known */
+    private offered(track: AudioTrack): AudioTrack {
+        var s = this.streams;
+        var offer = this.soundOffer;
+        if (!s || s.sabr || !offer || !this.want || offer.id !== this.want.id || !offer.audios.length) {
+            return track;
+        }
+        return offer.audios.filter(function (t) { return t.id === track.id; })[0] || startTrack(offer.audios);
+    }
+
+    /** What the playing video's signed-in streams have for its sound, found out for the Sound panel where the video
+     * came as a guest's (nothing is taken for granted of what a guest or an account gets: the panel shows what the
+     * answers have): asked once a video, a little after it began to move (soundAheadSoon), or at once when the focus
+     * rests on the speaker or the panel opens. One request, kept as a signed-in start's would be (a choice then made
+     * starts from it); the panel drawn anew when it is in. Where it does not come (signed out, refused) it is not
+     * asked for again for a while */
+    private soundAhead(): void {
+        var self = this;
+        var want = this.want;
+        var s = this.streams;
+        if (!want || !s || s.sabr || s.live || s.only || this.soundOffer && this.soundOffer.id === want.id || Date.now() < noOfferUntil) {
+            return;
+        }
+        var offer = this.soundOffer = { id: want.id, audios: [] as AudioTrack[] };
+        sabrStreams(want.id).then(function (signedIn) {
+            offer.audios = signedIn.audios;
+            if (self.soundOffer === offer) {
+                self.soundChanged();
+            }
+        }, function () {
+            noOfferUntil = Date.now() + NO_OFFER_MS;
+        });
+    }
+
+    /** A video began to move: what it has for its sound is found out once it has played a little (soundAhead: nothing
+     * of it competes with the start), so the Sound panel has its lines when it opens; not for a tile's preview */
+    private soundAheadSoon(): void {
+        var self = this;
+        var want = this.want;
+        clearTimeout(this.aheadTimer);
+        if (this.peek || !want) {
+            return;
+        }
+        this.aheadTimer = setTimeout(function () {
+            if (self.want === want && self.moving && !self.peek) {
+                self.soundAhead();
+            }
+        }, SOUND_AHEAD_MS) as unknown as number;
+    }
+
+    /** The Sound panel set Voice boost or Stable volume (a boolean) or chose an audio codec: kept in Settings, then
+     * the playing video's sound picked anew; for a codec once the choice rests (each one stepped through would start
+     * the video anew) */
+    private setSound(what: string, value: boolean | string): void {
+        var self = this;
+        clearTimeout(this.soundTimer);
+        this.soundGen++;
+        this.soundWas = this.soundWas || this.audioFormat();
+        if (what === 'codec') {
+            setPref('sound', value as Prefs['sound']);
+            this.soundTimer = setTimeout(function () { self.resound(what); }, SOUND_REST_MS) as unknown as number;
+        } else {
+            setPref(what === 'boost' ? 'voiceBoost' : 'stableVolume', !!value);
+            // (Voice boost comes only with SABR's streams: said once it is turned on with Streams by SABR off)
+            if (what === 'boost' && value && !prefs().sabr) {
+                toast(tr('Voice boost requires SABR: while it is on, videos are fetched by SABR, which starts a bit slower'), 'info');
+            }
+            this.resound(what);
+        }
+    }
+
+    /** Settings' sound changed while a video plays (what: 'boost', 'stable' or 'codec'): its format picked anew. Sound
+     * only signed-in streams have (Voice boost, surround) on a video that came as a guest's: those streams asked for
+     * while it plays on, then the video started anew with them where it is. Said where the video has no Voice boost
+     * turned on, or not the codec chosen, or the streams do not come */
+    private resound(what: string): void {
+        var self = this;
+        var want = this.want;
+        var s = this.streams;
+        var track = this.audioTrack;
+        var was = this.soundWas;
+        this.soundWas = null;
+        if (!want || !s || !track) {
+            return;
+        }
+        if (!soundSignedIn() || s.sabr || s.live || s.only) {
+            // (a choice the track has nothing for picks what played: nothing to do but say so)
+            var now = audioOf(track);
+            if (now !== was) {
+                this.pickAudio(track);
+            } else {
+                this.soundChanged();
+            }
+            var chosen: string = prefs().sound;
+            if (what === 'boost' ? prefs().voiceBoost && !now.boost : what === 'codec' && chosen !== 'auto' && soundOf(now.mime, now.channels || 2) !== chosen) {
+                toast(tr('Not possible on this video'), 'info');
+            }
+            return;
+        }
+        var playing: Want = want;
+        // (a later change of the sound, or another video: this answer is no longer asked for)
+        var gen = this.soundGen;
+        var no = function (): void {
+            if (self.want === playing && gen === self.soundGen) {
+                toast(tr('Not possible on this video'), 'info');
+            }
+        };
+        sabrStreams(playing.id).then(function (signedIn) {
+            if (self.want !== playing || self.streams !== s || gen !== self.soundGen) {
+                return;
+            }
+            var mine = signedIn.audios.filter(function (t) { return t.id === (track as AudioTrack).id; })[0] || (signedIn.audios.length ? startTrack(signedIn.audios) : null);
+            var f = mine ? audioOf(mine) : null;
+            var sound = f ? soundOf(f.mime, f.channels || 2) : '';
+            if (!f || !f.boost && (sound === 'aac' || sound === 'opus')) {
+                no();
+                return;
+            }
+            playing.t = self.position();
+            // (as a start by the other method: the old engine stopped, no picks meanwhile)
+            var old = self.engine;
+            self.engine = null;
+            self.streams = null;
+            if (old) {
+                old.stop();
+            }
+            self.load({ sabr: true, ask: function () { return Promise.resolve(signedIn); } });
+        }, no);
+    }
+
+    /** The sound's settings may show otherwise now: the watch page's Sound panel draws them anew if it is open */
+    private soundChanged(): void {
+        if (this.watchPage) {
+            this.watchPage.drawSound();
         }
     }
 
@@ -4051,7 +4338,13 @@ export class OwnPlayer {
         var f = this.format;
         var kind = f ? kindOf(f.mime) : '';
         var of = f && f.height === h ? f : this.streams ? this.streams.videos.filter(function (o) { return o.height === h && kindOf(o.mime) === kind; })[0] : null;
-        this.osd.setQuality(h, of ? of.fps : 0, f ? codecName(f.mime) : '');
+        this.osd.setQuality(h, of ? of.fps : 0, f ? codecName(f.mime) : '', this.bySabr());
+    }
+
+    /** The video plays from the signed-in streams (SABR): said in the quality tag and Stats for nerds (a live
+     * stream's engine, also for one just over that came signed in, is not that) */
+    private bySabr(): boolean {
+        return this.engine instanceof SabrEngine;
     }
 
     private tick(): void {
@@ -4071,10 +4364,16 @@ export class OwnPlayer {
         if (this.moving && v.videoHeight && v.videoHeight !== this.taggedHeight) {
             this.tagQuality(v.videoHeight);
         }
-        // Playing with data and not seeking (not a start's seek before the picture arrives),
-        // past where a reused pipeline waits (OFF_START_S)
-        if (!this.moving && v.currentTime > OFF_START_S && !v.paused && !v.seeking && v.readyState >= 3) {
+        // (by the format playing: on a reused pipeline the element may still tell the video before's size a moment)
+        if (this.moving && this.format) {
+            this.fit(this.format.width, this.format.height);
+        }
+        // Playing with data and not seeking (not a start's seek before the picture arrives, nor one its engine has
+        // still to ask: a reused pipeline stands where the last video did until then), past where a reused pipeline
+        // waits (OFF_START_S)
+        if (!this.moving && v.currentTime > OFF_START_S && !v.paused && !v.seeking && v.readyState >= 3 && !this.seekPending()) {
             this.moving = true;
+            this.soundAheadSoon();
             // (what stops it from here on is told anew)
             this.played = true;
             this.movedAt = Date.now();
@@ -4348,6 +4647,19 @@ function shapeOf(v: HTMLVideoElement): number {
     return v.videoWidth && v.videoHeight ? v.videoWidth / v.videoHeight : 0;
 }
 
+/** Where a picture w by h lies in the player's box (layout units): the largest box of its shape, in the middle; null
+ * for a picture of the box's own shape (16:9, within a hundredth) */
+export function pictureBox(w: number, h: number): { left: number; top: number; width: number; height: number } | null {
+    var shape = w / h;
+    var own = LAYOUT_WIDTH / LAYOUT_HEIGHT;
+    if (Math.abs(shape / own - 1) < 0.01) {
+        return null;
+    }
+    var width = shape < own ? Math.round(LAYOUT_HEIGHT * shape) : LAYOUT_WIDTH;
+    var height = shape < own ? LAYOUT_HEIGHT : Math.round(LAYOUT_WIDTH / shape);
+    return { left: Math.round((LAYOUT_WIDTH - width) / 2), top: Math.round((LAYOUT_HEIGHT - height) / 2), width: width, height: height };
+}
+
 /** Position and size el (px), rounded to whole pixels */
 function box(el: HTMLElement, x: number, y: number, w: number, h: number): void {
     el.style.left = Math.round(x) + 'px';
@@ -4375,6 +4687,10 @@ export function startOf(asked: Promise<Streams>, id: string, t: number): Promise
 
 /** Subtitles for want: those chosen for it (a returning video), else the last chosen language if the video has it */
 function captionFor(s: Streams, want: Want): Caption | null {
+    // (none asked for: the list is not made; with a video's translations it held a start's thread 10-30 ms)
+    if (want.caption === undefined && !prefs().captions) {
+        return null;
+    }
     var all = captionList(s);
     return want.caption !== undefined ? all.filter(function (one) { return one.name === want.caption; })[0] || null :
         captionIn(all, prefs().captions);
@@ -4467,14 +4783,6 @@ export function menuFormats(videos: Format[], playing: Format | null): Format[] 
     var mine = preferred(videos);
     return !playing || mine.indexOf(playing) >= 0 ? mine : videos;
 }
-
-/** A track's format to play: the stable-volume version if on and available; its stereo AAC once Dolby failed here */
-function audioOf(track: AudioTrack): Format {
-    return prefs().stableVolume && track.stable ? track.stable : noDolby && track.stereo ? track.stereo : track.format;
-}
-
-/** Dolby Digital failed in this run of the app (the decoder would not take it): AAC from then on */
-var noDolby = false;
 
 /** The screen rate (Hz) for a video's frame rate: one each frame shows evenly at (25 and 30 fps at 50 and 60 Hz, as a
  * TV's 25 or 30 Hz modes are rare) */

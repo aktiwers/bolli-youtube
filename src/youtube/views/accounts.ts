@@ -3,14 +3,15 @@
 // and "Guest" at the end. Left/Right move along it (the row scrolls to keep the focus in view, as
 // Subscriptions' channels do); OK on an account switches to it (on the current one: back), on
 // Add account opens the app's sign-in, on Guest watches signed out (as YouTube's "Watch as guest"). Accounts show from storage at once, then as YouTube
-// names them now (api/accounts.ts; redrawn only on change). Styled by the theme (by-who).
+// names them now (api/accounts.ts; redrawn only on change). Styled by the theme (by-who), or in YouTube's dark look of
+// its own (setDark).
 
-import { h, setShown, setSrc, setText } from '../core/dom.js';
+import { h, setShown, setSrc, setText, toggleClass } from '../core/dom.js';
 import { tr } from '../core/i18n.js';
 import { View } from '../core/view.js';
 import { keptProfiles, Profile, profiles } from '../api/accounts.js';
 import { guestChosen } from '../api/youtube.js';
-import { icon } from '../ui/icons.js';
+import { icon, setIconIn } from '../ui/icons.js';
 import { Pills } from '../ui/pills.js';
 import { metrics } from '../ui/theme.js';
 
@@ -26,14 +27,27 @@ export class AccountsView implements View {
     private list: Profile[] = [];
     private drawn: string | null = null;
     private focusKey: string | null = null;
+    /** In YouTube's dark look of its own (setDark), and the icons drawn in it (Add account's, Guest's: their names) */
+    private dark = false;
+    private icons: { el: HTMLElement; name: string }[] = [];
 
     /** pick: an account chosen; add: Add account; guest: Guest (current: it is already) */
     constructor(private pick: (p: Profile) => void, private add: () => void, private guest: (current: boolean) => void) {
         this.el = h('div', 'by-who');
+        // (its dark look's pointer rules stand under it: ui/theme.ts useWhoDark)
+        this.el.id = 'by-who';
         setShown(this.el, false);
         this.el.appendChild(h('div', 'by-who-title', tr('Who\'s watching?')));
         this.row = h('div', 'by-who-row');
         this.el.appendChild(this.row);
+    }
+
+    /** In YouTube's dark look of its own (on: by-who-dark, made from the dark sheets: ui/theme.ts useWhoDark; its icons
+     * filled whatever the style chosen), or in the page's look */
+    setDark(on: boolean): void {
+        this.dark = on;
+        toggleClass(this.el, 'by-who-dark', on);
+        this.icons.forEach(function (i) { setIconIn(i.el, i.name, on); });
     }
 
     /** Told when it shows (true) or hides (main.ts: the look it is drawn in) */
@@ -89,6 +103,7 @@ export class AccountsView implements View {
         this.drawn = drawn;
         this.list = list;
         this.row.innerHTML = '';
+        this.icons = [];
         this.pills.clear();
         list.forEach(function (p) {
             var el = h('div', 'by-who-item');
@@ -115,7 +130,11 @@ export class AccountsView implements View {
     /** An item after the accounts: an icon in a circle and a label */
     private tile(iconName: string, label: string, act: () => void): void {
         var el = h('div', 'by-who-item by-who-add');
-        el.appendChild(h('div', 'by-who-picture')).appendChild(icon(iconName, 'by-who-plus'));
+        var mark = el.appendChild(h('div', 'by-who-picture')).appendChild(icon(iconName, 'by-who-plus')) as HTMLElement;
+        this.icons.push({ el: mark, name: iconName });
+        if (this.dark) {
+            setIconIn(mark, iconName, true);
+        }
         el.appendChild(h('div', 'by-who-name', label));
         this.row.appendChild(this.pills.add(el, act));
     }

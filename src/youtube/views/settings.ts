@@ -32,21 +32,21 @@ import { ALWAYS, audioLanguages, languageName, offeredLanguages } from '../api/l
 import { CAPTION_SIZES, Choice, Choices, ChoiceSetting, HIGHEST, prefDefault, prefs, Prefs, setNames, setPref, Value } from '../api/prefs.js';
 import { keyName, shortcutOf, shortcuts } from '../api/shortcuts.js';
 import { PARTS } from '../api/sponsorblock.js';
-import { codecPlays } from '../api/streams.js';
-import { hasVersionCheck, newerVersion } from '../api/version-check.js';
+import { codecPlays, soundName, soundPlays, SOUNDS } from '../api/streams.js';
+import { appVersion, checkAgain, hasVersionCheck, newerVersion } from '../api/version-check.js';
 import { apply, askToClear } from '../ui/account.js';
 import { choiceButton, choiceTile } from '../ui/choice-button.js';
 import { keyboardFor, recentWith } from '../ui/keyboard-languages.js';
 import { LanguagePicker } from '../ui/language-picker.js';
 import { ADD, customOf, FULL, NOT_KEPT, removeCustomLogo } from '../ui/custom-logos.js';
 import { APP_NAME, hasHomeLogos, hasHomeScreen, homeIconChoices, homeLogoPicture, homeName, NO_CHANNEL, NO_ENTRY, NO_FILE,
-    NO_ROOT, onHomeRefused, setHomeIcon, setHomeName, shownHomeIcon, takeCustomIcon } from '../ui/home-screen.js';
+    NO_ROOT, oneLine, onHomeRefused, setHomeIcon, setHomeName, shownHomeIcon, takeCustomIcon } from '../ui/home-screen.js';
 import { ACCOUNT, chooseLogo, drawLogo, logoChoices, logoFile, LOGOS, shownLogo, takeAccountLogo, takeCustomLogo } from '../ui/logo.js';
 import { TextPage } from '../ui/text-page.js';
 import { CAPTION_STYLES } from '../player/captions.js';
 import { ChatSettings, chatSummary } from '../player/chat-settings.js';
 import { Question } from '../ui/question.js';
-import { NOT_PICTURE, TOO_BIG, TOO_LARGE } from '../ui/pictures.js';
+import { NOT_PICTURE, TOO_BIG, TOO_LARGE, TOO_LARGE_BY_ADDRESS } from '../ui/pictures.js';
 import { PROBLEM, toast } from '../ui/toast.js';
 import { screenOff } from '../ui/screen-off.js';
 import { LOADING_SIGNS } from '../ui/signs.js';
@@ -300,7 +300,8 @@ function versionCheck(): Setting {
         { value: 'notify', name: tr('Notify me'), note: tr('a notice at most once a week while a newer version is out. The app sends its version, the webOS or Android version, and how many days ago it last asked: nothing about you or your TV') },
         { value: 'quiet', name: tr('No notice'), note: tr('the app still asks once a day, and says that the notice is off. A newer version shows only in Settings › About') },
         { value: 'off', name: tr('Off'), note: tr('the app asks nothing') }
-    ]);
+    // (a look armed anew: one set Off at the start had none left, so turned on it asked nothing until the next start)
+    ], checkAgain);
 }
 
 /** A setting that opens a page of its own (open): its one choice the page's name, note() saying how it is set */
@@ -383,7 +384,21 @@ export function codecChoices(): Choice[] {
         { value: 'av1', name: 'AV1', note: without },
         { value: 'h264', name: 'H.264', note: tr('up to 1080p only, also when the video has more; a video without it plays as with Auto') }
     ].map(function (c) {
-        return codecPlays(c.value) ? c : { value: c.value, name: c.name, note: tr('this TV does not play it: videos play as with Auto') };
+        return codecPlays(c.value) ? c : { value: c.value, name: c.name, note: tr('this TV cannot play it'), off: true };
+    }));
+}
+
+/** Audio codec's choices: Auto, then every sound YouTube has (api/streams.ts SOUNDS); one this device does not play
+ * (soundPlays) shown greyed, not to be chosen. Surround comes only with videos fetched by SABR: chosen with Streams by
+ * SABR off, every video is fetched so (api/streams.ts signedInFirst: which have it is not known before), as its note
+ * says */
+export function soundChoices(): Choice[] {
+    var without = tr('a video without it plays as with Auto');
+    var surround = prefs().sabr ? tr('surround sound; a video without it plays with AAC') :
+        tr('requires SABR: only SABR has this sound, so while it is chosen videos are fetched by SABR, which starts a bit slower; a video without it plays with AAC');
+    return ([{ value: 'auto', name: tr('Auto'), note: tr('Dolby Digital 5.1 where a video has it, else AAC') }] as Choice[]).concat(SOUNDS.map(function (sound) {
+        return !soundPlays(sound) ? { value: sound, name: soundName(sound), note: tr('this TV cannot play it'), off: true } :
+            { value: sound, name: soundName(sound), note: sound === 'aac' || sound === 'opus' ? without : surround };
     }));
 }
 
@@ -657,6 +672,7 @@ function refused(e: Error, url: string): string {
     return why === NOT_PICTURE ? tr('That address is not a picture. Use the address of a PNG, JPEG or WebP picture.') :
         why === TOO_BIG ? tr('That picture is too big (2 MB at most).') :
         why === TOO_LARGE ? tr('That picture is too large (4096 × 4096 pixels at most).') :
+        why === TOO_LARGE_BY_ADDRESS ? tr('That picture is too large for its site: it lets the app show it but not shrink it, so 1024 × 1024 pixels at most. A smaller picture, or the same from another site, works.') :
         why === NO_FILE ? tr('This TV does not let the app save a logo for the home screen') :
         why === NO_CHANNEL ? tr('This TV does not let the app change its logo, name or colour on the home screen. A rooted TV with the Homebrew Channel does.') :
         why === NO_ROOT ? tr('This TV does not let the app change its logo, name or colour on the home screen. The Homebrew Channel on it has no root access.') :
@@ -729,6 +745,7 @@ function bolli(pages: StartPage[], more: (pref: LanguagePref) => void, chat: () 
                 { value: 480, name: '480p', note: tr('or the closest below it') }
             ]),
             pref(tr('Video codec'), tr('The codec videos start in, chosen before the quality'), pic('clear_search_history'), 'codec', codecChoices),
+            pref(tr('Audio codec'), tr('The sound videos play with, where they have it'), pic('clear_search_history'), 'sound', soundChoices),
             // Its picture drawn for the app, as Most replayed's
             pref(tr('Pause on chapters'), tr('Up in a video shows its chapters to pick from'), pic('clear_search_history'), 'chaptersPause',
                 onOff(tr('the video waits while you pick'), tr('the video plays on while you pick'))),
@@ -876,7 +893,7 @@ function about(): Setting {
     return { label: tr('About'), summary: tr('Bolli YouTube, a light YouTube app for TVs'), picture: logoFile(LOGOS[0]), info: function () {
         var newer = newerVersion();
         return [
-            tr('Version {1}', document.documentElement.getAttribute('data-version') || ''),
+            tr('Version {1}', appVersion()),
             newer ? tr('Version {1} is out', newer) : '',
             !newer ? '' : android() ? tr('Download it from GitHub') : tr('Update it in the Homebrew Channel'),
             where ? tr('On {1}', where) : '',
@@ -1422,6 +1439,10 @@ export class SettingsView implements View {
                 break;
             case KEY.OK:
                 var chosen = this.setting();
+                // (greyed: not to be chosen, its note says why)
+                if (this.choices[this.button].off) {
+                    break;
+                }
                 chosen.choices!.choose(this.choices[this.button].value);
                 if (chosen.redraw) {
                     this.drawPanel(true);
@@ -1490,8 +1511,7 @@ export class SettingsView implements View {
      * makes it a custom logo, the one chosen once it is in; else one line says why */
     private pictureAddress(take: (url: string) => Promise<unknown>): void {
         var self = this;
-        this.typing = this.typing || new TextPage(this.el);
-        this.typing.open(tr('Picture address'), 'https://', false, function (text) {
+        this.typingPage().open(tr('Picture address'), 'https://', false, function (text) {
             var url = addressTyped(text);
             if (url) {
                 var keys = self.pressed;
@@ -1508,10 +1528,21 @@ export class SettingsView implements View {
         if (e) {
             toast(refused(e, url || ''), undefined, PROBLEM);
         }
+        this.redrawn(!toSet);
+    }
+
+    /** Something chosen on a page over Settings (or that took a moment) is in: the right side drawn anew where it
+     * shows (keep: as drawPanel), and the change told */
+    private redrawn(keep?: boolean): void {
         if (this.shown && !this.openPage()) {
-            this.drawPanel(!toSet);
+            this.drawPanel(keep);
         }
         this.changed();
+    }
+
+    /** The page to type on, made the first time it is needed */
+    private typingPage(): TextPage {
+        return this.typing = this.typing || new TextPage(this.el);
     }
 
     /** The focused choice if OK held on it removes it (a custom logo's tile), else null */
@@ -1564,13 +1595,9 @@ export class SettingsView implements View {
     /** The home screen name typed (the one set, else the app's own): taken at the tick, none: the app's own again */
     private namePage(): void {
         var self = this;
-        this.typing = this.typing || new TextPage(this.el);
-        this.typing.open(tr('Home screen name'), prefs().homeName || APP_NAME, true, function (name) {
+        this.typingPage().open(tr('Home screen name'), prefs().homeName || APP_NAME, true, function (name) {
             setHomeName(name);
-            if (self.shown && !self.openPage()) {
-                self.drawPanel();
-            }
-            self.changed();
+            self.redrawn();
         });
     }
 
@@ -1578,19 +1605,15 @@ export class SettingsView implements View {
      * built-in ones (Theme, Who's watching) */
     private saveLook(): void {
         var self = this;
-        this.typing = this.typing || new TextPage(this.el);
-        this.typing.open(tr('Theme name'), '', true, function (typed) {
-            var name = typed.replace(/\s+/g, ' ').replace(/^ | $/g, '').slice(0, THEME_NAME_MAX);
+        this.typingPage().open(tr('Theme name'), '', true, function (typed) {
+            var name = oneLine(typed, THEME_NAME_MAX);
             // (saved: it is the look set now, no longer Custom, which would only repeat it; its logo and loading sign, the
             // ones shown, on top as when it is chosen: one chosen by hand after it makes it Custom. One store write)
             if (name) {
                 var parts = lookParts();
                 setLook(parts, { savedLooks: savedLooks().concat([{ id: SAVED + Date.now(), name: name, parts: parts }]), customLook: null });
             }
-            if (self.shown && !self.openPage()) {
-                self.drawPanel(true);
-            }
-            self.changed();
+            self.redrawn(true);
         });
     }
 
@@ -1599,8 +1622,7 @@ export class SettingsView implements View {
     private openColours(mode: ColourMode): void {
         var self = this;
         this.colours = this.colours || new ColourPage(this.el, function () {
-            self.typing = self.typing || new TextPage(self.el);
-            return self.typing;
+            return self.typingPage();
         });
         this.colours.open(mode, this.overApp());
     }

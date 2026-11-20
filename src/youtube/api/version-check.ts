@@ -21,7 +21,7 @@ import { getJson } from '../core/http.js';
 import { lunaAsk } from '../core/luna.js';
 import { android, oldEngine } from '../core/platform.js';
 import { load, save } from '../core/store.js';
-import { pad2 } from '../core/time.js';
+import { utcDate } from '../core/time.js';
 import { prefs } from './prefs.js';
 
 /** The service's address, without a path or a slash at its end (cloud/version-check/README.md); '': the app asks
@@ -86,7 +86,7 @@ function kept(): Kept {
 }
 
 /** The running app's version, as main.ts wrote it on the page */
-function running(): string {
+export function appVersion(): string {
     return document.documentElement.getAttribute('data-version') || '';
 }
 
@@ -141,7 +141,7 @@ function osVersion(): Promise<string> {
 
 /** UTC's date of an instant, as the service counts its days: YYYY-MM-DD */
 export function dayOf(now: Date): string {
-    return now.getUTCFullYear() + '-' + pad2(now.getUTCMonth() + 1) + '-' + pad2(now.getUTCDate());
+    return utcDate(now.getTime());
 }
 
 /** A date (YYYY-MM-DD) as a count of days, from its year, month and day alone: a day of 23 or 25 hours is one day
@@ -184,7 +184,7 @@ export function newerVersion(): string {
         return '';
     }
     var latest = named !== null ? named : kept().latest;
-    return isNewer(latest, running()) ? latest : '';
+    return isNewer(latest, appVersion()) ? latest : '';
 }
 
 /** Asks the service if a check is due: there is an address, checking is not off, version (the running app's) is one
@@ -284,7 +284,7 @@ export function checkVersion(busy: () => boolean, tell: (version: string) => voi
             soon(AGAIN_MS);
             return;
         }
-        checkNow(running(), new Date()).then(function () {
+        checkNow(appVersion(), new Date()).then(function () {
             var version = newerVersion();
             var was = kept();
             var today = dayOf(new Date());

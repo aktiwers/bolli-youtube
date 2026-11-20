@@ -19,7 +19,7 @@
 import { fakedRequest } from '../core/fake-net.js';
 import { Format } from '../api/streams.js';
 import { framesFrom, parseCues, parseSidx, Segment, trackScale } from './containers.js';
-import { BEHIND_MB, BEHIND_S, bufferedEnd, decodeLoad, Engine, hopHole, jumpTarget, KEYFRAME_IN, LIFT_END_S, LIFT_MS, LIFT_S, MB, QUICK_MIN_S, QUICK_SPEED, QUICK_WAIT_MS, RETRIES, roomAhead, seekNudged, Skip, skipLanding, SPEED_BYTES, STILL_AHEAD, TICK_MS, TIMEOUT_MS, WINDOW_S, windowFrom } from './engine.js';
+import { BEHIND_MB, BEHIND_S, bufferedEnd, decodeLoad, Engine, hopHole, jumpTarget, KEYFRAME_IN, LIFT_END_S, LIFT_MS, LIFT_S, MB, QUICK_MIN_S, QUICK_SPEED, QUICK_WAIT_MS, RETRIES, roomAhead, seekTold, Skip, skipLanding, SPEED_BYTES, STILL_AHEAD, TICK_MS, TIMEOUT_MS, WINDOW_S, windowFrom } from './engine.js';
 import { onLost, onNetwork } from './networks.js';
 import { keepPipeline, openPipeline, Pipeline, setLength, setLengthSoon, spoilingFail } from './pipeline.js';
 import { note, ranges } from './play-log.js';
@@ -445,6 +445,10 @@ export class DashEngine implements Engine {
     private waits = 0;
     private waitTimer = 0;
     private soughtAt = 0;
+    /** A start's seek on a kept pipeline is still to come: the video's length is told right after it (open, settle) */
+    private lengthDue = false;
+    /** Where a start that seeks begins, until its seek is asked (s; -1: none, or asked) */
+    private startDue = -1;
     /** Count of seeks asked */
     private sought = 0;
     /** When the last seek ended (ms; 0: not yet) */
@@ -750,7 +754,8 @@ export class DashEngine implements Engine {
     }
 
     seekTarget(): number {
-        return this.pending;
+        // (a start's own seek counts from the load on: until it is asked the video stands where the last one did)
+        return this.pending >= 0 ? this.pending : this.startDue;
     }
 
     /** The real length while the TV is told a window's (a seek's, and a start's until its picture has moved) or
@@ -807,8 +812,10 @@ export class DashEngine implements Engine {
                 self.early(startAt);
             }
         }, function () { return undefined; });
-        // Reuse the previous video's pipeline if it takes these formats, else open a fresh one
-        var opened = openPipeline(this.video, [video.mime, audio.mime]).then(function (pipe) {
+        // Reuse the previous video's pipeline if it takes these formats, else open a fresh one (a start that seeks
+        // does so itself: no seek by the pipeline before it, open)
+        this.startDue = startAt > 0 ? startAt : -1;
+        var opened = openPipeline(this.video, [video.mime, audio.mime], startAt > 0).then(function (pipe) {
             self.pipe = pipe;
             // Stopped meanwhile: keep it for the next video
             if (self.stopped) {
@@ -1184,8 +1191,15 @@ export class DashEngine implements Engine {
                     self.pump(track);
                 }
             };
-            // Last: a kept pipeline's longer length shortened removes the data past it, the buffers updating meanwhile
-            setLength(pipe, this.window || this.length);
+            // Last: a kept pipeline's longer length shortened removes the data past it, the buffers updating meanwhile.
+            // A start that seeks on a kept pipeline (its metadata there) has the length told after its seek (settle):
+            // the video stands where the last one did until then, maybe past this one's window, and the one seek is
+            // all the TV gets for this start (after a seek back to the start and this one right behind it, it showed
+            // one start in three 0.7 s late)
+            this.lengthDue = startAt > 0 && this.video.readyState >= 1;
+            if (!this.lengthDue) {
+                setLength(pipe, this.window || this.length);
+            }
         } catch (e) {
             this.onFail('media');
             return;
@@ -1296,7 +1310,13 @@ export class DashEngine implements Engine {
         this.soughtAt = Date.now();
         this.sought++;
         this.seekedAt = 0;
-        this.stuckTimer = seekNudged(this.video, t);
+        // (a place past the length the last video left: the browser would cut the seek to that length. Told first
+        // then: the video stands within that length, below this one's)
+        // (a start's own on a kept pipeline: its length told with it, engine.ts seekTold)
+        var own = this.lengthDue;
+        this.lengthDue = false;
+        this.stuckTimer = seekTold(this.video, this.pipe as Pipeline, t, own ? this.window || this.length : 0, own);
+        this.startDue = -1;
         // The length told after the seek is asked (the playhead, now the seek's target, lies within it)
         if (this.narrowing) {
             this.narrowing = false;

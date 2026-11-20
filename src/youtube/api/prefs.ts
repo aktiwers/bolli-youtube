@@ -2,6 +2,8 @@
 // skip: SponsorBlock categories to skip (api/sponsorblock.ts PARTS; empty: off).
 // quality: start height (0: Auto, HIGHEST: the most a video has).
 // codec: the video codec a start prefers (api/streams.ts preferred): 'auto', 'vp9', 'av1' or 'h264'.
+// sound: the audio codec videos play with where they have it (api/streams.ts audioOf): 'auto' or one of its SOUNDS.
+// voiceBoost: YouTube's Voice boost copy of a video's sound where it has one (signed-in streams), before stable volume.
 // preload: prepare the focused tile's video (player/preload.ts).
 // history: report watched videos to YouTube (api/stats.ts).
 // captions: subtitle language turned on by default ('' none).
@@ -19,7 +21,7 @@
 // applyLook). The old pureBlack (on: pure black) is read as '#000000'. sidebar: the rail's colour ('' as the background);
 // highlight: the focus's colour ('' YouTube's: white on a dark page, black on a light one); text: the main text's colour
 // ('' automatic: YouTube's, or pure white or black where that reads too little); sidebarText: 'on', the sidebar's names and
-// icons in that text too ('' the sidebar's own); font: '' Roboto, else one
+// icons in that text too ('' the sidebar's own); inputs: the colour of the places one types in ('' YouTube's greys); buttons: the buttons' ('' as the inputs); inputsStyle, buttonsStyle: '' solid, or 'fade', 'glow', 'blend'; font: '' Roboto, else one
 // of ui/theme.ts FONTS. icons: how the icons are drawn ('' filled, else one of ui/icons.ts ICON_STYLES); railIcons: the sidebar's
 // ('' as the others, else one of ui/rail-icons.ts RAIL_SETS). backgroundStyle, sidebarStyle: '' solid, or a still picture made from the colour ('fade', 'glow', 'blend';
 // the background also 'lines', 'dots': ui/theme.ts styleCss). colourRecent: the colours set lately in Settings › Theme › Colours, the last first (views/colour-page.ts).
@@ -62,12 +64,14 @@ export interface Prefs {
     startPage: string;
     quality: number;
     codec: 'auto' | 'vp9' | 'av1' | 'h264';
+    sound: 'auto' | 'aac' | 'opus' | 'aac51' | 'ac3' | 'eac3' | 'iamf';
     preload: boolean;
     history: boolean;
     autoplay: boolean;
     /** Seconds "Up next" counts down before autoplay (0: at once) */
     autoplayWait: number;
     stableVolume: boolean;
+    voiceBoost: boolean;
     /** Preview of the focused tile: 'off', 'muted' or 'sound' */
     previews: string;
     /** A channel's video plays in its banner while the focus rests on Play mix (as Previews says: with sound or without) */
@@ -170,6 +174,11 @@ export interface Prefs {
     /** The sidebar's names and icons take the text chosen too: 'on', or '' (the sidebar's own; Settings › Theme › Colours ›
      * Text's "Sidebar too") */
     sidebarText: string;
+    /** The colour of the places one types in (the search bars, the text fields), #rrggbb ('' YouTube's greys:
+     * ui/theme.ts inputRules) */
+    inputs: string;
+    /** The buttons' colour, #rrggbb ('' as the inputs) */
+    buttons: string;
     /** How the icons are drawn: '' filled (as YouTube's TV app), or one of ui/icons.ts ICON_STYLES */
     icons: string;
     /** The sidebar's icons: '' as the others (icons), or a set of its own (ui/rail-icons.ts RAIL_SETS) */
@@ -182,6 +191,9 @@ export interface Prefs {
     /** The background's and the sidebar's style: '' solid, or one of ui/theme.ts STYLES (SIDEBAR_STYLES) */
     backgroundStyle: string;
     sidebarStyle: string;
+    /** The inputs' and the buttons' style: '' solid, or one of ui/theme.ts SIDEBAR_STYLES */
+    inputsStyle: string;
+    buttonsStyle: string;
     /** "Who's watching?" (and the sign-in from it): in one of the looks of Settings › Theme › Theme (ui/theme.ts LOOKS,
      * by id), the same for everyone, or 'mine', this account's own (ui/theme.ts plainLook) */
     whoLook: string;
@@ -264,6 +276,8 @@ export interface Choice {
     round?: boolean;
     tile?: 'add' | 'none';
     removable?: boolean;
+    /** Shown but not to be chosen (greyed, OK does nothing): its note says why */
+    off?: boolean;
 }
 
 /** A setting's choices (views/settings.ts, also the player's settings list): list, isSet, choose; many: several can be
@@ -328,9 +342,9 @@ export var CAPTION_SIZES = (function (): number[] {
     return sizes.concat([175, 200]);
 })();
 
-var DEFAULTS: Prefs = { skip: ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'music_offtopic'], theme: 'youtube', startPage: 'home', quality: 0, codec: 'auto', preload: true, history: true, autoplay: true, autoplayWait: 10, stableVolume: false, previews: 'sound', channelVideo: true, captions: '', audioLanguage: '', captionStyle: 'words', captionSize: 100, captionLanguages: [], startSign: 'channel', startPicture: 'tile', sabr: false, pictures: 'sharpest', replays: true, dislikes: true, liveChat: true, chatMode: 'over', chatPosition: 'right', chatHeight: 'tall', chatBottom: 'ticker', chatSide: 'right', chatPicture: 'fit', chatBox: null, chatSize: 'normal', chatBackground: 'bubbles', chatTimes: false, chatAvatars: false, chatFade: 0,
+var DEFAULTS: Prefs = { skip: ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'music_offtopic'], theme: 'youtube', startPage: 'home', quality: 0, codec: 'auto', sound: 'auto', preload: true, history: true, autoplay: true, autoplayWait: 10, stableVolume: false, voiceBoost: false, previews: 'sound', channelVideo: true, captions: '', audioLanguage: '', captionStyle: 'words', captionSize: 100, captionLanguages: [], startSign: 'channel', startPicture: 'tile', sabr: false, pictures: 'sharpest', replays: true, dislikes: true, liveChat: true, chatMode: 'over', chatPosition: 'right', chatHeight: 'tall', chatBottom: 'ticker', chatSide: 'right', chatPicture: 'fit', chatBox: null, chatSize: 'normal', chatBackground: 'bubbles', chatTimes: false, chatAvatars: false, chatFade: 0,
     listLayout: 'stage', listPreview: 'sound', listAutoplay: true, listNumbers: 'charts', listDetails: true, listButtons: ['play', 'shuffle', 'repeat', 'save', 'shortcut'],
-    listCarryOn: true, listKeep: true, listNext: 0, listDown: 'row', listSide: 'over', videoClock: 'off', chaptersPause: false, quickJumps: true, background: '', sidebar: '', highlight: '', text: '', sidebarText: '', icons: '', railIcons: '', customLook: null, savedLooks: [], font: '', backgroundStyle: '', sidebarStyle: '', whoLook: 'dark', subsLayout: '', homeBig: false, subsRelevant: true, logo: 'red', lookLogo: '', lookSign: '', homeIcon: 'red', homeName: '', homeColor: '', dearrow: '',
+    listCarryOn: true, listKeep: true, listNext: 0, listDown: 'row', listSide: 'over', videoClock: 'off', chaptersPause: false, quickJumps: true, background: '', sidebar: '', highlight: '', text: '', sidebarText: '', inputs: '', buttons: '', icons: '', railIcons: '', customLook: null, savedLooks: [], font: '', backgroundStyle: '', sidebarStyle: '', inputsStyle: '', buttonsStyle: '', whoLook: 'dark', subsLayout: '', homeBig: false, subsRelevant: true, logo: 'red', lookLogo: '', lookSign: '', homeIcon: 'red', homeName: '', homeColor: '', dearrow: '',
     dearrowOptions: ['thumbnails', 'frames', 'tidy'], keyboardRecent: [], colourRecent: [], shortcuts: SHORTCUTS,
     screenOff: 'iris', castWakes: false, screenWake: 'any', versionCheck: 'notify' };
 

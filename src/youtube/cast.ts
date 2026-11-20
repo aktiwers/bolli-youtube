@@ -29,6 +29,8 @@ import { OwnPlayer, Playing } from './player/own-player.js';
 /** LG's DIAL server endpoint for the YouTube app's additional data (also given at launch) */
 var DIAL_URL = 'http://localhost:18181/apps/YouTube/dial_data';
 var KEYS: { [name: string]: number } = { UP: KEY.UP, DOWN: KEY.DOWN, LEFT: KEY.LEFT, RIGHT: KEY.RIGHT, ENTER: KEY.OK, BACK: KEY.BACK };
+/** The watch page's volume button resting this long tells the phone its volume */
+var VOLUME_REST_MS = 300;
 /** When the phone's time differs from the player's by more than this, the player seeks there */
 var JUMP_S = 3;
 /** A queue the phone does not name: all its titles asked for at the cast only up to this many videos (one request each,
@@ -55,8 +57,8 @@ export class Cast {
     private extra = extraOf({});
     /** What the phone was told last: video (and its cpn), state, duration */
     private told = nothingTold();
-    private volume = 100;
-    private muted = false;
+    /** The phone is told the volume once the watch page's button rests (a held key: one message) */
+    private volumeTimer = 0;
     /** The phone's last commands (names, with their volume fields), for diagnosis on the TV */
     heard: string[] = [];
 
@@ -68,6 +70,12 @@ export class Cast {
         var self = this;
         this.lounge.onCommand = function (name, fields) { self.command(name, fields); };
         player.onChange = function () { self.changed(); };
+        player.onVolume = function () {
+            clearTimeout(self.volumeTimer);
+            if (self.remotes) {
+                self.volumeTimer = setTimeout(function () { self.tellVolume(); }, VOLUME_REST_MS) as unknown as number;
+            }
+        };
     }
 
     /** While video id's comments show, offers commenting on it from the phone (YouTube's hand-off, as its TV app does
@@ -227,16 +235,16 @@ export class Cast {
                 }
                 break;
             case 'setVolume':
-                this.volume = f.delta ? this.volume + (+f.delta || 0) : f.volume !== undefined ? +f.volume || 0 : this.volume;
-                this.volume = Math.max(0, Math.min(100, this.volume));
-                this.muted = f.muted !== undefined ? f.muted === 'true' : this.muted;
-                p.setVolume(this.volume, this.muted, true);
+                // The phone names the volume it wants and its change since the volume it last heard of (delta), and
+                // sends some twice: the volume named is taken (a delta added per command counted its steps several
+                // times: the level ran ahead of the phone's and moved in jumps); a delta alone is added
+                p.setVolume(f.volume !== undefined ? +f.volume || 0 : p.volumeLevel + (+f.delta || 0),
+                    f.muted !== undefined ? f.muted === 'true' : p.volumeMuted, true);
                 this.tellVolume();
                 break;
             case 'mute':
             case 'unMute':
-                this.muted = name === 'mute';
-                p.setVolume(this.volume, this.muted, true);
+                p.setVolume(p.volumeLevel, name === 'mute', true);
                 this.tellVolume();
                 break;
             case 'getVolume':
@@ -521,7 +529,7 @@ export class Cast {
     }
 
     private tellVolume(): void {
-        this.lounge.send('onVolumeChanged', { volume: String(this.volume), muted: String(this.muted) });
+        this.lounge.send('onVolumeChanged', { volume: String(this.player.volumeLevel), muted: String(this.player.volumeMuted) });
     }
 
     private tellSubtitles(): void {

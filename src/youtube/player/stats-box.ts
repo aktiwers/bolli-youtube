@@ -18,7 +18,13 @@ export interface StatsOf {
     /** The video's best available format */
     best: Format | null;
     audioName: string;
+    /** The audio's kind as viewers name it ("AAC", "Dolby Digital 5.1"; '' not known) */
+    sound: string;
     stable: boolean;
+    /** YouTube's Voice boost copy plays */
+    boost: boolean;
+    /** The streams are the signed-in ones (SABR), else a guest's */
+    sabr: boolean;
 }
 
 export class StatsBox {
@@ -67,13 +73,13 @@ export class StatsBox {
         var kbps = function (f: Format | null): number { return f ? Math.round(f.bitrate / 1000) : 0; };
         this.writtenAt = Date.now();
         (this.el as HTMLElement).textContent = [
-            'Video ID: ' + s.id,
+            'Video ID: ' + s.id + ' (' + (s.sabr ? 'signed in, SABR' : 'as a guest') + ')',
             'App UI / Frames: ' + window.innerWidth + 'x' + window.innerHeight + ' / ' + ((v.webkitDroppedFrameCount || 0) - this.dropped) + ' dropped of ' + ((v.webkitDecodedFrameCount || 0) - this.decoded),
             'Current / Optimal Res: ' + v.videoWidth + 'x' + v.videoHeight + ' (' + res(s.video) + ') / ' + res(s.best),
             'Codecs: ' + codec(s.video) + ' / ' + codec(s.audio),
             'Bitrate: ' + kbps(s.video) + ' kbps / ' + kbps(s.audio) + ' kbps',
             'Buffer Health: ' + (bufferedEnd(v.buffered, v.currentTime) - v.currentTime).toFixed(2) + ' s',
-            'Audio: ' + s.audioName + (s.stable ? ', stable volume' : '')
+            'Audio: ' + (s.sound ? s.sound + ', ' : '') + s.audioName + (s.stable ? ', stable volume' : '') + (s.boost ? ', voice boost' : '')
         ].join('\n');
     }
 }

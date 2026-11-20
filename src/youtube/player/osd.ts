@@ -228,11 +228,11 @@ export class PlayerOsd {
         setText(this.lineText, text);
     }
 
-    /** The playing picture's codec ("VP9"), height ("1080p") and frame rate, each when known; empty while nothing is
-     * decoded */
-    setQuality(height: number, frameRate: number, codec?: string): void {
+    /** The playing picture's codec ("VP9"), height ("1080p") and frame rate, each when known, and "SABR" where its
+     * streams are the signed-in ones (sabr); empty while nothing is decoded */
+    setQuality(height: number, frameRate: number, codec?: string, sabr?: boolean): void {
         // When empty the tag hides itself (the theme's :empty rule)
-        setText(this.quality, height ? (codec ? codec + '  ·  ' : '') + height + 'p' + (frameRate ? '  ·  ' + frameRate + ' fps' : '') : '');
+        setText(this.quality, height ? (codec ? codec + '  ·  ' : '') + height + 'p' + (frameRate ? '  ·  ' + frameRate + ' fps' : '') + (sabr ? '  ·  SABR' : '') : '');
     }
 
     setMessage(text: string): void {

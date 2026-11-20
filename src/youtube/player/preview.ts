@@ -30,7 +30,7 @@ export interface PreviewWay extends PeekLook {
     ended?: () => void;
 }
 
-import { Format, kindOf, pickFormat, streams, Streams } from '../api/streams.js';
+import { firstStreams, Format, kindOf, pickFormat, Streams } from '../api/streams.js';
 import { OwnPlayer, PeekLook, startOf } from './own-player.js';
 import { android } from '../core/platform.js';
 import { pictureKind, replacesPipeline } from './pipeline.js';
@@ -114,11 +114,14 @@ export class TilePreview {
             }
             return;
         }
-        startOf(streams(id), id, 0).then(function (start) {
+        // (the streams a start would take: signed in where Settings ask so, or the sound needs it, so that OK takes the
+        // preview over with that sound)
+        startOf(firstStreams(id), id, 0).then(function (start) {
             var s = start.streams;
             var chosen = start.formats;
-            // (the audio a start would take: Settings › Audio language's, so the player taking this preview over plays on in it)
-            var format = chosen && shownFormat(s, chosen.video, chosen.track.format.mime, !android());
+            // (the audio a start would take: Settings › Audio language's, in the sound that plays, so the player taking
+            // this preview over plays on in it)
+            var format = chosen && shownFormat(s, chosen.video, chosen.audio.mime, !android());
             // Only if the tile is still in the page (its row may have been rebuilt meanwhile)
             if (gen !== self.gen || !chosen || !format || !document.body.contains(frame)) {
                 return;
@@ -139,7 +142,7 @@ export class TilePreview {
                     self.limit(left > 0 ? Math.min(PREVIEW_MS, left) : PREVIEW_MS);
                 }
             };
-            if (replacesPipeline([format.mime, chosen.track.format.mime])) {
+            if (replacesPipeline([format.mime, chosen.audio.mime])) {
                 self.timer = setTimeout(begin, OTHER_KIND_MS) as unknown as number;
             } else {
                 begin();
@@ -165,8 +168,15 @@ export class TilePreview {
         return this.player.peekTaken(id);
     }
 
-    /** Where the last preview of id stopped (s), if it played long enough and stopped recently (0: none) */
+    /** Where the preview of id is (s): the one playing, else where the last one stopped if it played long enough and
+     * stopped recently (0: none). A start goes on from there where the video's resume point lies before it: the
+     * preview is the latest it was watched (from the resume point behind it, the start went back to it, a few
+     * seconds before the preview's place: often its first keyframe, as if started over) */
     from(id: string): number {
+        var playing = this.player.peekAt(id);
+        if (playing > 0) {
+            return playing;
+        }
         var left = this.left;
         return left && left.id === id && Date.now() - left.at < GO_ON_MS && left.t >= GO_ON_S ? left.t : 0;
     }

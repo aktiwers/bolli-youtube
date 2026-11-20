@@ -16,6 +16,8 @@
 /* The own player (player/own-player.ts): over everything while a video plays, its info bar (base.css .osd) over the video */
 .by-tv-wait { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; z-index: 45; background: #000; }
 .by-player { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; z-index: 40; background: #000; }
+/* While looks are tried (main.ts trialsOut): the sections out of view, and the player with no video, out of the display */
+.by-app--trying .by-section:not(.by-settings), .by-app--trying-player .by-player { display: none; }
 .by-player video { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
 /* Over the video until it moves, then faded out (own-player.ts uncoverOnMove): a video's thumbnail (cover crops the
    black bars of YouTube's 4:3 thumbnails; a preview's with the tile's corners; its background keeps the crop once the
@@ -166,7 +168,7 @@
 .by-question .by-settings-summary { white-space: pre-line; }
 
 /* The watch page (player/watch-page.ts) over its video: the theme places and draws its parts */
-.by-watch { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; overflow: hidden; }
+.by-watch { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; overflow: hidden; will-change: transform; }
 .by-watch-shade, .by-watch-dim, .by-watch-body { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; }
 .by-watch-top, .by-watch-controls, .by-watch-status { position: absolute; }
 .by-watch-times { position: relative; }
@@ -226,6 +228,16 @@
 .by-watch-center > * { pointer-events: auto; }
 .by-watch-button, .by-watch-group { position: relative; display: inline-block; vertical-align: top; box-sizing: border-box; }
 .by-watch-button svg { display: block; }
+/* The Sound panel over the speaker (watch-page.ts): faded in; the volume's level scaled and its knob carried by layers
+   of their own, there from the start (nothing laid out or drawn as it moves); a line with nothing to set is away */
+.by-watch-sound { position: absolute; z-index: 1; visibility: hidden; opacity: 0; -webkit-transition: opacity .15s ease, visibility 0s linear .15s; }
+.by-watch-sound--open { visibility: visible; opacity: 1; -webkit-transition: opacity .12s ease-out; }
+.by-watch-sound-line { position: relative; white-space: nowrap; overflow: hidden; }
+.by-watch-sound-line--off { display: none; }
+.by-watch-sound-value { float: right; }
+.by-watch-sound-track, .by-watch-sound-knob { position: absolute; }
+.by-watch-sound-fill { height: 100%; -webkit-transform-origin: 0 0; will-change: transform; }
+.by-watch-sound-at { position: absolute; left: 0; top: 0; width: 100%; height: 100%; will-change: transform; }
 .by-watch-avatar { overflow: hidden; }
 .by-watch-avatar-img { display: block; width: 100%; height: 100%; }
 .by-watch-related { position: absolute; left: 0; width: 1280px; }
@@ -325,8 +337,9 @@
 .by-volume { position: absolute; z-index: 7; display: -webkit-flex; display: flex; -webkit-align-items: center; align-items: center;
              visibility: hidden; opacity: 0; -webkit-transition: opacity .35s ease, visibility 0s linear .35s; }
 .by-volume--shown { visibility: visible; opacity: 1; -webkit-transition: opacity .2s ease-out; }
-.by-volume-track { overflow: hidden; }
-.by-volume-fill { height: 100%; }
+/* The level is scaled on a layer of its own, there from the start: nothing laid out or drawn as it moves (a width
+   that glides is laid out and drawn per frame by the page, which a playing video keeps busy) */
+.by-volume-fill { height: 100%; -webkit-transform-origin: 0 0; will-change: transform; }
 .by-peek-ring { position: absolute; display: none; z-index: 41; }
 .by-peek-ring.by-peek-ring--on { display: block; }
 

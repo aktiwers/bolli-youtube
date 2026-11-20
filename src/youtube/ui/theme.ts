@@ -12,7 +12,7 @@ import { h } from '../core/dom.js';
 import { tr } from '../core/i18n.js';
 import { Prefs, prefs, setPref, setPrefs } from '../api/prefs.js';
 import { contrast, fromLinear, hsl, luminance, mix, rgb, toHsl, toLinear } from './colours.js';
-import { HIGHLIGHT_RULES, RAIL_TEXT_RULES, TEXT_RULES } from './highlight.gen.js';
+import { BUTTON_RULES, HIGHLIGHT_RULES, INPUT_RULES, RAIL_TEXT_RULES, TEXT_RULES, WHO_FONT, WHO_RULES } from './highlight.gen.js';
 import { ICON_STYLES, setIconStyle, setRailSet } from './icons.js';
 import { logoValue, showLogo } from './logo.js';
 import { RAIL_SETS } from './rail-icons.js';
@@ -168,14 +168,17 @@ export var YOUTUBE_LIGHT = '#ffffff';
  * Roboto, or one of FONTS), its icons' style ('' filled, or one of ui/icons.ts ICON_STYLES), the sidebar's icons ('' as
  * the others, or one of ui/rail-icons.ts RAIL_SETS), and the background's and
  * the sidebar's style ('' solid, or one of STYLES). The text's colour: '' automatic (autoText); whether the sidebar's
- * names and icons take it too (sidebarText: 'on', or '' the sidebar's own). Settings › Theme's Logo (ui/logo.ts
- * logoValue: a built-in one's id, the account's picture, a custom one, none) and Loading spinner (one of ui/spinner.ts
- * LOADING_SIGNS): a look shows these on top of the account's own where it names them, never setting them (ON_TOP) */
-export type LookPart = 'background' | 'sidebar' | 'highlight' | 'text' | 'font' | 'icons' | 'railIcons' | 'backgroundStyle' | 'sidebarStyle' |
-    'sidebarText' | 'logo' | 'startSign';
+ * names and icons take it too (sidebarText: 'on', or '' the sidebar's own). The inputs' (the places one types in:
+ * inputRules): '' YouTube's greys; the buttons': '' as the inputs; the inputs' and the buttons' style ('' solid, or one of
+ * SIDEBAR_STYLES: what stays right on a small round box). Settings › Theme's Logo (ui/logo.ts logoValue: a built-in one's id, the
+ * account's picture, a custom one, none) and Loading spinner (one of ui/spinner.ts LOADING_SIGNS): a look shows these
+ * on top of the account's own where it names them, never setting them (ON_TOP) */
+export type LookPart = 'background' | 'sidebar' | 'highlight' | 'text' | 'inputs' | 'buttons' | 'inputsStyle' | 'buttonsStyle' | 'font' | 'icons' | 'railIcons' | 'backgroundStyle' |
+    'sidebarStyle' | 'sidebarText' | 'logo' | 'startSign';
 
 /** The styles a background can have besides solid (Settings › Theme › Colours), each a still picture made from its
- * colour (styleCss); the sidebar's: those that stay right when its strip is stretched open (no pattern) */
+ * colour (styleCss); the sidebar's, the inputs' and the buttons': those that stay right stretched open or on a small
+ * round box (no pattern) */
 export var STYLES = ['fade', 'glow', 'blend', 'lines', 'dots'];
 export var SIDEBAR_STYLES = ['fade', 'glow', 'blend'];
 
@@ -244,7 +247,7 @@ function valueOf(part: string, value: string | undefined): string {
     if (part === 'icons' || part === 'railIcons') {
         return value && (part === 'icons' ? ICON_STYLES : RAIL_SETS).indexOf(value) >= 0 ? value : '';
     }
-    if (part === 'backgroundStyle' || part === 'sidebarStyle') {
+    if (part === 'backgroundStyle' || part === 'sidebarStyle' || part === 'inputsStyle' || part === 'buttonsStyle') {
         return value && (part === 'backgroundStyle' ? STYLES : SIDEBAR_STYLES).indexOf(value) >= 0 ? value : '';
     }
     if (part === 'sidebarText') {
@@ -503,16 +506,46 @@ function highlightRules(color: string, page: string): string {
     return HIGHLIGHT_RULES.split('$H').join(color).split('$T').join(text).split('$G').join(grey).split('$B').join(page) + '\n';
 }
 
+/** Settings › Theme › Colours › Inputs or Buttons: their rules (made from the stylesheet: highlight.gen.ts INPUT_RULES,
+ * BUTTON_RULES) in color drawn in style (styleCss; '' solid), a state drawn lighter or darker by the stylesheet's step
+ * in that colour; the text on them the page's text where it reads there (4.5:1, on the style's part it reads least
+ * on), else the black or white that reads best; their grey text that text softened */
+function inputRules(rules: string, color: string, style: string, text: string): string {
+    var back = style ? weakest(style, color) : color;
+    var on = contrast(text, back) >= 4.5 ? text : textOn(back);
+    return rules.replace(/\$I([+-]\d+)?/g, function (all: string, by?: string) { return styleCss(style, by ? shifted(color, +by) : color, 0.5); })
+        .split('$T').join(on).split('$G').join(mix(on, back, 0.35)) + '\n';
+}
+
+/** The inputs' and buttons' own colour (none chosen): YouTube's grey on its page, dark or light */
+export function inputGrey(light: boolean): string {
+    return light ? '#f2f2f2' : '#303030';
+}
+
+/** color with by (-255..255) added to each of its channels; where that would pass black or white, the other way */
+function shifted(color: string, by: number): string {
+    var n = parseInt(color.slice(1), 16);
+    var channels = [n >> 16 & 255, n >> 8 & 255, n & 255];
+    var past = channels.some(function (c) { return c + by > 255 || c + by < 0; });
+    return '#' + channels.map(function (c) {
+        var v = Math.max(0, Math.min(255, c + (past ? -by : by)));
+        return (v < 16 ? '0' : '') + v.toString(16);
+    }).join('');
+}
+
 /** The look's rules, a style element each for the background's, the page's text's (its main text and its grey steps:
- * one list in the stylesheet's order, so that they win and lose among themselves as there), the sidebar's and the
- * highlight's, in that order (the later ones win where they meet), made together once one is needed; each made
- * anew only when what it is made from changed (rulesOf: a key per part; a preview changes one part, applyLook runs at
- * every one). Each rule names a class and none a tag alone:
+ * one list in the stylesheet's order, so that they win and lose among themselves as there), the sidebar's, the inputs',
+ * the buttons' and the highlight's, in that order (the later ones win where they meet; STYLE_ORDER), made together once
+ * one is needed; each made anew only when what it is made from changed (rulesOf: a key per part; a preview changes one
+ * part, applyLook runs at every one). Each rule names a class and none a tag alone:
  * then a change to one element's rules has the browser restyle only the elements of their classes; a rule for html
  * or body had it restyle the whole page at every change (1153 elements, ~50 ms on the TV, 2026-11-16). The page's
  * own colour and the font: pageLook */
 var partStyles: HTMLStyleElement[] = [];
-var rulesOf = ['', '', '', '', ''];
+var rulesOf = ['', '', '', '', '', '', ''];
+/** The parts' style elements in the page's order: the inputs' (5) and the buttons' (6) before the highlight's (3),
+ * which draws their focus */
+var STYLE_ORDER = [0, 1, 2, 5, 6, 3, 4];
 
 /** The rules of part i (partStyles' order), made by make ('' none) when its key ('' none) is not the one they were
  * made from */
@@ -525,9 +558,9 @@ function setRules(i: number, key: string, make: () => string): void {
         if (!key) {
             return;
         }
-        for (var n = 0; n < rulesOf.length; n++) {
-            partStyles.push(document.head.appendChild(h('style')) as HTMLStyleElement);
-        }
+        STYLE_ORDER.forEach(function (n) {
+            partStyles[n] = document.head.appendChild(h('style')) as HTMLStyleElement;
+        });
     }
     partStyles[i].textContent = key ? make() : '';
 }
@@ -544,7 +577,9 @@ export function setRailWidth(pill: number, left: number): void {
         var shade = pill + 2 * left;
         return '.by-rail--open .by-rail-item, .by-rail-divider { width: ' + pill + 'px; }\n' +
             '.by-rail--open .by-rail-shade { -webkit-transform: scaleX(' + (shade / metrics().rail.width).toFixed(4) + '); }\n' +
-            '.by-app--rail .bd-stage { -webkit-transform: translate3d(' + (shade - SHADE_OVER) + 'px, 0, 0); }\n';
+            // (an even push: on whole pixels of a screen 1.5 times the layout, as this TV's 1080p is; at a half pixel
+            // the screen behind cost ~11 ms of frames more per open or close, measured on the TV)
+            '.by-app--rail .bd-stage { -webkit-transform: translate3d(' + 2 * Math.round((shade - SHADE_OVER) / 2) + 'px, 0, 0); }\n';
     });
 }
 
@@ -599,15 +634,19 @@ function useFaces(id: string): void {
 }
 
 /** Gives the screens the chosen look: the theme's stylesheet or its light one (by the background), the page's colour or
- * style (pageLook), and the rules for a background, a sidebar, a text or a highlight that is not the stylesheet's own;
- * the page's text, its grey in steps from it (stepRules), whenever the text or the page is not YouTube's own (none for
- * YouTube's own dark or light look). At the start (applyTheme) the dark stylesheet
+ * style (pageLook), and the rules for a background, a sidebar, a text, a highlight, inputs or buttons that are not the
+ * stylesheet's own; the page's text, its grey in steps from it (stepRules), whenever the text or the page is not
+ * YouTube's own (none for YouTube's own dark or light look). At the start (applyTheme) the dark stylesheet
  * index.html names is swapped before anything shows: the TV's loading screen stays until the app has drawn (captured
  * 2026-11-15: light Home straight after it), and a script in index.html reading this before the app made every start
  * ~10-20 ms later */
 export function applyLook(): void {
     if (!current) {
         return;
+    }
+    if (filledFor !== prefs()) {
+        filledFor = prefs();
+        fillNewParts();
     }
     var color = shown('background') || YOUTUBE_DARK;
     var light = isLight(color);
@@ -646,6 +685,14 @@ export function applyLook(): void {
         return (sideOwn ? sidebarRules(sideColor, sideStyle) : '') + (sideText ? sidebarText(sideText, sideBack) : '');
     });
     setRules(3, focus ? focus + ' ' + color : '', function () { return highlightRules(focus, color); });
+    // (the inputs, and the buttons: their own colour, else the inputs'; each its own style, on the sheet's grey where
+    // only a style is chosen)
+    var inputsStyle = shown('inputsStyle');
+    var buttonsStyle = shown('buttonsStyle');
+    var inputs = shown('inputs') || (inputsStyle ? inputGrey(light) : '');
+    var buttons = shown('buttons') || shown('inputs') || (buttonsStyle ? inputGrey(light) : '');
+    setRules(5, inputs ? inputs + ' ' + inputsStyle + ' ' + text : '', function () { return inputRules(INPUT_RULES, inputs, inputsStyle, text); });
+    setRules(6, buttons ? buttons + ' ' + buttonsStyle + ' ' + text : '', function () { return inputRules(BUTTON_RULES, buttons, buttonsStyle, text); });
     // (the open sidebar fitted to its names again where what sizes them changed: the font, or a sidebar of its own
     // colour, whose entries stand further left)
     var railKey = font + ' ' + sideOwn;
@@ -659,6 +706,29 @@ export function applyLook(): void {
     // is not the one drawn (ui/logo.ts showLogo); at the start, before anything draws it, nothing. Who's watching
     // (plain) leaves it as the account has it)
     showLogo();
+}
+
+/** The settings the newer parts were filled in for (fillNewParts: once for each account's, as they are read) */
+var filledFor: Prefs | null = null;
+
+/** The parts added since a look was chosen (Inputs and Buttons and their styles, 2026-11-18), given the built-in look's own where every
+ * other part is that look's (one who had Midnight gets Midnight's inputs and buttons: else the look no longer matches
+ * and shows as Custom). Nothing where either is set already, or no look matches */
+function fillNewParts(): void {
+    var p = prefs();
+    var NEW = ['inputs', 'buttons', 'inputsStyle', 'buttonsStyle'];
+    if (NEW.some(function (part) { return !!(p as unknown as { [part: string]: string })[part]; })) {
+        return;
+    }
+    var look = LOOKS.filter(function (l) {
+        return !!l.parts.inputs && LOOK_PARTS.every(function (part) {
+            return NEW.indexOf(part) >= 0 || !!ON_TOP[part] || lookPart(part) === valueOf(part, l.parts[part]);
+        });
+    })[0];
+    if (look) {
+        setPrefs({ inputs: look.parts.inputs, buttons: look.parts.buttons || '', inputsStyle: look.parts.inputsStyle || '',
+            buttonsStyle: look.parts.buttonsStyle || '' } as Partial<Prefs>);
+    }
 }
 
 /** The look's parts shown now: a look's in place of the chosen ones while one is (plainLook); one being tried on the app
@@ -703,8 +773,17 @@ export function tryLook(part: LookPart, value: string | null): void {
         delete trying[part];
     } else {
         trying[part] = value;
+        if (onTry) {
+            onTry();
+        }
     }
     applyLookSoon();
+}
+
+/** Told when a look's part is tried (main.ts: the screens out of view taken out of the display meanwhile) */
+var onTry: (() => void) | null = null;
+export function onTrying(fn: () => void): void {
+    onTry = fn;
 }
 
 /** The look shown in place of the chosen one ("Who's watching?": the TV's, not one account's: a look of Theme's, built-in
@@ -712,6 +791,20 @@ export function tryLook(part: LookPart, value: string | null): void {
  * font and icons only: the logo and the loading sign stay the account's as set (none of them shows there: pages hide
  * the rail, and no video starts) */
 var plain: Look | null = null;
+
+/** Who's watching's dark look of its own (made from the dark sheets: highlight.gen.ts WHO_RULES; their font, WHO_FONT)
+ * in a style element put in once, the first time it is wanted (main.ts whoLook): at the head's end, before anything
+ * carries by-who-dark, so that putting it in restyles nothing; then by-who-dark on a screen draws it so, and nothing
+ * else on the page changes */
+var whoSheet = false;
+export function useWhoDark(): void {
+    if (!whoSheet) {
+        whoSheet = true;
+        var el = h('style');
+        el.textContent = WHO_RULES + '\n.by-who-dark { font-family: ' + WHO_FONT + '; }\n';
+        document.head.appendChild(el);
+    }
+}
 
 /** Look id (one of allLooks; one no longer listed: the first) shown in place of the chosen one (null: the chosen one
  * again), at once */
@@ -740,22 +833,22 @@ export var LOOKS: Look[] = [
     { id: 'light', name: tr('YouTube light'), note: tr('YouTube\'s own light colours'), parts: { background: YOUTUBE_LIGHT, startSign: 'youtube' } },
     // (the app's maker's own, 2026-11-16)
     { id: 'bolli', name: 'Bolli', note: tr('black, with the red of the Bolli logo'),
-        parts: { background: '#000000', highlight: '#b10c0a', logo: 'red', startSign: 'channel' } },
+        parts: { background: '#000000', highlight: '#b10c0a', inputs: '#262626', buttons: '#3a1517', logo: 'red', startSign: 'channel' } },
     // (each a mix of the parts a look has, made with the customisation options all of them)
     { id: 'midnight', name: 'Midnight', note: tr('a deep blue night with a soft glow, Apple-style letters and Fruit icons'),
-        parts: { background: '#0b1222', backgroundStyle: 'glow', sidebar: '#0e1830', sidebarStyle: 'glow', highlight: '#4f8cff', text: '#e8eeff',
+        parts: { background: '#0b1222', backgroundStyle: 'glow', sidebar: '#0e1830', sidebarStyle: 'glow', highlight: '#4f8cff', text: '#e8eeff', inputs: '#1c2b4a', buttons: '#2a4170', buttonsStyle: 'glow',
             sidebarText: 'on', font: 'inter', icons: 'soft', railIcons: 'soft', logo: 'midnight', startSign: 'midnight' } },
     { id: 'arcade', name: 'Arcade', note: tr('an old game console: pixel letters and pixel icons on a dotted purple'),
-        parts: { background: '#14002b', backgroundStyle: 'dots', sidebar: '#1c0040', sidebarStyle: 'blend', highlight: '#ff2e88', text: '#ffe066',
+        parts: { background: '#14002b', backgroundStyle: 'dots', sidebar: '#1c0040', sidebarStyle: 'blend', highlight: '#ff2e88', text: '#ffe066', inputs: '#33105e', buttons: '#4a1a7a', buttonsStyle: 'blend',
             sidebarText: 'on', font: 'pixel', icons: 'pixel', railIcons: 'pixel', logo: 'arcade', startSign: 'arcade' } },
     { id: 'vhs', name: 'VHS', note: tr('a video recorder\'s screen: its green letters on fine black lines'),
-        parts: { background: '#0c0c0c', backgroundStyle: 'lines', sidebar: '#101010', sidebarStyle: 'fade', highlight: '#2fae5a', text: '#9cf2b0',
+        parts: { background: '#0c0c0c', backgroundStyle: 'lines', sidebar: '#101010', sidebarStyle: 'fade', highlight: '#2fae5a', text: '#9cf2b0', inputs: '#15281b', buttons: '#1f3a27', buttonsStyle: 'fade',
             sidebarText: 'on', font: 'vcr', icons: 'vhs', railIcons: 'vhs', logo: 'vhs', startSign: 'vhs' } },
     { id: 'mission', name: 'Mission Control', note: tr('a space centre\'s screens: clean letters, glass icons, the elements in the sidebar'),
-        parts: { background: '#071318', backgroundStyle: 'fade', sidebar: '#0a1c24', sidebarStyle: 'fade', highlight: '#00d1ff', text: '#d9f6ff',
+        parts: { background: '#071318', backgroundStyle: 'fade', sidebar: '#0a1c24', sidebarStyle: 'fade', highlight: '#00d1ff', text: '#d9f6ff', inputs: '#0f2c36', buttons: '#164150', buttonsStyle: 'fade',
             font: 'space', icons: 'glass', railIcons: 'elements', logo: 'mission', startSign: 'mission' } },
     { id: 'paper', name: 'Paper', note: tr('warm paper and dark ink, in letters made to read easily'),
-        parts: { background: '#f5efe4', sidebar: '#ece3d3', highlight: '#c2410c', text: '#2b2118', font: 'atkinson', icons: 'outline', railIcons: 'soft',
+        parts: { background: '#f5efe4', sidebar: '#ece3d3', highlight: '#c2410c', text: '#2b2118', inputs: '#e5d9c4', buttons: '#d9c9ad', font: 'atkinson', icons: 'outline', railIcons: 'soft',
             logo: 'paper', startSign: 'paper' } }
 ];
 
@@ -764,7 +857,7 @@ export var LOOKS: Look[] = [
  * ui/logo.ts LOGOS */
 export var OFF_LOOKS: Look[] = [
     { id: 'cinema', name: 'Cinema', note: tr('red velvet and gold lights, a film poster\'s letters, solid icons and 3D objects in the sidebar'),
-        parts: { background: '#1a0507', backgroundStyle: 'blend', sidebar: '#120304', sidebarStyle: 'glow', highlight: '#e8b04b', text: '#f3e6d0',
+        parts: { background: '#1a0507', backgroundStyle: 'blend', sidebar: '#120304', sidebarStyle: 'glow', highlight: '#e8b04b', text: '#f3e6d0', inputs: '#33100f', buttons: '#4a1517', buttonsStyle: 'blend',
             sidebarText: 'on', font: 'oswald', icons: 'solid', railIcons: 'iso', logo: 'cinema', startSign: 'cinema' } }
 ];
 
@@ -772,8 +865,8 @@ export var OFF_LOOKS: Look[] = [
 export var MINE = 'mine';
 
 /** Every part a look sets (the ones it does not name to their own: '', but ON_TOP's) */
-export var LOOK_PARTS: LookPart[] = ['background', 'sidebar', 'highlight', 'text', 'font', 'icons', 'railIcons', 'backgroundStyle', 'sidebarStyle',
-    'sidebarText', 'logo', 'startSign'];
+export var LOOK_PARTS: LookPart[] = ['background', 'sidebar', 'highlight', 'text', 'inputs', 'buttons', 'inputsStyle', 'buttonsStyle', 'font', 'icons', 'railIcons', 'backgroundStyle',
+    'sidebarStyle', 'sidebarText', 'logo', 'startSign'];
 
 /** A saved look's id: this and when it was saved */
 export var SAVED = 'saved:';

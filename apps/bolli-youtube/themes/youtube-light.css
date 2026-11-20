@@ -356,6 +356,16 @@ html, body { background: #fff }
 .by-watch-group { background: #373737 }
 .by-watch-group .by-watch-button { background: transparent }
 .by-watch-button--focused, .by-watch-group .by-watch-button--focused { background: #f1f1f1; color: #0f0f0f }
+.by-watch-sound { background: #282828; box-shadow: 0 8px 28px rgba(0, 0, 0, .5) }
+.by-watch-sound-line { color: #f1f1f1 }
+.by-watch-sound-value { color: #aaa }
+.by-watch-sound-line--focused { background: #f1f1f1; color: #0f0f0f }
+.by-watch-sound-line--focused .by-watch-sound-value { color: #606060 }
+.by-watch-sound-track { background: rgba(255, 255, 255, .3) }
+.by-watch-sound-fill { background: #f1f1f1 }
+.by-watch-sound-knob { background: #f1f1f1 }
+.by-watch-sound-line--focused .by-watch-sound-track { background: rgba(15, 15, 15, .25) }
+.by-watch-sound-line--focused .by-watch-sound-fill, .by-watch-sound-line--focused .by-watch-sound-knob { background: #0f0f0f }
 .by-watch-button--on:after { background: #f00 }
 .by-watch-status { color: #aaa }
 .by-panel { background: #212121; box-shadow: -24px 0 48px rgba(0, 0, 0, .5) }

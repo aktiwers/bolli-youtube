@@ -297,10 +297,10 @@ function joined(data: ArrayBuffer): ArrayBuffer {
 }
 
 /** Whether the TV's browser drops an audio format's frame across an append window's end whole rather than trimming it
- * (Dolby Digital, measured; AAC it trims): its cut segment goes in again from that frame (framesFrom across), the
- * append window open below it */
+ * (Dolby Digital, measured, and Dolby Digital Plus, taken to be alike: frames of the same length, handed on undecoded;
+ * AAC it trims): its cut segment goes in again from that frame (framesFrom across), the append window open below it */
 export function wholeFrames(mime: string): boolean {
-    return /^audio\/mp4; codecs="ac-3"/.test(mime);
+    return /^audio\/mp4; codecs="(ac|ec)-3"/.test(mime);
 }
 
 /** A one-fragment MP4 segment's samples (moof, mdat: YouTube's audio) from the first one starting at or after t on (s;

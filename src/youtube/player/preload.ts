@@ -12,7 +12,9 @@
 import { knownAvatar } from '../api/avatars.js';
 import { prefs } from '../api/prefs.js';
 import { segments } from '../api/sponsorblock.js';
-import { playableStreams, sabrFirstNow, Streams, streams } from '../api/streams.js';
+import { firstStreams } from '../api/streams.js';
+
+export { firstStreams };
 import { channelPicture } from '../api/watch.js';
 import { prefetchHeads } from './dash.js';
 import { prefetchLive } from './live-engine.js';
@@ -62,11 +64,6 @@ export function startSoon(id: string): void {
     segments(id, prefs().skip);
 }
 
-/** The streams asked ahead of a start: as a guest (age-restricted videos are not prepared: SABR needs YouTube's player
- * script), or SABR first if set, or for a video only SABR played lately (sabrFirstNow) */
-export function firstStreams(id: string): Promise<Streams> {
-    return sabrFirstNow(prefs().sabr, id) ? playableStreams(id, true) : streams(id);
-}
 
 /** Load a channel picture into the browser cache */
 function fetchPicture(url: string): void {

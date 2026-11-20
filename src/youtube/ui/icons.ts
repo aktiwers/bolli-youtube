@@ -207,6 +207,21 @@ export function setIcon(el: HTMLElement, name: string): void {
     }
 }
 
+/** Icon name in box el in YouTube's own filled drawing whatever the style chosen, left alone by setIconStyle (fixed:
+ * what shows in YouTube's dark look of its own, main.ts whoLook); not fixed: in the style chosen, as setIcon */
+export function setIconIn(el: HTMLElement, name: string, fixed: boolean): void {
+    if (!fixed) {
+        if (el.getAttribute('data-fixed') !== null) {
+            el.removeAttribute('data-fixed');
+        }
+        setIcon(el, name);
+    } else if (el.getAttribute('data-fixed') !== name || el.getAttribute('data-icon') !== null) {
+        el.removeAttribute('data-icon');
+        el.setAttribute('data-fixed', name);
+        drawIcon(el, name, '');
+    }
+}
+
 /** The icons' names */
 export function iconNames(): string[] {
     return Object.keys(ICONS);

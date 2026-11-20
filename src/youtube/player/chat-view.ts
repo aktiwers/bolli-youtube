@@ -92,6 +92,11 @@ export class ChatView {
     private matte: HTMLElement | null = null;
     /** The pictures are placed beside it (makeRoom); else they are left as they are (a preview's box is the player's) */
     private placed = false;
+
+    /** Whether it has the pictures placed beside it now (their boxes are its own then) */
+    get placing(): boolean {
+        return this.placed;
+    }
     private mode = 'list';
     private most = KEPT;
     private made = '';

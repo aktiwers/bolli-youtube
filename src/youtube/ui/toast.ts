@@ -7,7 +7,7 @@
 
 import { h, setText } from '../core/dom.js';
 import { tr } from '../core/i18n.js';
-import { icon, setIcon } from './icons.js';
+import { icon, setIconIn } from './icons.js';
 
 /** Time from start until the fade-out begins (fade-in included, as YouTube's); a text longer than LONG_TEXT letters (two
  * sentences: why a video cannot be played, what a setting takes) stays LONG_MS */
@@ -19,6 +19,11 @@ var box: HTMLElement | null = null;
 var mark: HTMLElement;
 var label: HTMLElement;
 var timer = 0;
+/** The icon shown, the box's classes but its shown one, and YouTube's dark look of its own while Who's watching shows
+ * in it (toastDark) */
+var markName = 'check';
+var base = 'by-toast';
+var dark = '';
 
 /** Shows text. iconName: an icon from ui/icons.ts (e.g. 'check'); edge: the left-edge kind, PROBLEM or skipEdge() */
 export function toast(text: string, iconName?: string, edge?: string): void {
@@ -30,17 +35,32 @@ export function toast(text: string, iconName?: string, edge?: string): void {
     }
     var el = box;
     if (iconName) {
-        setIcon(mark, iconName);
+        markName = iconName;
+        setIconIn(mark, iconName, !!dark);
     }
     mark.style.display = iconName ? '' : 'none';
     setText(label, text);
     // Restart the fade-in; the edge class stays while it fades out
-    var base = edge ? 'by-toast by-toast--edge by-toast--' + edge : 'by-toast';
-    el.className = base;
+    base = edge ? 'by-toast by-toast--edge by-toast--' + edge : 'by-toast';
+    el.className = base + dark;
     void el.offsetWidth;
-    el.className = base + ' by-toast--shown';
+    el.className = base + dark + ' by-toast--shown';
     clearTimeout(timer);
-    timer = setTimeout(function () { el.className = base; }, text.length > LONG_TEXT ? LONG_MS : SHOWN_MS) as unknown as number;
+    timer = setTimeout(function () { el.className = base + dark; }, text.length > LONG_TEXT ? LONG_MS : SHOWN_MS) as unknown as number;
+}
+
+/** Toasts in YouTube's dark look of its own while Who's watching shows in it (main.ts whoLook: its font, filled icons;
+ * their colours are their own on every look), or in the page's again; one showing changes with them */
+export function toastDark(on: boolean): void {
+    var to = on ? ' by-who-dark' : '';
+    if (to === dark) {
+        return;
+    }
+    dark = to;
+    if (box) {
+        box.className = base + dark + (/ by-toast--shown$/.test(box.className) ? ' by-toast--shown' : '');
+        setIconIn(mark, markName, on);
+    }
 }
 
 /** Why a video cannot be played, as a toast says it (reason: YouTube's, in the app's language; '' none known) */

@@ -16,7 +16,7 @@ import { h, setShown, setText, toggleClass, translate } from '../core/dom.js';
 import { tr } from '../core/i18n.js';
 import { KEY } from '../core/keys.js';
 import { holding, takesPointer } from '../core/pointer.js';
-import { autoTextNow, background, isLight, LookPart, lookPart, ownText, setLookPart, SIDEBAR_STYLES, STYLES, styleCss, textOn, tryLook, YOUTUBE_DARK,
+import { autoTextNow, background, inputGrey, isLight, LookPart, lookPart, ownText, setLookPart, SIDEBAR_STYLES, STYLES, styleCss, textOn, tryLook, YOUTUBE_DARK,
     YOUTUBE_LIGHT } from '../ui/theme.js';
 import { prefs, setPref } from '../api/prefs.js';
 import { holdRest, holdStep, isColour, mainColours, shade, SHADE_L, SHADE_S, shadeOf, typedColour } from '../ui/colours.js';
@@ -94,9 +94,18 @@ function lookPartOf(part: LookPart, name: string, named: () => Named[], own: () 
     };
 }
 
-/** The look's colours: the background's, the sidebar's, the highlight's, the text's */
+/** The inputs' and buttons' own colour: YouTube's grey on its page (dark or light) */
+function ownGrey(): string {
+    return inputGrey(isLight(background()));
+}
+
+/** The look's colours: the background's, the sidebar's, the highlight's, the text's, the inputs', the buttons' */
 function colourParts(): Part[] {
     var mine: Named[] = [{ value: YOUTUBE_DARK, name: tr('YouTube dark') }, { value: YOUTUBE_LIGHT, name: tr('YouTube light') }, { value: '#000000', name: tr('Pure black') }];
+    // (the text's and the inputs': automatic unless one is chosen)
+    var automatic = function (): Named[] {
+        return [{ value: '', name: tr('Automatic') }, { value: '#ffffff', name: tr('White') }, { value: '#000000', name: tr('Black') }];
+    };
     return [
         lookPartOf('background', tr('Background'), function () { return mine; }, background, stylesOf('backgroundStyle', STYLES)),
         lookPartOf('sidebar', tr('Sidebar'), function () { return [{ value: '', name: tr('Same as background'), same: true } as Named].concat(mine); }, background,
@@ -106,13 +115,17 @@ function colourParts(): Part[] {
         }, function () { return ownText(isLight(background())); }),
         // (the text: automatic unless one is chosen, in case the automatic one is not what one wants; the sidebar's names
         // and icons in it too, if one says so)
-        lookPartOf('text', tr('Text'), function () {
-            return [{ value: '', name: tr('Automatic') }, { value: '#ffffff', name: tr('White') }, { value: '#000000', name: tr('Black') }];
-        }, autoTextNow, undefined, {
+        lookPartOf('text', tr('Text'), automatic, autoTextNow, undefined, {
             name: tr('Sidebar too'),
             get: function () { return lookPart('sidebarText') === 'on'; },
             set: function (on) { setLookPart('sidebarText', on ? 'on' : ''); }
-        })
+        }),
+        // (the inputs and the buttons: YouTube's greys unless one is chosen; the buttons as the inputs unless they have
+        // their own)
+        lookPartOf('inputs', tr('Inputs'), automatic, ownGrey, stylesOf('inputsStyle', SIDEBAR_STYLES)),
+        lookPartOf('buttons', tr('Buttons'), function () {
+            return [{ value: '', name: tr('Same as inputs'), same: true } as Named, { value: '#ffffff', name: tr('White') }, { value: '#000000', name: tr('Black') }];
+        }, function () { return lookPart('inputs') || ownGrey(); }, stylesOf('buttonsStyle', SIDEBAR_STYLES))
     ];
 }
 
@@ -273,7 +286,8 @@ export class ColourPage {
         });
     }
 
-    /** Opens it on the colours of mode, the focus on the shade of the colour set (the first tab's); done: closed */
+    /** Opens it on the colours of mode, the focus on the first tab (Background; the tile's colour: on the colour set);
+     * done: closed */
     open(mode: ColourMode, done: () => void): void {
         var self = this;
         this.done = done;
@@ -299,7 +313,13 @@ export class ColourPage {
         }
         this.row = SHADES;
         this.toPart(0);
-        this.toSet();
+        // (the focus on the first tab, Background: what to colour is chosen first; the tile's one colour: on it)
+        if (mode === 'tile') {
+            this.toSet();
+        } else {
+            this.row = TABS;
+            this.drawFocus();
+        }
         setShown(this.el, true);
         if (read) {
             requestAnimationFrame(function () { self.readLogo(picture); });
@@ -628,6 +648,8 @@ export class ColourPage {
         this.drawStyles();
         this.drawMark();
         this.drawShades();
+        // (the foot anew: drawn with the focus, before this part's named colours were here to name the one set)
+        this.drawNow();
         // (another tab: the app shows what is set)
         this.parts.forEach(function (p, n) {
             if (n !== self.part) {

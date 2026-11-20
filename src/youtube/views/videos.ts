@@ -64,6 +64,15 @@ var HIDDEN_IMAGES_MS = 4000;
 /** A screen kept out of sight takes its waiting fresh rows once the keys have rested this long */
 var FRESH_REST_MS = 1500;
 
+/** Told when a screen's rows fail to load while it shows (justFailed), or a screen whose rows failed shows again
+ * (main.ts retryShown, which tries them again by itself a while; set by onFailed) */
+var failedHook: ((justFailed: boolean) => void) | null = null;
+
+/** fn hears of rows that failed to load where they are in sight (failedHook) */
+export function onFailed(fn: (justFailed: boolean) => void): void {
+    failedHook = fn;
+}
+
 /** A copy of rows with video inserted in shelf s (or the last) at index i (for rows that lack it) */
 function withVideo(rows: Rows, video: Video, s: number, i: number): Rows {
     if (!rows.shelves.length) {
@@ -495,6 +504,13 @@ export class FeedView implements View {
             this.fetch(false, rest);
         } else {
             this.renewIfOld(rest);
+            // (not for a screen passed by in the sidebar, nor while its rows are asked for anew)
+            if (!rest && !this.loading) {
+                this.rowAhead();
+            }
+        }
+        if (this.failed && failedHook) {
+            failedHook(false);
         }
     }
 
@@ -520,6 +536,7 @@ export class FeedView implements View {
         if (covered) {
             this.freshenAfterClick();
         } else {
+            this.rowAhead();
             this.aheadInSight();
         }
     }
@@ -1430,8 +1447,7 @@ export class FeedView implements View {
                 self.stale = false;
                 self.fetchedAt = 1;
             } else if (!self.hasRows) {
-                self.failed = true;
-                setText(self.status, self.texts.failed);
+                self.fail();
             }
         });
     }
@@ -1480,6 +1496,15 @@ export class FeedView implements View {
         rowsDrawn();
         homeScreen();
         this.aheadInSight();
+    }
+
+    /** Back in sight (a video no longer covers the screen, or it is shown again): the focused row's next tiles are
+     * asked for where the focus is near its end, as a key there would. Fresh rows swapped in meanwhile leave the focus
+     * on the tile it was on, which may be the last a row came with: nothing beside it until a key moved the focus */
+    private rowAhead(): void {
+        if (this.shown && !this.covered && !document.hidden && !this.stale && !this.opts.idle && this.at === 'rows' && this.stack.row) {
+            this.paging.ahead(this.stack, true);
+        }
     }
 
     /** Prefetches rows ahead of the focus, only while the rows are fresh and visible (not cached rows, whose token is
@@ -1565,6 +1590,9 @@ export class FeedView implements View {
         if (!this.shown) {
             this.letGoLater();
         }
+        // (drawn in sight, as rows that come once the screen is back are: the focus may be on the last tile a row came
+        // with, its next ones asked for now, as a key there would)
+        this.rowAhead();
     }
 
     /** The cached rows belonged to another account: shows the fresh rows if they arrived, else clears the rows and
@@ -1586,8 +1614,16 @@ export class FeedView implements View {
             }
         } else if (this.asked) {
             // The fetch failed (if passed by, it is fetched when shown)
-            this.failed = true;
-            setText(this.status, this.texts.failed);
+            this.fail();
+        }
+    }
+
+    /** The rows failed to load: the message, and where it shows, the retry told (failedHook) */
+    private fail(): void {
+        this.failed = true;
+        setText(this.status, this.texts.failed);
+        if (this.shown && failedHook) {
+            failedHook(true);
         }
     }
 

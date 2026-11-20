@@ -126,15 +126,20 @@ export function iconBase(one: Logo): string {
 }
 
 /** The built-in logo with this id (undefined: none is listed under it) */
-function listed(id: string): Logo | undefined {
+export function listed(id: string): Logo | undefined {
     return LOGOS.filter(function (one) { return one.id === id; })[0];
+}
+
+/** A built-in logo as a choice in Settings: a tile with its picture */
+export function logoChoice(one: Logo): Choice {
+    return { value: one.id, name: one.name, note: '', picture: logoFile(one) };
 }
 
 /** Settings › Theme › Logo's choices, each a tile with its picture: the built-in logos by file, the account's picture
  * while an account is signed in (round; its kept copy, by its address before one is kept), the custom ones, the tile
  * that adds one, and none */
 export function logoChoices(): Choice[] {
-    var list = LOGOS.map(function (one) { return { value: one.id, name: one.name, note: '', picture: logoFile(one) } as Choice; });
+    var list = LOGOS.map(logoChoice);
     if (signedIn()) {
         list.push({ value: ACCOUNT, name: tr('Your YouTube avatar'), note: tr('the picture of the YouTube account in use'),
             picture: accountPicture() || who && who.url || '', round: true });
@@ -156,7 +161,7 @@ function accountNow(): string {
 }
 
 /** The signed-in account's kept picture ('' none: signed out, none kept, or another account's) */
-export function accountPicture(): string {
+function accountPicture(): string {
     if (accountKept === undefined) {
         var got = load<KeptLogo>(ACCOUNT_KEY);
         accountKept = got && typeof got.url === 'string' && typeof got.data === 'string' && got.data.indexOf('data:image/') === 0 &&
@@ -245,7 +250,7 @@ export function showLogo(): void {
         // loaded now, as the viewer chose them, as a start does once the rows are in)
         if (rowsIn) {
             byItsAddress();
-            refreshAccountLogo(false).then(null, function () { return undefined; });
+            refreshQuietly();
         }
     }
 }
@@ -254,7 +259,7 @@ export function showLogo(): void {
  * account's picture is fetched if it changed */
 export function rowsDrawn(): void {
     rowsIn = true;
-    refreshAccountLogo(false).then(null, function () { return undefined; });
+    refreshQuietly();
     byItsAddress();
 }
 
@@ -309,7 +314,7 @@ export function setLogoAccount(account: { key: string; url: string } | null): vo
         applyLogo();
     }
     if (rowsIn) {
-        refreshAccountLogo(false).then(null, function () { return undefined; });
+        refreshQuietly();
     }
 }
 
@@ -319,6 +324,11 @@ export function takeAccountLogo(): Promise<void> {
     ownLogo(ACCOUNT);
     applyLogo();
     return refreshAccountLogo(true);
+}
+
+/** refreshAccountLogo where nothing waits for it: a failure says nothing (the next start tries again) */
+function refreshQuietly(): void {
+    refreshAccountLogo(false).then(null, function () { return undefined; });
 }
 
 /** Fetches the signed-in account's picture if it is the logo drawn and the kept copy is missing, another account's or

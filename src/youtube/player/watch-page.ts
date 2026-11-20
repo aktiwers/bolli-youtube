@@ -1,21 +1,23 @@
 // Watch page over the player (own-player.ts), modelled on YouTube's TV watch page: title and metadata at the top;
 // at the bottom the time, the progress bar (with SponsorBlock segments and chapters) and a row of buttons
-// (channel, description, subscribe, previous / play-pause / next, like, dislike, comments, save, subtitles,
+// (channel, description, subscribe, previous / play-pause / next, volume, like, dislike, comments, save, subtitles,
 // settings); below them the related videos (api/watch.ts), three per row, entered with Down, after the playlist the
 // video plays from as a row of its own, at the video playing (Settings › Playlist in the player: the watch page's
 // first row; or a Playlist button beside Next opens it at the side: player/list-panel.ts). Related tiles are
 // built as soon as the details arrive and kept while hidden, so Down shows them at once. Lists open in the side
 // panel (ui/side-panel.ts), the comments over the video as YouTube's (comments-view.ts). Up from the buttons
-// focuses the bar (Left/Right jump); the page hides after HIDE_MS
+// focuses the bar (Left/Right jump); OK on the speaker opens the Sound panel over it: the player's volume as its
+// bottom line, over it Voice boost, Stable volume and the audio codec (Up/Down to a line, Left/Right change it, OK
+// flips a switch or steps the codec, on the volume closes, as Back does); the page hides after HIDE_MS
 // without a key while the video plays. It also holds the video's details (e.g. the video YouTube plays next). Its
 // likes and dislikes show beside the views once the dislikes are known, as Return YouTube Dislike estimates them (asked
 // when it shows a video, or the player's bar shows its line: api/dislikes.ts; Settings: Dislike counts).
 // Related layout sizes come from the theme (metrics.watch), the rest from themes/<id>.css.
 
-import { h, setShown, setSrc, setText, toggleClass, translate } from '../core/dom.js';
+import { h, setShown, setSrc, setText, standsBy, toggleClass, translate } from '../core/dom.js';
 import { tr } from '../core/i18n.js';
 import { KEY, KEYS_GAP } from '../core/keys.js';
-import { takesPointer, toPart } from '../core/pointer.js';
+import { dragsPointer, takesPointer, toPart } from '../core/pointer.js';
 import { clock } from '../core/time.js';
 import { RowStack } from '../ui/row-stack.js';
 import { rowHeight, TileRow } from '../ui/tile-row.js';
@@ -44,6 +46,8 @@ var HIDE_MS = 8000;
 var REST_MS = 1500;
 var CHANNEL_REST_MS = 500;
 var JUMP_S = 10;
+/** An arrow's step on the volume's slider (of 100, as YouTube's player steps) */
+var VOLUME_STEP = 5;
 /** Room for the playlist's row's heading over its tiles (the related lines have none) */
 var LIST_HEAD = 40;
 
@@ -63,6 +67,15 @@ export interface WatchActions {
     channel(page: Page): void;
     subtitles(): void;
     settings(): void;
+    /** Sets the player's volume (0-100, with sound) */
+    volume(level: number): void;
+    /** The sound's settings for the video playing (the Sound panel's lines) */
+    sound(): SoundNow;
+    /** The Sound panel is about to be used (the focus rests on the speaker, or it opens): what the video has to
+     * choose from is found out, where that is not known yet */
+    soundAhead(): void;
+    /** Voice boost or Stable volume on or off (a boolean), or the audio codec chosen (one of sound().codecs) */
+    setSound(what: string, value: boolean | string): void;
     /** Focus rested on a video that may be played (a related one, or Next's): prefetch it */
     rest(video: Video): void;
     /** Focus rested on a page that may be opened (the channel, a related playlist): prefetch it */
@@ -77,6 +90,26 @@ export interface WatchActions {
     line(text: string): void;
     /** Whether the player's bar shows that line now (opened with Up): its dislikes are asked for then too */
     lineShown(): boolean;
+}
+
+/** The sound's settings as the Sound panel shows them, each only where the video playing has it: Voice boost on (null:
+ * the video has none, and it is off), Stable volume on (null: none to be had in the sound playing), the audio codec
+ * chosen ('auto' also where the video has not the one Settings chose), and those to choose from (Auto first, then the
+ * video's that the device plays; none: nothing to choose) */
+export interface SoundNow {
+    boost: boolean | null;
+    stable: boolean | null;
+    codec: string;
+    codecs: { value: string; name: string }[];
+}
+
+/** A line of the Sound panel: what it sets, its element, its value's (null: the volume's, a slider), and whether it is
+ * away (nothing to set) */
+interface SoundLine {
+    what: string;
+    el: HTMLElement;
+    value: HTMLElement | null;
+    off: boolean;
 }
 
 type Zone = 'bar' | 'buttons' | 'related';
@@ -111,6 +144,21 @@ export class WatchPage {
     private likeButton: HTMLElement;
     private dislikeButton: HTMLElement;
     private saveButton: HTMLElement;
+    private volumeButton: HTMLElement;
+    /** Index of the speaker among the buttons */
+    private volumeAt = 0;
+    /** The Sound panel over the speaker: its lines from the bottom up (Volume, Voice boost, Stable volume, Audio
+     * codec), the one the focus is on, and whether it is open (the arrows are its own then). The volume's fill and
+     * what carries its knob are moved by a transform: nothing laid out or drawn as the volume changes */
+    private sound: HTMLElement;
+    private soundLines: SoundLine[] = [];
+    private soundAt = 0;
+    private soundOpen = false;
+    private volumeFill: HTMLElement;
+    private volumeKnob: HTMLElement;
+    /** The player's volume (0-100) and whether it is muted, as the speaker and the slider show it */
+    private level = 100;
+    private muted = false;
     private buttons = new Pills('by-watch-button--focused');
     /** Index of play-pause among the buttons */
     private playAt = 0;
@@ -220,6 +268,49 @@ export class WatchPage {
         add(center, icon('playlist', 'by-watch-button by-watch-icon'), function () { self.actions.playlist(); }, function () {
             return !!self.playlist && prefs().listDown === 'button';
         });
+        // The speaker right after Next, as on YouTube's player; its Sound panel over it, the volume the bottom line
+        // (nearest the button)
+        this.volumeButton = icon('volume', 'by-watch-button by-watch-icon');
+        this.volumeAt = this.buttons.count;
+        add(right, this.volumeButton, function () { self.openSound(true); });
+        this.sound = h('div', 'by-watch-sound');
+        var track = h('div', 'by-watch-sound-track');
+        this.volumeFill = h('div', 'by-watch-sound-fill');
+        this.volumeKnob = h('div', 'by-watch-sound-at');
+        this.volumeKnob.appendChild(h('div', 'by-watch-sound-knob'));
+        track.appendChild(this.volumeFill);
+        track.appendChild(this.volumeKnob);
+        [['volume', tr('Volume')], ['boost', tr('Voice boost')], ['stable', tr('Stable volume')], ['codec', tr('Audio codec')]].forEach(function (line, i) {
+            var el = h('div', 'by-watch-sound-line');
+            el.appendChild(h('span', 'by-watch-sound-name', line[1]));
+            var value = i ? el.appendChild(h('span', 'by-watch-sound-value')) as HTMLElement : null;
+            if (!i) {
+                el.appendChild(track);
+            }
+            self.soundLines.push({ what: line[0], el: el, value: value, off: false });
+            // (each new line goes on top)
+            self.sound.insertBefore(el, self.sound.firstChild);
+            // A click on a line takes the focus there, then acts as OK on it (the volume's is a drag instead)
+            if (i) {
+                takesPointer(el, function () {
+                    self.focusSound(i);
+                    return {};
+                });
+            }
+        });
+        right.appendChild(this.sound);
+        // A press on the volume's line sets the volume there, a drag moves it (measured once: its moves only write)
+        dragsPointer(this.soundLines[0].el, function (x) {
+            self.focusSound(0);
+            var r = track.getBoundingClientRect();
+            var to = function (at: number): void {
+                if (r.width > 0) {
+                    self.actions.volume(Math.round(Math.max(0, Math.min(1, (at - r.left) / r.width)) * 100));
+                }
+            };
+            to(x);
+            return { move: to, end: function () { return undefined; } };
+        });
         add(group, this.likeButton, function () { self.like('LIKE'); }, has('like'));
         add(group, this.dislikeButton, function () { self.like('DISLIKE'); }, has('like'));
         this.commentsAt = this.buttons.count;
@@ -244,7 +335,9 @@ export class WatchPage {
             self.actions.comments(null);
             self.arm();
         };
-        setShown(this.el, false);
+        // (put away by a transform, not hidden: hidden, each Down in the player drew it whole again, its full-screen
+        // shade and shadowed texts; standing by, its layer is kept. On the TV 1138 -> 752 ms of frames lost a walk)
+        standsBy(this.el, true);
         parent.insertBefore(this.el, before || null);
         // A click moves the focus to the part it is in (a button and a related video take it there: back after the
         // video's, as it acts in place); on the picture above it plays or pauses, as a click on YouTube's player with
@@ -253,6 +346,8 @@ export class WatchPage {
             var zone: Zone | '' = bar.contains(target) ? 'bar' : row.contains(target) ? 'buttons' : self.stack.el.contains(target) ? 'related' : '';
             if (zone) {
                 return toPart(under, function (z: Zone) {
+                    // (a click elsewhere leaves the Sound panel)
+                    self.openSound(false);
                     self.zone = z;
                     self.place();
                 }, self.zone, zone);
@@ -441,6 +536,59 @@ export class WatchPage {
         return related || (info.next ? videoOf(info.next) : null);
     }
 
+    /** The player's volume (0-100) and whether it is muted: on the speaker and the slider */
+    setVolume(level: number, muted: boolean): void {
+        this.level = level;
+        this.muted = muted;
+        var sounds = muted ? 0 : level;
+        setIcon(this.volumeButton, sounds ? 'volume' : 'volumeoff');
+        this.volumeFill.style.webkitTransform = 'scaleX(' + sounds / 100 + ')';
+        this.volumeKnob.style.webkitTransform = 'translateX(' + sounds + '%)';
+    }
+
+    /** Opens the Sound panel over the speaker, the focus on the volume (the arrows are its own then), or closes it */
+    private openSound(open: boolean): void {
+        if (open !== this.soundOpen) {
+            this.soundOpen = open;
+            if (open) {
+                this.actions.soundAhead();
+                this.focusSound(0);
+                this.drawSound();
+            }
+            toggleClass(this.sound, 'by-watch-sound--open', open);
+        }
+    }
+
+    /** The focus to a line of the Sound panel */
+    private focusSound(at: number): void {
+        toggleClass(this.soundLines[this.soundAt].el, 'by-watch-sound-line--focused', false);
+        this.soundAt = at;
+        toggleClass(this.soundLines[at].el, 'by-watch-sound-line--focused', true);
+    }
+
+    /** The Sound panel's lines as the player has them now (it tells when they change by themselves: another video's
+     * streams, the sound picked anew, what the video has found out); nothing while it is closed. A line the video has
+     * nothing for is away (the focus, were it there, on the volume) */
+    drawSound(): void {
+        if (!this.soundOpen) {
+            return;
+        }
+        var now = this.actions.sound();
+        var lines = this.soundLines;
+        var on = function (is: boolean | null): string { return is ? tr('On') : tr('Off'); };
+        [now.boost === null, now.stable === null, !now.codecs.length].forEach(function (off, i) {
+            lines[i + 1].off = off;
+            toggleClass(lines[i + 1].el, 'by-watch-sound-line--off', off);
+        });
+        setText(lines[1].value as HTMLElement, on(now.boost));
+        setText(lines[2].value as HTMLElement, on(now.stable));
+        var chosen = now.codecs.filter(function (c) { return c.value === now.codec; })[0];
+        setText(lines[3].value as HTMLElement, chosen ? chosen.name : '');
+        if (lines[this.soundAt].off) {
+            this.focusSound(0);
+        }
+    }
+
     /** Marks the subtitles button on or off */
     setSubtitles(on: boolean): void {
         toggleClass(this.subtitlesButton, 'by-watch-button--on', on);
@@ -457,6 +605,7 @@ export class WatchPage {
     /** Shows the page with the focus on play-pause (related: on the related videos, as at the end of a video) */
     show(related?: boolean): void {
         this.zone = 'buttons';
+        this.openSound(false);
         // (the playlist's row, as Settings › Playlist in the player says now)
         if (this.info && this.rowsFor !== prefs().listDown) {
             this.drawRows();
@@ -464,7 +613,7 @@ export class WatchPage {
         }
         this.buttons.focus(this.playAt);
         this.shown = true;
-        setShown(this.el, true);
+        standsBy(this.el, false);
         if (related && this.stack.rows.length) {
             this.enterRelated();
         }
@@ -509,10 +658,11 @@ export class WatchPage {
         clearTimeout(this.hideTimer);
         this.panel.close();
         this.comments.close();
+        this.openSound(false);
         this.zone = 'buttons';
         this.place();
         this.shown = false;
-        setShown(this.el, false);
+        standsBy(this.el, true);
         this.onShown(false);
     }
 
@@ -531,7 +681,11 @@ export class WatchPage {
             this.relatedKey(code);
         } else if (this.zone === 'bar') {
             this.barKey(code);
+        } else if (this.soundOpen && this.buttons.at === this.volumeAt) {
+            this.soundKey(code);
         } else {
+            // (a click took the focus to another button: the Sound panel goes, and the button acts at once)
+            this.openSound(false);
             this.buttonKey(code);
         }
         this.arm();
@@ -553,6 +707,9 @@ export class WatchPage {
             var video = focused && focused.id !== self.id ? focused : buttons && self.buttons.at === self.playAt + 1 ? self.actions.nextVideo() : null;
             var page = video ? video.page : buttons && self.buttons.at === self.channelAt && self.info ? self.info.channelPage : null;
             var token = buttons && self.buttons.at === self.commentsAt && self.info ? self.info.comments : '';
+            if (buttons && self.buttons.at === self.volumeAt) {
+                self.actions.soundAhead();
+            }
             if (page) {
                 self.actions.restPage(page);
             } else if (video) {
@@ -565,7 +722,7 @@ export class WatchPage {
                     }
                 });
             }
-        }, this.zone === 'buttons' && (this.buttons.at === this.channelAt || this.buttons.at === this.commentsAt) ? CHANNEL_REST_MS :
+        }, this.zone === 'buttons' && (this.buttons.at === this.channelAt || this.buttons.at === this.commentsAt || this.buttons.at === this.volumeAt) ? CHANNEL_REST_MS :
             REST_MS) as unknown as number;
     }
 
@@ -595,6 +752,72 @@ export class WatchPage {
                 this.hide();
                 break;
         }
+    }
+
+    /** The open Sound panel: Up and Down to the next line there is (they lie from the bottom up), Left and Right change
+     * the line; OK flips a switch or steps the codec, on the volume it closes the panel, as Back does on any */
+    private soundKey(code: number): void {
+        var lines = this.soundLines;
+        var what = lines[this.soundAt].what;
+        switch (code) {
+            case KEY.UP:
+            case KEY.DOWN:
+                var step = code === KEY.UP ? 1 : -1;
+                for (var i = this.soundAt + step; i >= 0 && i < lines.length; i += step) {
+                    if (!lines[i].off) {
+                        this.focusSound(i);
+                        break;
+                    }
+                }
+                break;
+            case KEY.LEFT:
+            case KEY.RIGHT:
+                this.changeSound(what, code === KEY.RIGHT ? 1 : -1);
+                break;
+            case KEY.OK:
+                if (what === 'volume') {
+                    this.openSound(false);
+                } else {
+                    this.changeSound(what, 0);
+                }
+                break;
+            case KEY.BACK:
+                this.openSound(false);
+                break;
+        }
+    }
+
+    /** A line of the Sound panel changed by an arrow (step 1 or -1: louder or quieter, a muted volume given its sound
+     * back as it was by the first step louder; on or off; the next or the previous codec) or by OK (0: a switch
+     * flipped, the next codec, around) */
+    private changeSound(what: string, step: number): void {
+        if (what === 'volume') {
+            if (step > 0) {
+                this.actions.volume(this.muted ? this.level : this.level + VOLUME_STEP);
+            } else if (!this.muted) {
+                this.actions.volume(this.level - VOLUME_STEP);
+            }
+            return;
+        }
+        var now = this.actions.sound();
+        if (what === 'codec' && now.codecs.length) {
+            var all = now.codecs;
+            var at = 0;
+            for (var i = 0; i < all.length; i++) {
+                at = all[i].value === now.codec ? i : at;
+            }
+            var to = step ? Math.max(0, Math.min(all.length - 1, at + step)) : (at + 1) % all.length;
+            if (to !== at) {
+                this.actions.setSound(what, all[to].value);
+            }
+        } else if (what !== 'codec') {
+            var on = what === 'boost' ? !!now.boost : !!now.stable;
+            var want = step ? step > 0 : !on;
+            if (want !== on) {
+                this.actions.setSound(what, want);
+            }
+        }
+        this.drawSound();
     }
 
     private barKey(code: number): void {

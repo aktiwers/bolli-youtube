@@ -35,7 +35,9 @@ html, body { margin: 0; width: 1280px; height: 720px; overflow: hidden; backgrou
 .bd-row-title { line-height: 28px; padding-left: 56px; font-size: 21px; font-weight: 600; color: rgba(255, 255, 255, .75); white-space: nowrap; }
 .bd-row--active .bd-row-title { color: #fff; }
 .bd-row-strip { padding: 0 0 0 56px; white-space: nowrap; -webkit-transition: -webkit-transform .22s cubic-bezier(.2, .7, .3, 1); }
-.bd-tile { position: relative; display: inline-block; vertical-align: top; white-space: normal; -webkit-transition: opacity .2s ease; }
+/* (a tile past the row's left edge goes at once, not by a fade: each fade made the TV paint the tile on a layer of its
+   own; a channel page's row walked 1.4-2.0 s of frames lost with it, 0.9-1.3 s without) */
+.bd-tile { position: relative; display: inline-block; vertical-align: top; white-space: normal; }
 .bd-tile--gone { opacity: 0; }
 .bd-tile-frame { position: relative; background: #1c1c1e; border-radius: 10px; overflow: hidden;
                  -webkit-transition: -webkit-transform .28s cubic-bezier(.3, 1.4, .5, 1); }

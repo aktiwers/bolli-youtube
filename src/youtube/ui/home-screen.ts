@@ -38,7 +38,7 @@ import { load, save } from '../core/store.js';
 import { Choice, prefs, setPref } from '../api/prefs.js';
 import { appId, asRoot, blank, folder, NO_CHANNEL, NO_FILE, NO_ROOT, sized, writePngs } from './app-files.js';
 import { addChoice, addCustomLogo, customChoice, CustomLogo, customLogos, customOf, customValue, isCustom, onCustomRemoved, removeCustomLogo } from './custom-logos.js';
-import { iconBase, logoFile, LOGOS } from './logo.js';
+import { iconBase, listed, Logo, logoChoice, logoFile, LOGOS } from './logo.js';
 import { loaded, squares } from './pictures.js';
 
 /** The package's own name and tile colour (appinfo.json's title and iconColor) */
@@ -154,18 +154,15 @@ function chosenCustom(): CustomLogo | null {
 }
 
 /** The built-in logo chosen for the home screen (the first for none, or one not listed) */
-function chosenLogo(): typeof LOGOS[0] {
-    var id = prefs().homeIcon;
-    return LOGOS.filter(function (one) { return one.id === id; })[0] || LOGOS[0];
+function chosenLogo(): Logo {
+    return listed(prefs().homeIcon) || LOGOS[0];
 }
 
 /** Home screen logo's choices in Settings, each a tile with its picture: the built-in logos, the custom ones that
  * have a picture kept, and the tile that adds one; on Android the built-in logos its shell has an entry for */
 export function homeIconChoices(): Choice[] {
     var shells = androidLogos();
-    var builtIn = LOGOS.filter(function (one) { return !shells.length || shells.indexOf(one.id) >= 0; }).map(function (one) {
-        return { value: one.id, name: one.name, note: '', picture: logoFile(one) } as Choice;
-    });
+    var builtIn = LOGOS.filter(function (one) { return !shells.length || shells.indexOf(one.id) >= 0; }).map(logoChoice);
     return shells.length ? builtIn : builtIn.concat(customLogos().filter(function (c) { return !!c.data; }).map(customChoice), addChoice());
 }
 
@@ -405,9 +402,15 @@ export function takeCustomIcon(url: string): Promise<void> {
     });
 }
 
+/** A name as typed on one line: its spaces each one, none at its ends, max characters at most (also Settings' theme
+ * names) */
+export function oneLine(typed: string, max: number): string {
+    return typed.replace(/\s+/g, ' ').replace(/^ | $/g, '').slice(0, max);
+}
+
 /** Chooses the name on the home screen ('' or the package's own: back to that) */
 export function setHomeName(name: string): void {
-    var text = name.replace(/\s+/g, ' ').replace(/^ | $/g, '').slice(0, NAME_MAX);
+    var text = oneLine(name, NAME_MAX);
     setPref('homeName', text === APP_NAME ? '' : text);
     chosen();
 }

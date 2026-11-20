@@ -47,6 +47,12 @@ var playAsked = false;
  * requests (also bumped by a release); the latest wins, earlier ones get nothing */
 var emptyings = 0;
 var asks = 0;
+/** The engine the kept pipeline is asked for seeks first thing itself (openPipeline's seeks): the emptying then makes
+ * no seek back to the start (toStart), and the video stands where the last one stood until that seek (unsought). A
+ * seek back to the start and the engine's own a moment after it had this TV show one start in three a second late
+ * (a start from a resume point, signed in: its keyframe is known only once its first answer's header is in) */
+var ownSeek = false;
+var unsought = false;
 
 /** For inspection in DevTools (__bolli.pipes): pipelines opened, reused, spoilt (videos played, error), and the
  * current one */
@@ -78,11 +84,13 @@ export function pictureKind(): string {
 /** A pipeline for mimes ([video, audio]) on video, at time 0 like a new one: the kept one if its buffers fit (emptied;
  * announced as a load, its metadata already in), else a fresh one once its Media Source opens; rejects if Media Source
  * refuses the mimes */
-export function openPipeline(video: HTMLVideoElement, mimes: string[]): Promise<Pipeline> {
+export function openPipeline(video: HTMLVideoElement, mimes: string[], seeks?: boolean): Promise<Pipeline> {
     var ask = ++asks;
     if (!fits(mimes.map(kindOf))) {
         return fresh(video, mimes);
     }
+    // (the latest request's word: the emptying under way makes no seek of its own for an engine that seeks first)
+    ownSeek = !!seeks;
     // Stays kept until handed over: if the engine stops and asks again meanwhile, the later request gets it
     var pipe = current as Pipeline;
     return emptied.then(function () {
@@ -92,14 +100,25 @@ export function openPipeline(video: HTMLVideoElement, mimes: string[]): Promise<
         if (current !== pipe || !kept || !usable(pipe)) {
             return fresh(video, mimes);
         }
-        kept = false;
-        pipe.uses++;
-        pipelineStats.reused++;
-        note('pipeline reused', held(pipe) + ' at ' + video.currentTime.toFixed(2));
-        // The events a new pipeline's load fires: the player's loading sign continues from there
-        video.dispatchEvent(new Event('loadstart'));
-        video.dispatchEvent(new Event('loadedmetadata'));
-        return pipe;
+        // (left where the last video stood for an engine that was to seek first: back to the start for one that is not)
+        var back = unsought && !seeks ? toStart(video) : null;
+        unsought = false;
+        var hand = function (): Pipeline {
+            kept = false;
+            pipe.uses++;
+            pipelineStats.reused++;
+            note('pipeline reused', held(pipe) + ' at ' + video.currentTime.toFixed(2));
+            // The events a new pipeline's load fires: the player's loading sign continues from there
+            video.dispatchEvent(new Event('loadstart'));
+            video.dispatchEvent(new Event('loadedmetadata'));
+            return pipe;
+        };
+        return back ? back.then(function () {
+            if (ask !== asks) {
+                return Promise.reject('stale') as Promise<Pipeline>;
+            }
+            return current !== pipe || !kept || !usable(pipe) ? fresh(video, mimes) : hand();
+        }) : hand();
     });
 }
 
@@ -116,6 +135,7 @@ function fresh(video: HTMLVideoElement, mimes: string[]): Promise<Pipeline> {
     // An emptying under way is moot: its source is replaced now
     emptyings++;
     emptying = playAsked = false;
+    ownSeek = unsought = false;
     pipelineStats.fresh++;
     note('pipeline fresh');
     return new Promise<Pipeline>(function (resolve, reject) {
@@ -207,9 +227,18 @@ export function keepPipeline(video: HTMLVideoElement, pipe: Pipeline | null): vo
     kept = true;
     emptying = true;
     playAsked = false;
+    ownSeek = false;
+    unsought = false;
     var mine = ++emptyings;
     emptied = Promise.all(pipe.buffers.map(function (sb) { return empty(pipe, sb); })).then(function () {
-        return mine === emptyings && current === pipe ? toStart(video) : undefined;
+        if (mine !== emptyings || current !== pipe) {
+            return undefined;
+        }
+        if (ownSeek && video.readyState >= 1) {
+            unsought = true;
+            return undefined;
+        }
+        return toStart(video);
     }, function () {
         if (current === pipe) {
             current = null;

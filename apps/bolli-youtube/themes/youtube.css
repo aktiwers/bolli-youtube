@@ -340,6 +340,7 @@ html, body { background: #0f0f0f; }
 /* After the item's and button's own colours, which it replaces */
 /* (the logo's menu too: base.css draws it white; here, so the highlight's rules are made for it: tools/light_theme.mjs) */
 .by-settings-item--focused, .by-settings-button--focused, .bd-menu-drop-item--focused { background: #f1f1f1; color: #0f0f0f; }
+.by-settings-button--off { opacity: 0.4; }
 .by-settings-note { margin-top: 27px; font-size: 17px; line-height: 24px; color: #aaa; }
 /* About's lines, under its description */
 .by-settings-info { margin: 40px auto 0; max-width: 620px; font-size: 20px; line-height: 28px; color: #aaa; }
@@ -447,8 +448,9 @@ html, body { background: #0f0f0f; }
    both, 372-448 ms) */
 .by-colours-head { margin-bottom: 12px; white-space: nowrap; font-size: 0; }
 .by-colours-title { display: inline-block; vertical-align: middle; margin-right: 18px; font-size: 28px; font-weight: 500; line-height: 40px; }
-.by-colours-tabs { margin-top: 10px; }
-.by-colours-tab { display: inline-block; margin-right: 8px; padding: 0 14px; height: 34px; line-height: 34px; border-radius: 17px;
+/* (six tabs: on two lines, the shades under them a little lower for the room) */
+.by-colours-tabs { margin-top: 10px; white-space: normal; }
+.by-colours-tab { display: inline-block; margin: 0 8px 8px 0; padding: 0 14px; height: 34px; line-height: 34px; border-radius: 17px;
                   background: #333; color: #ddd; font-size: 16px; font-weight: 500; }
 .by-colours-tab--on { background: #f1f1f1; color: #0f0f0f; }
 .by-colours-tile { display: none; vertical-align: middle; width: 56px; height: 56px; margin-top: -8px; border-radius: 10px; }
@@ -469,8 +471,8 @@ html, body { background: #0f0f0f; }
                     background: linear-gradient(to right, #f00 0%, #ff0 16.67%, #0f0 33.33%, #0ff 50%, #00f 66.67%, #f0f 83.33%, #f00 100%); }
 .by-colours-mark { position: absolute; left: -7px; top: -5px; width: 14px; height: 36px; box-sizing: border-box; border: 3px solid #fff;
                    border-radius: 7px; box-shadow: 0 0 0 2px #000; }
-.by-colours-shades { width: 460px; height: 191px; margin-bottom: 12px; font-size: 0; }
-.by-colours-shade { display: inline-block; position: relative; width: 44px; height: 26px; margin: 0 8px 7px 0; border-radius: 7px;
+.by-colours-shades { width: 460px; height: 173px; margin-bottom: 12px; font-size: 0; }
+.by-colours-shade { display: inline-block; position: relative; width: 44px; height: 23px; margin: 0 8px 7px 0; border-radius: 7px;
                     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .12); }
 .by-colours-shade:nth-child(9n) { margin-right: 0; }
 .by-colours-styles { height: 62px; margin-bottom: 6px; white-space: nowrap; font-size: 0; }
@@ -590,8 +592,9 @@ html, body { background: #0f0f0f; }
 .by-comments-title { font-weight: 700; }
 .by-comments-count { margin-left: 10px; font-weight: 500; }
 .by-comments-body { left: 24px; top: 80px; width: 408px; height: 592px; }
-.by-comment { margin-bottom: 12px; padding: 16px; border-radius: 12px; background: #363636; color: #f1f1f1;
-              -webkit-transition: background-color .15s ease-out, color .15s ease-out; }
+/* (the focus's colours change at once on the comments and the watch page's buttons, no fade: a fade repainted them every
+   frame; the buttons' walk 944-1382 ms of frames lost with it, 738-915 without) */
+.by-comment { margin-bottom: 12px; padding: 16px; border-radius: 12px; background: #363636; color: #f1f1f1; }
 .by-comment--focused { background: #f0f0f0; color: #0f0f0f; }
 .by-comment-avatar { width: 36px; height: 36px; margin-right: 16px; border-radius: 50%; background: #555; }
 .by-comment-by { font-size: 15px; line-height: 22px; color: #aaa; }
@@ -607,8 +610,7 @@ html, body { background: #0f0f0f; }
 .by-comment-handoff-icon { width: 24px; height: 24px; margin-left: 10px; }
 .by-comment--focal { padding: 12px 16px 16px; background: transparent; }
 .by-comment-buttons { margin-top: 16px; }
-.by-comment-button { width: 24px; height: 24px; margin-right: 10px; padding: 12px; border-radius: 24px; background: #373737; color: #f1f1f1;
-                     -webkit-transition: background-color .15s ease-out, color .15s ease-out; }
+.by-comment-button { width: 24px; height: 24px; margin-right: 10px; padding: 12px; border-radius: 24px; background: #373737; color: #f1f1f1; }
 .by-comment-button--focused { background: #f1f1f1; color: #0f0f0f; }
 .by-comments-note { padding: 16px; font-size: 17px; color: #aaa; }
 
@@ -720,7 +722,7 @@ html, body { background: #0f0f0f; }
              box-shadow: 0 8px 28px rgba(0, 0, 0, .45); }
 .by-volume-icon { width: 24px; height: 24px; margin-right: 14px; color: #fff; }
 .by-volume-track { width: 150px; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .28); }
-.by-volume-fill { border-radius: 3px; background: #fff; -webkit-transition: width .15s ease-out; }
+.by-volume-fill { border-radius: 3px; background: #fff; -webkit-transition: -webkit-transform .15s ease-out; }
 /* Under the clock when that is top right */
 .by-player--clock-right .by-volume { top: 64px; }
 .by-toast { top: 48px; right: 48px; max-width: 640px; padding: 22px 16px 22px 24px; border-radius: 12px; background: #181818; }
@@ -804,7 +806,7 @@ html, body { background: #0f0f0f; }
 .by-watch-buttons { margin-top: 22px; height: 64px; }
 .by-watch-left, .by-watch-right { top: 8px; }
 .by-watch-button { width: 48px; height: 48px; padding: 12px; border-radius: 24px; background: #373737; color: #f1f1f1;
-                   -webkit-transition: background-color .2s ease-out, color .2s ease-out, -webkit-transform .2s ease-out; }
+                   -webkit-transition: -webkit-transform .2s ease-out; }
 .by-watch-left .by-watch-button { margin-right: 10px; }
 .by-watch-right .by-watch-button, .by-watch-group { margin-left: 10px; }
 /* The channel's picture inset in the round button, as YouTube's: the button's ring shows the focus, white, the
@@ -818,6 +820,19 @@ html, body { background: #0f0f0f; }
 .by-watch-group { border-radius: 24px; background: #373737; }
 .by-watch-group .by-watch-button { margin: 0; background: transparent; }
 .by-watch-button--focused, .by-watch-group .by-watch-button--focused { background: #f1f1f1; color: #0f0f0f; }
+/* The Sound panel: a dark card over the speaker, ending where the settings button begins (48 wide with 10 before it);
+   the focused line light as a focused button, the volume's slider white on the dark and dark on the light */
+.by-watch-sound { right: 58px; bottom: 58px; width: 340px; padding: 8px 0; border-radius: 16px; background: #282828; box-shadow: 0 8px 28px rgba(0, 0, 0, .5); }
+.by-watch-sound-line { height: 48px; padding: 0 18px; line-height: 48px; font-size: 16px; color: #f1f1f1; }
+.by-watch-sound-value { color: #aaa; }
+.by-watch-sound-line--focused { background: #f1f1f1; color: #0f0f0f; }
+.by-watch-sound-line--focused .by-watch-sound-value { color: #606060; }
+.by-watch-sound-track { left: 130px; right: 26px; top: 21px; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .3); }
+.by-watch-sound-fill { border-radius: 3px; background: #f1f1f1; }
+.by-watch-sound-fill, .by-watch-sound-at { -webkit-transition: -webkit-transform .1s ease-out; }
+.by-watch-sound-knob { left: -8px; top: -5px; width: 16px; height: 16px; border-radius: 8px; background: #f1f1f1; }
+.by-watch-sound-line--focused .by-watch-sound-track { background: rgba(15, 15, 15, .25); }
+.by-watch-sound-line--focused .by-watch-sound-fill, .by-watch-sound-line--focused .by-watch-sound-knob { background: #0f0f0f; }
 .by-watch-button--on:after { content: ''; position: absolute; left: 13px; right: 13px; bottom: 8px; height: 3px; border-radius: 2px; background: #f00; }
 .by-watch-status { left: 64px; font-size: 18px; line-height: 26px; color: #aaa; }
 

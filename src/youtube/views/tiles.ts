@@ -192,9 +192,10 @@ export class Paging {
                 self.added(rows.shelves, rows.next);
             }
             // Fetch the next part at once until enough are ready below focus (not within a row: its tiles load as
-            // focus moves along)
+            // focus moves along; after a row's tiles the rows below get their turn, which a fetch on its way held
+            // back)
             self.empties = rows.shelves.length ? 0 : self.empties + 1;
-            if (!shelf && self.empties < EMPTY_PARTS) {
+            if (shelf || self.empties < EMPTY_PARTS) {
                 self.ahead(stack, false);
             }
         }, function () {

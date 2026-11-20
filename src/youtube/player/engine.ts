@@ -6,6 +6,7 @@
 
 import { Format } from '../api/streams.js';
 import { note, ranges } from './play-log.js';
+import { OFF_START_S, Pipeline, setLengthSoon } from './pipeline.js';
 
 /** What the player needs from an engine */
 export interface Engine {
@@ -243,6 +244,23 @@ export function hopHole(v: HTMLVideoElement): void {
         // (what is buffered is as it was: the hop only moved the playhead)
         note('hole', 'at ' + t.toFixed(3) + ', buffered ' + ranges(v.buffered, 3) + ': on to ' + v.currentTime.toFixed(3));
     }
+}
+
+/** A seek to t on pipe, and the length told with it (0: none). own: a start's first seek on a pipeline kept from the
+ * last video, which stands where that video did (pipeline.ts openPipeline's seeks): the length told before the seek
+ * where t lies past the length that video left (the browser cuts a seek to the length), else right after it, and
+ * the seek a hair past t where the video stands there already (a seek to the current position does not reach the
+ * TV's media pipeline, which would show that video's stale picture). Returns seekNudged's timer. */
+export function seekTold(v: HTMLVideoElement, pipe: Pipeline, t: number, length: number, own: boolean): number {
+    var early = own && length > 0 && !(v.duration >= t + 1);
+    if (early) {
+        setLengthSoon(pipe, length);
+    }
+    var timer = seekNudged(v, own && Math.abs(v.currentTime - t) < OFF_START_S ? t + OFF_START_S : t);
+    if (length > 0 && !early) {
+        setLengthSoon(pipe, length);
+    }
+    return timer;
 }
 
 /** Seeks v to t; returns the timer that nudges the seek on if it is not done after SEEK_STUCK_MS */

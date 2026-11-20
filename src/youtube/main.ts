@@ -20,13 +20,13 @@ import { initScreenSaver } from './core/screensaver.js';
 import { load, save } from './core/store.js';
 import { localClock, Retries } from './core/time.js';
 import { View } from './core/view.js';
-import { PROBLEM, toast } from './ui/toast.js';
+import { PROBLEM, toast, toastDark } from './ui/toast.js';
 import { screenIsOff, screenKey, screenLayer, screenOff, screenWake } from './ui/screen-off.js';
 import { googleOf, keptProfiles, ownChannel, Profile, profiles, signOut } from './api/accounts.js';
 import { saveAvatars } from './api/avatars.js';
 import { Channel, channelAhead, isChannel, keptChannel } from './api/channel.js';
 import { dearrowFetch, dearrowOn, saveDearrow, Wanted } from './api/dearrow.js';
-import { allVideos, first, get, home, keepable, keptPage, listNext, page, Page, pageAhead as fetchPageAhead, PageButton, PlaylistInfo, Rows, searchAhead as fetchSearchAhead, sized, SubChannel, subscriptions, tabAhead, tapAhead, text, toastOf, Video } from './api/feed.js';
+import { allVideos, first, get, home, keepable, keptPage, listNext, OLD_MS, page, Page, pageAhead as fetchPageAhead, PageButton, PlaylistInfo, Rows, searchAhead as fetchSearchAhead, sized, SubChannel, subscriptions, tabAhead, tapAhead, text, toastOf, Video } from './api/feed.js';
 import { freshGuideNames, guideNames } from './api/guide.js';
 import { forgetLooks, visited } from './api/looked.js';
 import { forgetKept, pruneKept } from './api/kept-pages.js';
@@ -48,7 +48,7 @@ import { TvApp } from './player/tv-app.js';
 import { apply, askToClear, flipSubscription } from './ui/account.js';
 import { Question } from './ui/question.js';
 import { SidePanel } from './ui/side-panel.js';
-import { applyTheme, metrics, MINE, plainLook, prepareSheets } from './ui/theme.js';
+import { applyTheme, lookOf, metrics, MINE, onTrying, plainLook, prepareSheets, useWhoDark } from './ui/theme.js';
 import { openTileMenu } from './ui/tile-menu.js';
 import { ACCOUNT_PICTURE_PX, setLogoAccount } from './ui/logo.js';
 import './ui/themes/youtube.js';
@@ -60,7 +60,7 @@ import { SearchView } from './views/search.js';
 import { debugHooks } from './debug.js';
 import { ChannelView, KnownChannel } from './views/channel.js';
 import { playerPlaylists, SettingsView } from './views/settings.js';
-import { FeedOptions, FeedTexts, FeedView, KeptFeed } from './views/videos.js';
+import { FeedOptions, FeedTexts, FeedView, KeptFeed, onFailed } from './views/videos.js';
 import { shuffle } from './views/list-stage.js';
 import { forgetWatched, noteWatched, startPicture, watchedAt } from './views/tiles.js';
 import { SubscriptionsView } from './views/subscriptions.js';
@@ -179,6 +179,9 @@ var preloadTimer = 0;
 /** A focused video tile resting this long has its video loaded ahead, paused and hidden (readyFocused) */
 var READY_REST_MS = 400;
 var readyTimer = 0;
+/** The kept pipeline goes after this long without a key (ms): idleSoon */
+var IDLE_MS = 10000;
+var idleTimer = 0;
 /** A page tile's page, the page of a channel's button (Videos, Live, ...) or a tab's tiles (Latest, Popular, Oldest)
  * are asked for ahead (a page also built) once the focus has rested there this long */
 var PAGE_REST_MS = 500;
@@ -240,15 +243,13 @@ function feedTexts(name: string, empty: string): FeedTexts {
     return { empty: empty, noAccount: NO_ACCOUNT, failed: tr('Could not load {1}. Press OK to try again.', name) };
 }
 
-/** Page options: full screen with a back arrow when the theme wants it, page buttons, fade-in as rows arrive */
+/** Page options: full screen with a back arrow when the theme wants it, page buttons, fade-in as rows arrive. A page
+ * kept longer than OLD_MS (api/feed.ts keeps them an hour) is shown at once and refreshed behind, the fresh rows
+ * swapped in once out of view (as a channel's list in Subscriptions) */
 function pageOptions(): FeedOptions {
     return { page: metrics().ways.pagesOverAll ? { back: closePage } : undefined, onButton: pressPageButton, fade: true, onList: preloadFocused,
-        refreshMs: PAGE_FRESH_MS };
+        refreshMs: OLD_MS };
 }
-
-/** A page kept longer than this (api/feed.ts keeps them an hour) is shown at once and refreshed behind, the fresh rows
- * swapped in once out of view (as a channel's list in Subscriptions) */
-var PAGE_FRESH_MS = 5 * 60 * 1000;
 
 /** The screen the app starts on (Settings: Start page, read at each use: it may change meanwhile); Back in the rail
  * goes here, then exits */
@@ -455,7 +456,29 @@ function screen(): Screen {
 
 /** Shows section id with its open pages; selecting the current section again (Back in the rail) closes its pages;
  * rest: shown in passing while the rail moves through it */
+/** While looks are tried (Settings' Colours and Icons pages), the sections out of view and the player with no video
+ * in it are out of the display: each try restyles only what is shown. Taken out at the first try, not at Settings'
+ * opening (back in costs layout, paid only after tries that saved more); back in as the section changes or the player
+ * shows */
+var trialsOut = false;
+onTrying(function () {
+    if (trialsOut || own.shown) {
+        return;
+    }
+    trialsOut = true;
+    toggleClass(root, 'by-app--trying', true);
+    toggleClass(root, 'by-app--trying-player', !own.loaded);
+});
+function trialsBack(): void {
+    if (trialsOut) {
+        trialsOut = false;
+        toggleClass(root, 'by-app--trying', false);
+        toggleClass(root, 'by-app--trying-player', false);
+    }
+}
+
 function switchSection(id: string, rest?: boolean): void {
+    trialsBack();
     // Leaving these pages: Back no longer returns to the video they came from; stop the tile preview
     fromPlayer = null;
     preview.stop();
@@ -1099,14 +1122,29 @@ var switching = false;
 var whoTimer = 0;
 
 /** "Who's watching?" and its sign-in are the TV's, not one account's: drawn in the look the account in use chose there
- * (Settings › Theme › Who's watching: one of Theme's looks, YouTube dark by default), or in its own. Back to the account's look once neither
- * shows (in the next task: going from one to the other swaps nothing) */
+ * (Settings › Theme › Who's watching: one of Theme's looks, YouTube dark by default), or in its own. YouTube dark: in
+ * the dark look of their own (whoDark), nothing else on the page changed; another look: the whole page shown in it
+ * (ui/theme.ts plainLook), back to the account's once neither shows (in the next task: going from one to the other
+ * swaps nothing). An account chosen there: the screens come back in the look shown there until its own comes with it
+ * (switchDone), so the one leaving does not flash */
 function whoLook(which: 'accounts' | 'signIn', on: boolean): void {
     whoShown[which] = on;
     clearTimeout(whoTimer);
     if (on) {
-        plainLook(prefs().whoLook === MINE ? null : prefs().whoLook);
+        var id = prefs().whoLook === MINE ? null : prefs().whoLook;
+        var dark = id !== null && lookOf(id).id === 'dark';
+        whoDark(dark);
+        plainLook(dark ? null : id);
         return;
+    }
+    if (switching) {
+        if (whoDarkOn) {
+            plainLook('dark');
+        }
+        return;
+    }
+    if (!whoShown.accounts && !whoShown.signIn) {
+        whoDark(false);
     }
     whoTimer = setTimeout(function () {
         if (!switching && !whoShown.accounts && !whoShown.signIn) {
@@ -1115,11 +1153,31 @@ function whoLook(which: 'accounts' | 'signIn', on: boolean): void {
     }, 0) as unknown as number;
 }
 
+/** Who's watching, its sign-in, the sidebar over them (the clock, the closed strip) and a toast in YouTube's dark look of
+ * their own (by-who-dark: ui/theme.ts useWhoDark), or in the page's again; the screens not made yet take it as they are
+ * made (openAccounts) */
+var whoDarkOn = false;
+function whoDark(on: boolean): void {
+    if (on) {
+        useWhoDark();
+    }
+    whoDarkOn = on;
+    toggleClass(menu.el, 'by-who-dark', on);
+    if (accountsView) {
+        accountsView.setDark(on);
+    }
+    if (signInView) {
+        toggleClass(signInView.el, 'by-who-dark', on);
+    }
+    toastDark(on);
+}
+
 /** An account chosen there is in (or did not come): its own look shown */
 function switchDone(): void {
     switching = false;
     if (!whoShown.accounts && !whoShown.signIn) {
         plainLook(null);
+        whoDark(false);
     }
 }
 
@@ -1951,15 +2009,30 @@ function askShortcut(kind: string, id: string, target: ShortcutTarget): void {
 
 /** A visible screen that failed to load tries again by itself, as YouTube's app does, but not for ever: after
  * RETRY_MS, then each time twice as long after the try before (RETRY_MAX_MS at most), RETRIES times in all (some 40
- * minutes). A key, the network coming back or another screen begin anew; the network coming back tries at once */
+ * minutes). A key, the network coming back or another screen begin anew; the network coming back tries at once.
+ * Nothing runs while nothing failed: the screens tell of a failure (views/videos.ts onFailed), and a timer waits for
+ * the next try only while one is to come */
 var RETRY_MS = 20000;
 var RETRY_MAX_MS = 10 * 60000;
 var RETRIES = 8;
 var retries = new Retries(RETRY_MS, RETRY_MAX_MS, RETRIES);
 var retriedView: View | null = null;
+var retryTimer = 0;
+/** When retryTimer runs (0: none waits) */
+var retryAt = 0;
+/** The tries stopped with the screen maybe still failed (out of sight, or all made): the app back in front or a key
+ * looks again */
+var retryParked = false;
 function retryShown(now?: boolean): void {
+    clearTimeout(retryTimer);
+    retryTimer = retryAt = 0;
     var view = screen();
-    if (document.hidden || !view.retry) {
+    if (document.hidden) {
+        retryParked = true;
+        return;
+    }
+    // (another screen: it tells of its failure when shown again)
+    if (!view.retry) {
         return;
     }
     if (view !== retriedView || now) {
@@ -1973,12 +2046,51 @@ function retryShown(now?: boolean): void {
         } else {
             // (nothing failed, or no longer: the next failure counts from its own start)
             retries.anew();
+            return;
         }
     }
+    var wait = retries.wait(at);
+    if (wait < 0) {
+        retryParked = true;
+    } else {
+        retryIn(wait, false);
+    }
 }
-setInterval(function () { retryShown(); }, RETRY_MS);
+/** retryShown in ms (fresh: its tries begin anew, the first made then) */
+function retryIn(ms: number, fresh: boolean): void {
+    clearTimeout(retryTimer);
+    retryAt = Date.now() + ms;
+    retryFresh = fresh;
+    retryTimer = setTimeout(function () { retryShown(fresh); }, ms) as unknown as number;
+}
+/** Whether the try retryTimer waits for begins anew */
+var retryFresh = false;
+/** The shown screen is looked at again within RETRY_MS, not at once (a failed screen shown again, a key, the app back
+ * in front); a try waiting longer comes then instead, and one sooner stays when it is (fresh: the tries begin anew, as a
+ * key or another screen does: the try waiting is made one that does, so that a key just before it does not put it off
+ * by RETRY_MS, nor keys every few seconds for ever; a key while it is one already changes nothing) */
+function retrySoon(fresh: boolean): void {
+    retryParked = false;
+    var left = retryTimer ? retryAt - Date.now() : RETRY_MS;
+    if (!retryTimer || left > RETRY_MS || fresh && !retryFresh) {
+        retryIn(Math.max(0, Math.min(left, RETRY_MS)), fresh);
+    }
+}
+onFailed(function (justFailed) {
+    if (justFailed) {
+        retryShown();
+    } else {
+        retrySoon(true);
+    }
+});
 window.addEventListener('online', function () { retryShown(true); });
-document.addEventListener('keydown', function () { retries.anew(); }, true);
+document.addEventListener('keydown', function () {
+    retries.anew();
+    // (only while a failed screen waits for its next try)
+    if (retryParked || retryTimer) {
+        retrySoon(true);
+    }
+}, true);
 
 function tickClock(): void {
     clearTimeout(clockTimer);
@@ -2031,6 +2143,9 @@ document.addEventListener('visibilitychange', function () {
     } else {
         renewScreen();
     }
+    if (retryParked) {
+        retrySoon(false);
+    }
 });
 // The Magic Remote's pointer as YouTube's app takes it (core/pointer.ts); Android's mouse input is only swallowed
 ignorePointer();
@@ -2053,7 +2168,36 @@ var pressedFrame: HTMLElement | null = null;
 var pressedRing: HTMLElement | null = null;
 
 /** OK going down on a video tile (its release starts it, a hold opens its menu): it looks pressed at once (not under its
- * preview), and with Videos start sooner its streams are asked now, so the start at the release finds them on their way */
+ * preview), and with Videos start sooner its streams are asked now and its video loaded ahead (readyFocused), so the
+ * start at the release finds them on their way: the picture moves ~0.2 s sooner after the release (measured on the TV,
+ * a key held 115 ms, the streams known: 0.3-0.5 s -> 0.1-0.17 s as a guest) */
+/** After IDLE_MS without a key, with no video or preview playing: the kept pipeline let go (own.release). While a
+ * Media Source exists the TV's runtime forces two full collections every few seconds (0.17-0.3 s stalls while
+ * browsing); its release freezes the app ~1 s, out of sight here; the next start opens a fresh one. One timer, armed
+ * by a key when none is on its way, looked at again for the keys since (no timer while nothing happens after it) */
+function idleSoon(): void {
+    if (idleTimer) {
+        return;
+    }
+    idleTimer = setTimeout(function idle() {
+        var left = IDLE_MS - (Date.now() - lastKeyAt());
+        if (left > 0) {
+            idleTimer = setTimeout(idle, left) as unknown as number;
+            return;
+        }
+        idleTimer = 0;
+        // (own.release lets the pipeline go only with no video and no preview on it)
+        if (!own.busy && !tv.busy && !document.hidden) {
+            own.release();
+        }
+    }, IDLE_MS) as unknown as number;
+}
+
+/** fn after the next frame is painted */
+function afterFrame(fn: () => void): void {
+    requestAnimationFrame(function () { setTimeout(fn, 0); });
+}
+
 function pressTile(video: Video): void {
     var frame = focusedFrame();
     if (frame && !preview.playing(video.id)) {
@@ -2068,6 +2212,10 @@ function pressTile(video: Video): void {
     }
     if (prefs().preload && !video.movie) {
         startSoon(video.id);
+        // (and the video itself loaded paused and hidden, as on a tile that rested: the start at the release takes
+        // it over, its first requests out for as long as the key was down; a hold's menu leaves it as a rest does.
+        // After the frame that shows the tile pressed)
+        afterFrame(function () { readyFocused(true); });
     }
 }
 
@@ -2121,6 +2269,7 @@ function pointerLayer(): Layer | null {
  * (Settings › Preview on the buttons) */
 function pressKey(code: number): boolean {
     keyCame();
+    idleSoon();
     // The screen off: a key wakes it (any, or only Screen off's button) and does nothing else (a playlist's stage plays on)
     if (screenKey(code)) {
         return true;
@@ -2289,6 +2438,9 @@ tv.onShown = function (shown) {
 };
 // When the app's player shows, release YouTube's app kept for films (the TV has one video decoder, and memory)
 own.onShown = function (shown) {
+    if (shown) {
+        trialsBack();
+    }
     shownOver(shown);
     if (shown) {
         tv.shutDown();

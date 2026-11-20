@@ -162,8 +162,18 @@ function fromCodePoint(cp: number): string {
 /** title as DeArrow's Title Case shows it; custom: a title DeArrow's users submitted (its capitals are trusted more)
  * rather than YouTube's own */
 export function tidyTitle(title: string, custom: boolean): string {
-    return toTitleCase(cleanFancyText(cleanEmojis(title)), custom);
+    // (the last one kept: a start asks for its video's title twice, 4-8 ms of this TV's each)
+    if (title !== lastTitle || custom !== lastCustom) {
+        lastTidy = toTitleCase(cleanFancyText(cleanEmojis(title)), custom);
+        lastTitle = title;
+        lastCustom = custom;
+    }
+    return lastTidy;
 }
+
+var lastTitle: string | null = null;
+var lastCustom = false;
+var lastTidy = '';
 
 function toTitleCase(title: string, custom: boolean): string {
     var words = title.split(' ');

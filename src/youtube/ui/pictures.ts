@@ -8,17 +8,23 @@ import { getBytes } from '../core/http.js';
 import { oldEngine } from '../core/platform.js';
 
 /** The download's limits: its time (the decode's check included) and its size */
-export var TIME_MS = 10000;
+var TIME_MS = 10000;
 export var MAX_BYTES = 2 * 1024 * 1024;
 /** A picture's sides at most (pixels): a few megabytes of file can hold hundreds of megabytes of picture, more than
  * the TV lets a page have. A bigger one is not decoded at all */
 export var MAX_SIDE = 4096;
+/** A picture kept by its address alone (its host refuses the app a read of its bytes: it cannot be made smaller) is
+ * decoded whole at every start where it is drawn: its sides at most this (a logo needs a few hundred pixels; 4096 square
+ * is some 64 MB of picture each time) */
+export var ADDRESS_MAX_SIDE = 1024;
 /** Why a picture was not taken (the rejection's message): its address holds no PNG, JPEG or WebP picture the engine
  * shows (a page, another file); it is over MAX_BYTES; a side of it is over MAX_SIDE; anything else (no answer, slow)
  * has another text */
 export var NOT_PICTURE = 'not a picture';
 export var TOO_BIG = 'too big';
 export var TOO_LARGE = 'too large';
+/** A picture by its address alone over ADDRESS_MAX_SIDE */
+export var TOO_LARGE_BY_ADDRESS = 'too large by address';
 
 /** A picture as downloaded: its data URL ('': only its address is known to load) and the decoded picture */
 export interface Fetched {
@@ -43,7 +49,7 @@ export function loaded(src: string): Promise<HTMLImageElement> {
 }
 
 /** The bytes as a data URL if they are a PNG, JPEG or WebP (WebP not on the old engine), else '' */
-export function dataUrl(b: Uint8Array): string {
+function dataUrl(b: Uint8Array): string {
     var type = b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 ? 'png' :
         b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff ? 'jpeg' :
         !oldEngine() && ascii(b, 0, 4) === 'RIFF' && ascii(b, 8, 12) === 'WEBP' ? 'webp' : '';
@@ -112,7 +118,8 @@ function ascii(b: Uint8Array, from: number, to: number): string {
  * it; resolves with it as a data URL, or with data '' when orAddress and the host refuses the app a read of the bytes
  * but the picture loads by its address. Rejects with NOT_PICTURE when the address holds no picture the engine shows
  * (a page, another kind of file), TOO_BIG over the size in bytes, TOO_LARGE over MAX_SIDE (by its first bytes, so it
- * is never decoded; one loaded by its address, once it is known), another message when slow or failed. */
+ * is never decoded; one loaded by its address, once it is known), TOO_LARGE_BY_ADDRESS over ADDRESS_MAX_SIDE when only
+ * its address loads, another message when slow or failed. */
 export function fetchPicture(url: string, orAddress: boolean): Promise<Fetched> {
     return new Promise<Fetched>(function (resolve, reject) {
         var done = false;
@@ -131,9 +138,11 @@ export function fetchPicture(url: string, orAddress: boolean): Promise<Fetched> 
         var timer = setTimeout(function () { end(null); }, TIME_MS);
         var fail = function () { end(null); };
         var notPicture = function () { end(null, NOT_PICTURE); };
+        // (one by its address alone (data ''): ADDRESS_MAX_SIDE at most)
         var take = function (data: string, img: HTMLImageElement): void {
-            if (img.naturalWidth > MAX_SIDE || img.naturalHeight > MAX_SIDE) {
-                end(null, TOO_LARGE);
+            var most = data ? MAX_SIDE : ADDRESS_MAX_SIDE;
+            if (img.naturalWidth > most || img.naturalHeight > most) {
+                end(null, data ? TOO_LARGE : TOO_LARGE_BY_ADDRESS);
             } else {
                 end({ data: data, img: img });
             }

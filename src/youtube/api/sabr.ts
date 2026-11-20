@@ -64,6 +64,8 @@ export interface SabrSegment {
     startMs: number;
     durationMs: number;
     data: Uint8Array;
+    /** Its media was handed out as it came (a reader's onMedia): this many bytes; data is empty then */
+    streamed?: number;
 }
 
 export interface SabrAnswer {
@@ -337,10 +339,15 @@ export class SabrReader {
     private received = 0;
     /** Segments coming in, by header id: their pieces so far, and their media's length as the header tells (0: not told);
      * the one whose header or media came last (-1: none) */
-    private open: { [id: number]: { segment: SabrSegment; pieces: Uint8Array[]; size: number; length: number } } = {};
+    private open: { [id: number]: { segment: SabrSegment; pieces: Uint8Array[]; size: number; length: number; given: number } } = {};
     private current = -1;
 
-    constructor(private onSegment?: (s: SabrSegment) => void, private onHeader?: (s: SabrSegment) => void) {}
+    /** onSegment: told of each segment once whole (else kept in answer.segments); onHeader: of each as its header comes;
+     * onMedia: offered each part of a segment's media as it comes (a view into what was pushed): true takes it, and
+     * the segment is then told whole without its data (streamed: its bytes). It is asked for a segment's first part,
+     * and for the others only while it took them all (one refused later: the segment is dropped) */
+    constructor(private onSegment?: (s: SabrSegment) => void, private onHeader?: (s: SabrSegment) => void,
+        private onMedia?: (s: SabrSegment, part: Uint8Array) => boolean) {}
 
     /** Adds more of the reply; each part is read once complete (its bytes copied once, into their own array) */
     push(b: Uint8Array): void {
@@ -441,7 +448,7 @@ export class SabrReader {
                 f = fields(data);
                 var header = { itag: num(f, 3), init: !!num(f, 8), num: num(f, 9), startMs: num(f, 11), durationMs: num(f, 12), data: new Uint8Array(0) };
                 this.current = num(f, 1);
-                this.open[this.current] = { segment: header, pieces: [], size: 0, length: num(f, 14) };
+                this.open[this.current] = { segment: header, pieces: [], size: 0, length: num(f, 14), given: 0 };
                 if (this.onHeader) {
                     this.onHeader(header);
                 }
@@ -451,20 +458,34 @@ export class SabrReader {
                 this.current = data[0];
                 if (open) {
                     // A view (into the reply, or the part joined from pieces): MEDIA_END copies the segment out
-                    open.pieces.push(data.subarray(1));
-                    open.size += data.length - 1;
+                    var media = data.subarray(1);
+                    // (handed out as it comes where the reader's owner takes it: from the segment's first part on)
+                    if (this.onMedia && open.given >= 0 && open.given === open.size && this.onMedia(open.segment, media)) {
+                        open.given += media.length;
+                    } else {
+                        open.given = open.given > 0 ? -1 : open.given;
+                        open.pieces.push(media);
+                    }
+                    open.size += media.length;
                 }
                 break;
             case MEDIA_END:
                 var done = this.open[data[0]];
-                if (done) {
-                    var whole = new Uint8Array(done.size);
-                    var at = 0;
-                    done.pieces.forEach(function (p) {
-                        whole.set(p, at);
-                        at += p.length;
-                    });
-                    done.segment.data = whole;
+                if (done && done.given < 0) {
+                    // (some of it handed out, then a part refused: nothing whole to tell)
+                    delete this.open[data[0]];
+                } else if (done) {
+                    if (done.given > 0) {
+                        done.segment.streamed = done.given;
+                    } else {
+                        var whole = new Uint8Array(done.size);
+                        var at = 0;
+                        done.pieces.forEach(function (p) {
+                            whole.set(p, at);
+                            at += p.length;
+                        });
+                        done.segment.data = whole;
+                    }
                     delete this.open[data[0]];
                     if (this.onSegment) {
                         this.onSegment(done.segment);

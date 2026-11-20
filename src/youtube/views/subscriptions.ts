@@ -22,7 +22,7 @@ import { tr } from '../core/i18n.js';
 import { KEY, ownPress } from '../core/keys.js';
 import { takesPointer, toPart } from '../core/pointer.js';
 import { View } from '../core/view.js';
-import { allVideos, keptPage, listNext, pageKept, Rows, Shelf, SubChannel, Video, withinADay } from '../api/feed.js';
+import { allVideos, keptPage, listNext, OLD_MS, pageKept, Rows, Shelf, SubChannel, Video, withinADay } from '../api/feed.js';
 import { channelKey, forgetLooks, looked, settle } from '../api/looked.js';
 import { prefs } from '../api/prefs.js';
 import { Pills } from '../ui/pills.js';
@@ -42,9 +42,6 @@ var READY_MS = 40;
  * than a held key's repeats are apart (~0.12 s), so a walk along the column with the key held draws none and asks
  * for none (drawing a grid takes the TV ~0.3 s) */
 var LIST_REST_MS = 150;
-/** A channel's list seen this long ago is asked for again behind the one shown, which is drawn anew only where
- * YouTube's differs from it */
-var LIST_FRESH_MS = 5 * 60000;
 /** The channels' lists kept as they were last seen, to be in sight at once when a channel is come back to */
 var KNOWN = 80;
 /** A step that is a press of its own (core/keys.ts ownPress: the key let go since, so not a held key's repeat, the first
@@ -649,7 +646,7 @@ export class SubscriptionsView extends FeedHost implements View {
         var self = this;
         var at = this.viewed(c);
         var had = at >= 0 ? this.views.splice(at, 1)[0] : null;
-        // (one drawn with its videos stays, however old: shown again it asks YouTube behind them, LIST_FRESH_MS on)
+        // (one drawn with its videos stays, however old: shown again it asks YouTube behind them, OLD_MS on)
         if (had && (had.view.hasRows || pageKept(c.page))) {
             this.views.push(had);
             return had.view;
@@ -672,7 +669,9 @@ export class SubscriptionsView extends FeedHost implements View {
             // The channel's list as it was last seen, else its videos the list above has already: in sight at once,
             // YouTube's list of the channel laid against them when it comes
             early: true,
-            refreshMs: LIST_FRESH_MS,
+            // (seen OLD_MS ago, it is asked for again behind the one shown, which is drawn anew only where
+            // YouTube's differs from it)
+            refreshMs: OLD_MS,
             kept: function () {
                 var rows = before || self.earlyOf(c);
                 return rows ? { rows: rows, same: function () { return Promise.resolve(true); } } : null;
@@ -760,7 +759,7 @@ export class SubscriptionsView extends FeedHost implements View {
         }
         var name = c.title;
         var videos = allVideos(all.shelves.slice(leadOf(all) ? 1 : 0)).filter(function (v) { return !v.page && v.channel === name; });
-        return videos.length ? { title: '', next: '', shelves: [{ title: '', videos: videos, grid: true, feed: true, next: '' }] } : null;
+        return videos.length ? listRows(videos) : null;
     }
 
     /** c's newest videos as a grid's rows, from YouTube's list of them in Subscriptions (api/feed.ts keptPage: kept a
@@ -781,7 +780,7 @@ export class SubscriptionsView extends FeedHost implements View {
         var key = channelKey(c);
         this.known = this.known.filter(function (k) { return k.key !== key; });
         if (list.shelves.length) {
-            this.known.push({ key: key, rows: { title: '', next: '', handle: list.handle, shelves: [{ title: '', videos: list.shelves[0].videos.slice(), grid: true, feed: true, next: '' }] } });
+            this.known.push({ key: key, rows: listRows(list.shelves[0].videos.slice(), list.handle) });
             if (this.known.length > KNOWN) {
                 this.known.shift();
             }
@@ -794,7 +793,7 @@ export class SubscriptionsView extends FeedHost implements View {
         for (var i = 0; i < this.known.length; i++) {
             if (this.known[i].key === key) {
                 var rows = this.known[i].rows;
-                return { title: '', next: '', handle: rows.handle, shelves: [{ title: '', videos: rows.shelves[0].videos.slice(), grid: true, feed: true, next: '' }] };
+                return listRows(rows.shelves[0].videos.slice(), rows.handle);
             }
         }
         return null;
@@ -1147,7 +1146,17 @@ function asFeed(rows: Rows): Rows {
 function asList(rows: Rows, name: string): Rows {
     var videos = allVideos(rows.shelves);
     ofChannel(videos, name);
-    return { title: '', next: '', handle: rows.handle, shelves: videos.length ? [{ title: '', videos: videos, grid: true, feed: true, next: listNext(rows) }] : [] };
+    var list = listRows(videos, rows.handle, listNext(rows));
+    if (!videos.length) {
+        list.shelves = [];
+    }
+    return list;
+}
+
+/** A channel's list as the screen draws it: its videos one grid (Shelf.feed), which continues with next ('' none),
+ * with the channel's handle where its list gave one */
+function listRows(videos: Video[], handle?: string, next?: string): Rows {
+    return { title: '', next: '', handle: handle, shelves: [{ title: '', videos: videos, grid: true, feed: true, next: next || '' }] };
 }
 
 /** Puts the videos of the named channel's list right. Its tiles have one line, the views and age, where others name

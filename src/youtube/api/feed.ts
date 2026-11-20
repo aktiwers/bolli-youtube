@@ -17,8 +17,10 @@ import { innertubeText } from './youtube.js';
  * some 10-60 KB of text; the counts below hold a few MB at most, against the app's ~100 MB (mostly pictures, which
  * are not kept). Kept pages refresh behind themselves once old (pageAge, main.ts pageOptions) */
 var KEEP_MS = 60 * 60 * 1000;
-/** A channel's list in Subscriptions, search results and a tab's tiles are kept this long */
-var LIST_KEEP_MS = 5 * 60 * 1000;
+/** What was asked of YouTube this long ago is old: a channel's list in Subscriptions, search results and a tab's tiles
+ * are kept only this long, and a kept page or a channel's list drawn again is asked for behind it once this old
+ * (main.ts pageOptions, views/subscriptions.ts) */
+export var OLD_MS = 5 * 60 * 1000;
 /** The start of the ids of YouTube's chart playlists (its Charts channel's, in every language) */
 var CHARTS = /^PL4fGSI1pDJn/;
 
@@ -246,9 +248,9 @@ function pageJson(p: Page): Promise<string> {
 var pages = new Keeper<Rows>(KEEP_MS, 24, true, true);
 // (Subscriptions keeps the channels' lists itself, for the session, refreshed behind after five minutes: views/
 // subscriptions.ts known; here only for a few minutes, as before)
-var lists = new Keeper<Rows>(LIST_KEEP_MS, 40, true, true);
+var lists = new Keeper<Rows>(OLD_MS, 40, true, true);
 // (search results and tabs are not refreshed behind themselves: kept a few minutes, as before, more of them)
-var searches = new Keeper<Rows>(LIST_KEEP_MS, 16, true, true);
+var searches = new Keeper<Rows>(OLD_MS, 16, true, true);
 
 function keeperOf(p: Page): Keeper<Rows> {
     return p.browseId === 'FEsubscriptions' && p.params ? lists : pages;
@@ -275,7 +277,7 @@ export function pageKept(p: Page): boolean {
 
 /** A tab's tiles (more), kept a while: at hand again for a tab seen before, and asked ahead while the focus rests on
  * its chip (tabAhead); not History's (keptTabs), which each watched video changes, as History's page is not kept */
-var tabs = new Keeper<Rows>(LIST_KEEP_MS, 16, true, true);
+var tabs = new Keeper<Rows>(OLD_MS, 16, true, true);
 
 /** Whether tab's tiles are kept and asked ahead */
 export function keptTabs(tab: Tab): boolean {

@@ -12,6 +12,7 @@
 import { tr } from '../core/i18n.js';
 import { forget, load, save } from '../core/store.js';
 import { Choice } from '../api/prefs.js';
+import { uiScale } from '../core/dom.js';
 import { fetchPicture, fitted } from './pictures.js';
 
 /** A custom logo: its number for good (never given again), the address it came from, the picture as a data URL ('':
@@ -30,7 +31,8 @@ export var NOT_KEPT = 'not kept';
 export var ADD = 'add';
 /** A custom logo's value in prefs logo and homeIcon: this and its id */
 var PREFIX = 'custom:';
-/** The box a custom logo is kept in: the built-in logos' size */
+/** The box a custom logo is kept in: the built-in logos' size in the layout, kept at the screen's own pixels (uiScale:
+ * 324 x 272 on a 1920 px window), so it is drawn sharp, never stretched */
 var WIDTH = 216;
 var HEIGHT = 181;
 /** The list as kept (each one's id, address and whether its picture is kept), a picture's key (its id after it), and
@@ -128,7 +130,9 @@ export function addCustomLogo(url: string): Promise<CustomLogo> {
         if (before.length >= CUSTOMS_MAX) {
             throw new Error(FULL);
         }
-        var data = got.data && fitted(got, WIDTH, HEIGHT);
+        // (the screen's scale; 1 where the window has no width to read)
+        var scale = uiScale() || 1;
+        var data = got.data && fitted(got, Math.round(WIDTH * scale), Math.round(HEIGHT * scale));
         var id = (load<number>(LAST_KEY) || 0) + 1;
         var c = custom({ id: id, url: url, kept: !!data }, data);
         var next = before.concat([c]);
