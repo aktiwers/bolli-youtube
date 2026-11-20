@@ -23,7 +23,12 @@ export class ReplayGraph {
 
     /** The video's graph (null: none) */
     set(replays: Replays | null): void {
-        this.path.setAttribute('d', replays ? replayPath(replays) : '');
+        // (none: no outline at all; an empty one is an error in webOS TV 1.x-2.x's engine)
+        if (replays) {
+            this.path.setAttribute('d', replayPath(replays));
+        } else {
+            this.path.removeAttribute('d');
+        }
     }
 }
 

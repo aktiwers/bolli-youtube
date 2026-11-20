@@ -128,8 +128,14 @@ function fresh(video: HTMLVideoElement, mimes: string[]): Promise<Pipeline> {
     if (current) {
         URL.revokeObjectURL(current.url);
     }
-    var source = new MediaSource();
-    var url = URL.createObjectURL(source);
+    // (a device without a Media Source the player can use: refused as one whose formats it cannot take, so the player
+    // gives up with its reason instead of waiting on the network)
+    try {
+        var source = new MediaSource();
+        var url = URL.createObjectURL(source);
+    } catch (e) {
+        return Promise.reject('media');
+    }
     var pipe = current = new Pipeline(video, source, mimes.map(kindOf), url);
     kept = false;
     // An emptying under way is moot: its source is replaced now

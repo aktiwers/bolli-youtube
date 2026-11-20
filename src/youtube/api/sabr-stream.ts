@@ -12,6 +12,8 @@
 // What the engine gets is shaped as the XMLHttpRequest it would use (the events and fields it reads), with take() for
 // the bytes that came since the last one.
 
+import { oldEngine } from '../core/platform.js';
+
 /** How the worker reads: whatever comes until `early` bytes are in (a resume start waits for a segment's header
  * there), then once a quarter, a half and all of `first` are in (a start's first piece: turned into bytes while the
  * rest of it comes), then each time as much again, `most` at most */
@@ -158,8 +160,10 @@ interface Workers {
 var made: Workers | null = null;
 /** take() with nothing new (not changed by its callers) */
 var NONE: Uint8Array[] = [];
-/** Making one failed (the page refused the blob, or has no workers): not tried again in this run */
-var none = false;
+/** Making one failed (the page refused the blob, or has no workers): not tried again in this run. Never on webOS TV
+ * 1.x-2.x's old engine: a worker made there from a blob asks with the app's own origin (file://), not the page's, and
+ * the video servers refuse it */
+var none = oldEngine();
 var requests = 0;
 
 /** A worker's end */
