@@ -11,8 +11,9 @@
 // worker (window stubbed) with one line appended that exposes that call via
 // messages. In a page frame it blocks the app ~1.8 s on the TV; in a worker
 // only ~0.2 s. The worker holds ~45 MB, so it is dropped IDLE_MS after the
-// last use. In a script without that shape the line appended uses the
-// script's stream URL builder, found and called as yt-dlp's solver does it
+// last use, or after the player closed if that is later (holdScript). In a
+// script without that shape the line appended uses the script's stream URL
+// builder, found and called as yt-dlp's solver does it
 // (urlBuilders). If both fail, it is the code yt-dlp's solver makes to
 // compute n in that script: a job keeps it, made ES5 for old TVs, for each
 // new TV player script (github.com/aktiwers/bolli-solver), so no app update
@@ -87,6 +88,8 @@ var script: Promise<PlayerScript> | null = null;
 var early: { path: string; got: Promise<{ status: number; text: string }> } | null = null;
 var worker: Worker | null = null;
 var idleTimer = 0;
+/** The player is open: the script is not dropped (holdScript) */
+var held = false;
 var kept: { file: string; code: string }[] = load<{ file: string; code: string }[]>(KEPT_KEY) || [];
 
 /** The TV player script's signature timestamp, and its n transform (which waits for the script to run in its worker,
@@ -135,9 +138,29 @@ export function playerScript(): Promise<PlayerScript> {
     }
     var asked = script;
     asked.then(function () {
-        if (script === asked) {
+        if (!held) {
+            idleFrom(asked);
+        }
+    }, function () { return undefined; });
+    return script;
+}
+
+/** While the player is open (on), the script is kept: each signed-in video would otherwise run it anew, a load of
+ * ~45 MB and a wait at its start whenever the last one played longer than IDLE_MS. Closed, it is dropped IDLE_MS
+ * later. */
+export function holdScript(on: boolean): void {
+    held = on;
+    clearTimeout(idleTimer);
+    if (!on && script) {
+        idleFrom(script);
+    }
+}
+
+/** Drop asked IDLE_MS after it ran (only that one: a script that failed meanwhile keeps its FAILED_MS) */
+function idleFrom(asked: Promise<PlayerScript>): void {
+    asked.then(function () {
+        if (script === asked && !held) {
             clearTimeout(idleTimer);
-            // (only this script: one that failed meanwhile keeps its FAILED_MS)
             idleTimer = setTimeout(function () {
                 if (script === asked) {
                     drop();
@@ -145,7 +168,6 @@ export function playerScript(): Promise<PlayerScript> {
             }, IDLE_MS) as unknown as number;
         }
     }, function () { return undefined; });
-    return script;
 }
 
 /** The build the /tv page names and the path of its classic variant, whatever variant the page names (that a Samsung

@@ -34,6 +34,7 @@ import { dearrowOn, dearrowPicture, dearrowTitle, dearrowWait } from '../api/dea
 import { dots, Ended, Page, PlaylistInfo, thumbnail, thumbnailFallback, Video } from '../api/feed.js';
 import { CAPTION_SIZES, ChoiceSetting, Prefs, prefs, setNames, setPref } from '../api/prefs.js';
 import { keyName, wakeKey } from '../api/shortcuts.js';
+import { holdScript } from '../api/player-script.js';
 import { Replays, replays } from '../api/replays.js';
 import { Segment, segmentAt, segments, skippedText } from '../api/sponsorblock.js';
 import { WatchReport } from '../api/stats.js';
@@ -3569,6 +3570,8 @@ export class OwnPlayer {
             toggleClass(this.el, 'by-player--clock-left', corner === 'left');
             toggleClass(this.el, 'by-player--clock-right', corner === 'right');
             setShown(this.el, shown);
+            // (YouTube's player script, for signed-in videos: kept while the player is open)
+            holdScript(shown);
             this.onShown(shown);
         }
     }
