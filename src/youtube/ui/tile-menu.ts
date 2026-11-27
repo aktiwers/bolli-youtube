@@ -13,7 +13,7 @@ import { commandsOf, MenuItem, Page, pageOf, toastOf, Video } from '../api/feed.
 import { tileMenu } from '../api/menu.js';
 import { run } from '../api/watch.js';
 import { openSaveTo } from './account.js';
-import { SidePanel } from './side-panel.js';
+import { PanelLine, SidePanel } from './side-panel.js';
 
 export interface TileMenuActions {
     play(video: Video): void;
@@ -22,14 +22,27 @@ export interface TileMenuActions {
     removed(video: Video): void;
     /** YouTube refused the removal: restore the tile (refetch the screen) */
     kept(video: Video): void;
+    /** The tile is in a named row on Home (its name): its menu ends with Hide rows named so (api/filters.ts) */
+    hideRow?: { name: string; hide: () => void };
+    /** The tile's channel (its name) on a filtered screen but its own page: its menu ends with Hide videos from it */
+    hideChannel?: { name: string; hide: () => void };
 }
 
 /** Opens the video's menu in the panel ("Loading" until YouTube replies) */
 export function openTileMenu(panel: SidePanel, video: Video, actions: TileMenuActions): void {
+    var hide = actions.hideRow;
+    var channel = actions.hideChannel;
     panel.openAsked(dearrowTitle(video.id, video.title) || tr('Video'), tileMenu(video), function (items) {
-        return items.map(function (item) {
+        var lines: PanelLine[] = items.map(function (item) {
             return { label: item.title, stay: saves(item), action: function () { act(panel, video, item, actions); } };
         });
+        if (hide) {
+            lines.push({ label: tr('Hide rows named "{1}"', hide.name), action: hide.hide });
+        }
+        if (channel) {
+            lines.push({ label: tr('Hide videos from {1}', channel.name), action: channel.hide });
+        }
+        return lines;
     }, tr('the menu'));
 }
 

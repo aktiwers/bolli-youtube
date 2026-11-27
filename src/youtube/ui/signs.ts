@@ -11,6 +11,7 @@ export var SPINNERS = ['youtube', 'midnight', 'arcade', 'vhs', 'mission', 'paper
  * is chosen, filling up as the channel's picture does; no logo chosen: the channel's picture), then
  * the spinners, each a theme's. The one list of the signs' ids (api/prefs.ts reads the stored ones by it; views/settings.ts
  * signSetting gives each its name and note). A new sign: its id here (a spinner: also its parts in ui/spinner.ts PARTS,
- * their look in themes/youtube.css), its choice in views/settings.ts, its drawing in the player (player/own-player.ts,
- * where the sign starts) */
+ * their look in themes/youtube.css, its own colours one may change in tools/light_theme.mjs SIGN_COLOURS: the build
+ * fails without them), its choice in views/settings.ts and views/sign-preview.ts signSays, its drawing in the player
+ * (player/own-player.ts, where the sign starts) */
 export var LOADING_SIGNS = ['off', 'channel', 'logo'].concat(SPINNERS);

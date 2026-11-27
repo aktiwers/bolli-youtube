@@ -22,20 +22,23 @@ import { h, keepCentred, setShown, setSrc, setText, toggleClass, translate } fro
 import { language, LANGUAGES, setLanguage, tr } from '../core/i18n.js';
 import { KEY } from '../core/keys.js';
 import { holding, takesPointer } from '../core/pointer.js';
-import { android } from '../core/platform.js';
+import { android, foundOnNetwork } from '../core/platform.js';
+import { nativeHook } from '../player/engine.js';
 import { localClock, pad2 } from '../core/time.js';
 import { problems, PROBLEMS_SHOWN } from '../player/play-log.js';
 import { View } from '../core/view.js';
 import { AccountGroup, AccountSetting, historySettings } from '../api/account-settings.js';
 import { Ask } from '../api/feed.js';
+import { FilterScreen } from '../api/filters.js';
 import { ALWAYS, audioLanguages, languageName, offeredLanguages } from '../api/languages.js';
 import { CAPTION_SIZES, Choice, Choices, ChoiceSetting, HIGHEST, prefDefault, prefs, Prefs, setNames, setPref, Value } from '../api/prefs.js';
 import { keyName, shortcutOf, shortcuts } from '../api/shortcuts.js';
 import { PARTS } from '../api/sponsorblock.js';
-import { codecPlays, soundName, soundPlays, SOUNDS } from '../api/streams.js';
+import { codecPlays, hdrPlays, soundName, soundPlays, SOUNDS } from '../api/streams.js';
 import { appVersion, checkAgain, hasVersionCheck, newerVersion } from '../api/version-check.js';
 import { apply, askToClear } from '../ui/account.js';
 import { choiceButton, choiceTile } from '../ui/choice-button.js';
+import { holdRest } from '../ui/colours.js';
 import { keyboardFor, recentWith } from '../ui/keyboard-languages.js';
 import { LanguagePicker } from '../ui/language-picker.js';
 import { ADD, customOf, FULL, NOT_KEPT, removeCustomLogo } from '../ui/custom-logos.js';
@@ -50,12 +53,13 @@ import { NOT_PICTURE, TOO_BIG, TOO_LARGE, TOO_LARGE_BY_ADDRESS } from '../ui/pic
 import { PROBLEM, toast } from '../ui/toast.js';
 import { screenOff } from '../ui/screen-off.js';
 import { LOADING_SIGNS } from '../ui/signs.js';
-import { allLooks, applyLookSoon, applyTheme, keepCustom, lookOf, lookPart, lookParts, matchingLook, MINE, SAVED, savedLooks, setLook, setLookPart,
-    subsLayout, themes } from '../ui/theme.js';
+import { allLooks, applyLookSoon, applyTheme, keepCustom, lookOf, lookPart, lookParts, matchingLook, MINE, SAVED,
+    savedLooks, setLook, setLookPart, subsLayout, themes, tryLook, tryWholeLook } from '../ui/theme.js';
 import { ColourMode, ColourPage } from './colour-page.js';
 import { IconPage } from './icon-page.js';
+import { TextSizePage } from './text-size-page.js';
 import { ShortcutHost, ShortcutsPage } from './shortcuts.js';
-import { SignPreview } from './sign-preview.js';
+import { SignPreview, signSays } from './sign-preview.js';
 
 /** A setting: name, description, picture ('' for none); its choices, or the steps to link a phone (code: shows a TV
  * code, for a phone on another network), or lines to read (info: asked each time it is drawn); open: Right or OK opens
@@ -66,18 +70,23 @@ interface Setting {
     /** Its picture at the top of the right side ('' none; a function: asked each time it is drawn) */
     picture: string | (() => string);
     choices?: Choices;
+    /** The line under its name when none of its choices is set ('' none) */
+    unset?: string;
     steps?: string[];
+    /** Linking a phone: with a code shown (code), or by casting on the same network (wifi) */
     code?: boolean;
+    wifi?: boolean;
     info?: () => string[];
     open?: () => void;
     /** Its choices are tiles in a grid of this many columns (the Branding settings: the arrows move in it, OK held
      * removes a removable one); its top is small and stays while only the tiles scroll */
     grid?: number;
     /** Its choices are shown over the app (the Theme settings): Settings narrows to them while they have the focus, the
-     * screen behind in view (onPreview); the arrows only move the focus, and OK's choice is drawn on the app (its
-     * checkmark first: ui/theme.ts applyLookSoon) */
+     * screen behind in view (onPreview); the choice the focus is on is shown on the app (onFocus), and OK's is set and
+     * drawn there (its checkmark first: ui/theme.ts applyLookSoon) */
     preview?: boolean;
-    /** Told the choice the focus is on as it moves there, and null once it leaves them (Loading spinner: shown on the app) */
+    /** Told the choice the focus is on as it moves there, and null once it leaves them (shown on the app: onApp; the
+     * Loading spinner's by its own preview) */
     onFocus?: (value: Value | null) => void;
     /** Its choices change with what is set (Theme: Custom and saving come and go): drawn anew after OK, not only ticked */
     redraw?: boolean;
@@ -113,6 +122,8 @@ var CODE_REST_MS = 300;
 var CODE_MS = 5 * 60000;
 /** The longest name a saved theme takes */
 var THEME_NAME_MAX = 30;
+/** A keyword's length at most (typed on the text page) */
+var KEYWORD_MAX = 40;
 /** Margin keeping the focused choice inside the right side's view */
 var ROOM = 24;
 
@@ -137,6 +148,36 @@ function pref<K extends keyof Prefs>(label: string, summary: string, picture: st
             then(value);
         }
     });
+}
+
+/** A Theme setting's onFocus over the app (Theme, Font): the choice the focus is on shown on the app
+ * (show) as the Colours page shows a colour: after a key of its own at once (ui/theme.ts draws it in the frame after
+ * the next), after keys soon after one another once they rest (ui/colours.ts holdRest: a look restyles the app, not at
+ * a held key's repeats); the one set again (show(null)) on the choice set (isSet: the setting's own) and as the focus
+ * leaves the choices; nothing set */
+export function onApp(isSet: (value: Value) => boolean, show: (value: string | null) => void): (value: Value | null) => void {
+    var timer = 0;
+    var movedAt = 0;
+    var pending: Value | null = null;
+    var shown = function (): void {
+        show(pending === null || isSet(pending) ? null : String(pending));
+    };
+    return function (value) {
+        clearTimeout(timer);
+        pending = value;
+        if (value === null) {
+            shown();
+            return;
+        }
+        var now = Date.now();
+        var rest = holdRest(now - movedAt);
+        movedAt = now;
+        if (rest) {
+            timer = setTimeout(shown, rest) as unknown as number;
+        } else {
+            shown();
+        }
+    };
 }
 
 /** An on/off setting's choices, with notes for on and off */
@@ -227,9 +268,13 @@ function audioLanguage(more: (pref: LanguagePref) => void): Setting {
 /** The value of a list's Off (several: none of its choices set) */
 var NONE = '';
 
+/** The prefs that are lists of choices, each set by itself (several) */
+type ListPref = 'skip' | 'dearrowOptions' | 'listButtons' | 'hideHome' | 'hideSubs' | 'hideSearch' | 'hideChannel' | 'hideLater' | 'hideRelated' |
+    'homeRows' | 'keywordsIn';
+
 /** An app pref listing several choices, each turned on and off by itself; offNote: an Off first (with that note) that sets
  * none of them (set while none is; chosen again then, the default ones are set again) */
-function several(label: string, summary: string, picture: string, name: 'skip' | 'dearrowOptions' | 'listButtons', list: () => Choice[], offNote?: string): Setting {
+function several(label: string, summary: string, picture: string, name: ListPref, list: () => Choice[], offNote?: string): Setting {
     return {
         label: label,
         summary: summary,
@@ -265,6 +310,234 @@ function dearrowOptions(): Setting {
         { value: 'tidy', name: tr('Tidy titles'), note: tr('every title in Title Case, without shouting capitals, emoji or extra exclamation marks') }
     ];
     return several(tr('DeArrow options'), tr('What DeArrow changes besides the titles its users wrote.'), 'dearrow.png', 'dearrowOptions', function () { return options; });
+}
+
+/** The kinds of tiles a screen's filter hides (api/filters.ts isKind) */
+function tileKinds(): Choice[] {
+    return [
+        { value: 'live', name: tr('Live'), note: tr('streams live now') },
+        { value: 'upcoming', name: tr('Upcoming'), note: tr('premieres and streams not out yet') },
+        { value: 'watched', name: tr('Watched'), note: tr('videos you have watched nine tenths of or more') },
+        { value: 'mixes', name: tr('Mixes'), note: tr('YouTube\'s mixes of a video and others like it') },
+        { value: 'playlists', name: tr('Playlists'), note: tr('playlists, and shows made of them') },
+        { value: 'members', name: tr('Members only'), note: tr('videos for a channel\'s members') }
+    ];
+}
+
+/** A screen's filter: the kinds of tiles it hides */
+function hideOn(label: string, summary: string, name: ListPref): Setting {
+    return several(label, summary, pic('clear_watch_history'), name, tileKinds, tr('every kind shows'));
+}
+
+/** The prefs that are lists of names the viewer added (Settings › Filters) */
+type NamesPref = 'hiddenRows' | 'hiddenChannels' | 'keywords';
+
+/** The line that adds a name (a keyword typed) */
+var ADD_NAME = -1;
+
+/** A list of names hidden (NamesList.name: rows, channels, keywords) */
+interface NamesList {
+    label: string;
+    summary: string;
+    picture: string;
+    name: NamesPref;
+    /** Each name's note */
+    note: string;
+    /** The line shown when the list is empty, and its note (how one is added) */
+    none: string;
+    noneNote: string;
+    /** A first line that adds one (OK: add(put), put(name) adding a name: one already listed, any case, is that one) */
+    add?: { name: string; note: string; add: (put: (name: string) => void) => void };
+}
+
+/** A list of names hidden: OK on one shows its tiles again, again hides them (those taken off stay listed, in their
+ * place, while the app runs and the same profile's settings are in use: another's never shows them) */
+function namesList(o: NamesList): Setting {
+    var listed: string[] = [];
+    var listedOf: Prefs | null = null;
+    var name = o.name;
+    var add = o.add;
+    var adds: Choice[] = add ? [{ value: ADD_NAME, name: add.name, note: add.note }] : [];
+    return {
+        label: o.label,
+        summary: o.summary,
+        picture: o.picture,
+        unset: o.none,
+        choices: {
+            list: function () {
+                // (another profile's settings: a list read anew, new settings are a new object: prefs.ts)
+                if (listedOf !== prefs()) {
+                    listedOf = prefs();
+                    listed = [];
+                }
+                prefs()[name].forEach(function (n) {
+                    if (listed.indexOf(n) < 0) {
+                        listed.push(n);
+                    }
+                });
+                return adds.concat(listed.length ? listed.map(function (n) { return { value: n, name: n, note: o.note }; }) :
+                    [{ value: NONE, name: o.none, note: o.noneNote, off: true }]);
+            },
+            isSet: function (n) {
+                return prefs()[name].indexOf(n as string) >= 0;
+            },
+            choose: function (n) {
+                var names = prefs()[name];
+                if (n === ADD_NAME) {
+                    add!.add(function (typed) {
+                        var low = typed.toLowerCase();
+                        var same = function (one: string): boolean { return one.toLowerCase() === low; };
+                        var now = prefs()[name];
+                        if (typed && !now.some(same)) {
+                            setPref(name, now.concat([listed.filter(same)[0] || typed]));
+                        }
+                    });
+                } else if (names.indexOf(n as string) >= 0) {
+                    setPref(name, names.filter(function (one) { return one !== n; }));
+                } else {
+                    setPref(name, names.concat([n as string]));
+                }
+            },
+            many: true
+        }
+    };
+}
+
+/** Rows hidden by their names (a tile's menu on Home: Hide rows named this) */
+function hiddenRows(): Setting {
+    return namesList({ label: tr('Hidden rows'), summary: tr('Home rows hidden by their names. Hold OK on a tile in a row on Home to hide the rows of its name.'),
+        picture: 'homebig.png', name: 'hiddenRows', note: tr('OK shows rows of this name again'), none: tr('No rows hidden'),
+        noneNote: tr('hold OK on a tile in a row on Home: Hide rows named so') });
+}
+
+/** Channels hidden (a tile's menu: Hide videos from), and whether also in Subscriptions */
+function hiddenChannels(): Setting {
+    return namesList({ label: tr('Hidden channels'),
+        summary: tr('Channels whose videos are hidden on Home, in search results and related videos. Hold OK on a video to hide its channel.'),
+        picture: pic('clear_watch_history'), name: 'hiddenChannels', note: tr('OK shows videos from this channel again'), none: tr('No channels hidden'),
+        noneNote: tr('hold OK on a video: Hide videos from its channel') });
+}
+
+/** Keywords: the first line types one (on the text page: type), OK on one shows what it hid again */
+function keywords(type: (title: string, taken: (text: string) => void) => void): Setting {
+    return namesList({ label: tr('Keywords'),
+        summary: tr('Videos and rows with one of these words in them are hidden everywhere but in Watch later. Big or small letters alike, and part of a word too.'),
+        picture: pic('clear_watch_history'), name: 'keywords', note: tr('OK shows what this keyword hides again'), none: tr('No keywords'),
+        noneNote: tr('add one above: a word, or a part of one'), add: {
+            name: tr('Add a keyword…'), note: tr('press OK to type one'), add: function (put) {
+                type(tr('Keyword'), function (typed) {
+                    put(oneLine(typed, KEYWORD_MAX));
+                });
+            }
+        } });
+}
+
+/** A screen's choice in Shorts' list: its value is the screen's id after this */
+var SHORTS_ON = 'on:';
+
+/** Where Shorts show (api/filters.ts shortsShown): nowhere, everywhere, or By screen, whose screens follow it in the list
+ * while it is chosen, each ticked by itself */
+function shorts(): Setting {
+    var modes: Choice[] = [
+        { value: 'hidden', name: tr('Hidden'), note: tr('no Shorts anywhere, and no Shorts button on a channel\'s page') },
+        { value: 'shown', name: tr('Shown'), note: tr('rows of Shorts wherever YouTube has them') },
+        { value: 'screens', name: tr('By screen'), note: tr('only on the screens ticked below') }
+    ];
+    var on = function (screen: FilterScreen, name: string, note: string): Choice {
+        return { value: SHORTS_ON + screen, name: name, note: note };
+    };
+    var screens: Choice[] = [
+        on('home', tr('Home'), tr('Shorts rows on Home')),
+        on('subs', tr('Subscriptions'), tr('the Shorts row over your subscriptions\' videos')),
+        on('search', tr('Search'), tr('a Shorts row in search results, with the Shorts found among the videos')),
+        on('channel', tr('Channel pages'), tr('a channel\'s Shorts rows, and its Shorts button')),
+        on('related', tr('Related videos'), tr('a Shorts row under a video\'s related videos in Bolli\'s player'))
+    ];
+    return {
+        label: tr('Shorts'),
+        summary: tr('YouTube\'s short upright videos: where their rows show. OK on one plays it in Bolli\'s player.'),
+        picture: pic('clear_watch_history'),
+        redraw: true,
+        choices: {
+            list: function () {
+                return prefs().shorts === 'screens' ? modes.concat(screens) : modes;
+            },
+            isSet: function (value) {
+                var id = String(value);
+                return id.indexOf(SHORTS_ON) === 0 ? prefs().shortsOn.indexOf(id.slice(SHORTS_ON.length)) >= 0 : prefs().shorts === id;
+            },
+            choose: function (value) {
+                var id = String(value);
+                if (id.indexOf(SHORTS_ON) === 0) {
+                    var screen = id.slice(SHORTS_ON.length);
+                    var now = prefs().shortsOn;
+                    setPref('shortsOn', now.indexOf(screen) >= 0 ? now.filter(function (one) { return one !== screen; }) : now.concat([screen]));
+                    return;
+                }
+                setPref('shorts', id);
+                // (what the Shorts on/off shortcut turns them back on to)
+                if (id !== 'hidden') {
+                    setPref('shortsLast', id);
+                }
+            }
+        }
+    };
+}
+
+/** Settings › Filters (api/filters.ts): where Shorts show, lengths hidden everywhere, then each screen's kinds of tiles,
+ * Home's kinds of rows and rows by name. Each screen takes them when it shows next; the Filters on/off shortcut turns
+ * all off a while (not Shorts: theirs is the Shorts on/off shortcut) */
+function filters(type: (title: string, taken: (text: string) => void) => void): (Setting | string)[] {
+    var length = tr('live streams and premieres have no length: never hidden for it');
+    return [
+        shorts(),
+        tr('Everywhere'),
+        pref(tr('Shorter than'), tr('Videos shorter than this are hidden'), pic('clear_watch_history'), 'filterShorter', [
+            { value: 0, name: tr('Off'), note: tr('no video is hidden for its length') },
+            { value: 60, name: tr('1 minute'), note: length },
+            { value: 120, name: tr('2 minutes'), note: length },
+            { value: 240, name: tr('4 minutes'), note: length }
+        ]),
+        pref(tr('Longer than'), tr('Videos longer than this are hidden'), pic('clear_watch_history'), 'filterLonger', [
+            { value: 0, name: tr('Off'), note: tr('no video is hidden for its length') },
+            { value: 1200, name: tr('20 minutes'), note: length },
+            { value: 3600, name: tr('1 hour'), note: length },
+            { value: 7200, name: tr('2 hours'), note: length }
+        ]),
+        hiddenChannels(),
+        pref(tr('Hidden channels also in Subscriptions'), tr('Whether the channels hidden are hidden in Subscriptions too'), pic('clear_watch_history'),
+            'hiddenChannelsInSubs', onOff(tr('their videos are hidden in Subscriptions too'), tr('Subscriptions shows them'))),
+        keywords(type),
+        several(tr('Keywords match in'), tr('Where the keywords hide what has them'), pic('clear_watch_history'), 'keywordsIn', function () {
+            return [
+                { value: 'titles', name: tr('Titles'), note: tr('the titles of videos, playlists and shows') },
+                { value: 'channels', name: tr('Channel names'), note: tr('the names of channels, not on a channel\'s own page') },
+                { value: 'rows', name: tr('Home row names'), note: tr('the names of Home\'s rows') }
+            ];
+        }),
+        tr('Home'),
+        hideOn(tr('Hide on Home'), tr('The kinds of tiles Home leaves out'), 'hideHome'),
+        several(tr('Home rows'), tr('The kinds of rows Home leaves out'), 'homebig.png', 'homeRows', function () {
+            return [
+                { value: 'continue', name: tr('Continue watching'), note: tr('the row of videos you have begun') },
+                { value: 'topics', name: tr('Topic rows'), note: tr('"Science and more", and the rows of a topic\'s channel') },
+                { value: 'channels', name: tr('Channel rows'), note: tr('rows of channels') },
+                { value: 'shows', name: tr('Shows & podcasts'), note: tr('rows of shows, podcasts and playlists') },
+                { value: 'live', name: tr('Live rows'), note: tr('rows of live streams') }
+            ];
+        }, tr('every row shows')),
+        hiddenRows(),
+        tr('Subscriptions'),
+        hideOn(tr('Hide in Subscriptions'), tr('The kinds of tiles Subscriptions leaves out'), 'hideSubs'),
+        tr('Search'),
+        hideOn(tr('Hide in search results'), tr('The kinds of tiles search results leave out'), 'hideSearch'),
+        tr('Channel pages'),
+        hideOn(tr('Hide on channel pages'), tr('The kinds of tiles a channel\'s page leaves out'), 'hideChannel'),
+        tr('Watch later'),
+        hideOn(tr('Hide in Watch later'), tr('The kinds of tiles Watch later leaves out'), 'hideLater'),
+        tr('Watch page'),
+        hideOn(tr('Hide in related videos'), tr('The kinds of tiles the related videos under a video in Bolli\'s player leave out'), 'hideRelated')
+    ];
 }
 
 /** An add-on's settings as one row of the middle (Setting.group): its name, and its first setting's description and
@@ -315,6 +588,12 @@ function pageSetting(label: string, summary: string, picture: string | (() => st
 function liveChat(open: () => void): Setting {
     return pageSetting(tr('Live chat'), tr('A live stream\'s chat in Bolli\'s player: whether it shows, where, how big and how it looks (also in the player\'s settings)'),
         'chat.png', open, tr('Live chat settings'), chatSummary);
+}
+
+/** Edit sidebar's note: how many entries are hidden, or whether the order is one's own */
+function sidebarNote(): string {
+    var p = prefs();
+    return p.railHidden.length ? tr('{1} hidden', p.railHidden.length) : p.railOrder.length ? tr('in your own order') : tr('as YouTube\'s TV app');
 }
 
 /** Shortcuts: the remote's spare buttons, on their own page (open: views/shortcuts.ts); the note says how many have
@@ -388,6 +667,13 @@ export function codecChoices(): Choice[] {
     }));
 }
 
+/** HDR's choices: On (where this device shows no HDR, api/streams.ts hdrPlays, it says so: chosen, videos play in SDR)
+ * and Off */
+export function hdrChoices(): Choice[] {
+    var list = onOff(tr('a video that has HDR plays in it'), tr('every video plays in standard range (SDR)'));
+    return hdrPlays() ? list : [{ value: true, name: list[0].name, note: tr('this TV cannot show HDR'), off: true }, list[1]];
+}
+
 /** Audio codec's choices: Auto, then every sound YouTube has (api/streams.ts SOUNDS); one this device does not play
  * (soundPlays) shown greyed, not to be chosen. Surround comes only with videos fetched by SABR: chosen with Streams by
  * SABR off, every video is fetched so (api/streams.ts signedInFirst: which have it is not known before), as its note
@@ -440,8 +726,8 @@ function appLanguage(restart: () => void): Setting {
         });
 }
 
-/** What the Branding settings need of the screen: the page a custom logo's address is typed on (take: what takes the
- * address typed), the page for the home screen name, and a way to draw the right side anew after a choice that took
+/** What the Branding settings (and Filters' keywords) need of the screen: the page a custom logo's address is typed on
+ * (take: what takes the address typed), the page for the home screen name, and a way to draw the right side anew after a choice that took
  * a moment (e: why it was refused, if it was) */
 interface Brand {
     address(take: (url: string) => Promise<unknown>): void;
@@ -453,8 +739,13 @@ interface Brand {
     saveLook(): void;
     /** Opens the icons' page (views/icon-page.ts) */
     icons(): void;
+    /** Opens the text sizes' page (views/text-size-page.ts) */
+    sizes(): void;
     /** Shows the loading sign the focus is on over the app (views/sign-preview.ts); null: none */
     sign(id: string | null): void;
+    /** Opens the page to type on under title, nothing typed yet (Settings › Filters › Keywords); taken: told the text
+     * typed, the right side drawn anew after */
+    type(title: string, taken: (text: string) => void): void;
 }
 
 /** The columns of a grid of logo tiles */
@@ -553,7 +844,15 @@ function fontSetting(): Setting {
         setLookPart('font', String(value));
     });
     setting.preview = true;
+    setting.onFocus = onApp(setting.choices!.isSet, function (font) { tryLook('font', font); });
     return setting;
+}
+
+/** The app's text (Settings › Theme › Text size): each kind's size on one page over the app, what it changes shown on
+ * the app or a model of the screen behind it (views/text-size-page.ts) */
+function textSizeSetting(brand: Brand): Setting {
+    return pageSetting(tr('Text size'), tr('The size of each kind of text, picked on the app'), 'black.png', function () { brand.sizes(); },
+        tr('Text size'), function () { return tr('press OK to pick them on the app'); });
 }
 
 /** The icons (Settings › Theme › Icons): the sidebar's and the rest of the app's on one page over the app
@@ -569,19 +868,8 @@ function iconsPageSetting(brand: Brand): Setting {
  * its choices over the app, the sign the focus is on shown there for a few seconds, where a start shows it
  * (views/sign-preview.ts) */
 function signSetting(brand: Brand): Setting {
-    // (each sign's name and note by its id; the spinners by the names of the themes they are of)
-    var says: { [id: string]: string[] } = {
-        off: [tr('Off'), tr('the screen stays dark until the video plays')],
-        channel: [tr('Channel picture'), tr('the channel\'s picture fills up')],
-        logo: [tr('Your logo'), tr('the logo you chose fills up')],
-        youtube: ['YouTube', tr('a white arc turning, as YouTube\'s own')],
-        midnight: ['Midnight', tr('soft rings breathing out of a glowing dot')],
-        arcade: ['Arcade', tr('pixel blocks chasing round a square')],
-        vhs: ['VHS', tr('PLAY with its triangle blinking, a tracking bar rolling past')],
-        mission: ['Mission Control', tr('a moon orbiting a planet')],
-        paper: ['Paper', tr('three ink dots rising and settling in turn')],
-        cinema: ['Cinema', tr('marquee bulbs chasing round a ring')]
-    };
+    // (each sign's name and note by its id: views/sign-preview.ts)
+    var says = signSays();
     var setting = pick(tr('Loading spinner'), tr('What shows while a video starts in Bolli\'s player'), pic('reset_app'), LOADING_SIGNS.map(function (id) {
         return { value: id, name: says[id][0], note: says[id][1] };
     }), function () { return lookPart('startSign'); }, function (value) { setLookPart('startSign', String(value)); });
@@ -621,7 +909,7 @@ function lookChoices(removable: boolean): Choice[] {
 /** Settings › Theme › Theme: a look sets every part in one go (the built-in ones, then one's saved ones; the logo and
  * the loading sign shown on top of the account's own where it names them, never set: ui/theme.ts setLook); Custom,
  * one's own look as last made, kept while another is tried; while it is the look: saving it as a theme under a name.
- * The arrows only move the focus: OK shows the look, its logo with it */
+ * The look the focus is on shown on the app, its logo with it (onApp); OK sets it */
 function themeSetting(brand: Brand): Setting {
     // (the look set, worked out where the choices are (each draw of them) and kept for their ticks: a tick is asked of
     // every choice at every arrow)
@@ -663,6 +951,10 @@ function themeSetting(brand: Brand): Setting {
     setting.preview = true;
     setting.redraw = true;
     setting.compact = true;
+    // (Custom: one's own look as kept; saving it: the look set)
+    setting.onFocus = onApp(setting.choices!.isSet, function (look) {
+        tryWholeLook(look === null || look === SAVE ? null : look === CUSTOM ? prefs().customLook || null : lookOf(look).parts);
+    });
     return setting;
 }
 
@@ -713,7 +1005,8 @@ interface Category {
 /** The app's own settings, in categories (pages: possible start pages; more: Subtitles' and Audio language's "More
  * languages"; chat: Live chat settings; keys: Shortcuts; restart: starts the app again; brand: what the Branding
  * settings need). Account & phone and About come after them (SettingsView) */
-function bolli(pages: StartPage[], more: (pref: LanguagePref) => void, chat: () => void, keys: () => void, restart: () => void, brand: Brand): Category[] {
+function bolli(pages: StartPage[], more: (pref: LanguagePref) => void, chat: () => void, keys: () => void, sidebar: () => void, restart: () => void,
+    brand: Brand): Category[] {
     // (Theme first: it sets all the parts below it at once; then the logo, then each part)
     var theme: (Setting | string)[] = [themeSetting(brand), logoSetting(brand)];
     // The registered themes, only when there is more than one (beside the look's Theme)
@@ -722,7 +1015,7 @@ function bolli(pages: StartPage[], more: (pref: LanguagePref) => void, chat: () 
             return themes().map(function (t) { return { value: t.id, name: t.name, note: '' }; });
         }, function (id) { applyTheme(String(id)); }));
     }
-    theme.push(coloursSetting(brand), fontSetting(), iconsPageSetting(brand), signSetting(brand),
+    theme.push(coloursSetting(brand), fontSetting(), textSizeSetting(brand), iconsPageSetting(brand), signSetting(brand),
         // (the looks of Theme, each the same for everyone, and the account's own)
         whoSetting());
     // Branding, under its own small heading, where the TV has a home screen entry the app can change (webOS): its logo,
@@ -745,10 +1038,18 @@ function bolli(pages: StartPage[], more: (pref: LanguagePref) => void, chat: () 
                 { value: 480, name: '480p', note: tr('or the closest below it') }
             ]),
             pref(tr('Video codec'), tr('The codec videos start in, chosen before the quality'), pic('clear_search_history'), 'codec', codecChoices),
+            pref('HDR', tr('Brighter highlights and more colours, where a video has them'), pic('clear_search_history'), 'hdr', hdrChoices),
+            pref(tr('Super resolution'), tr('YouTube\'s sharper copies of videos uploaded in low resolution'), pic('clear_search_history'), 'upscaled',
+                onOff(tr('a video that has upscaled copies plays the sharpest'), tr('videos play no higher than they were uploaded'))),
             pref(tr('Audio codec'), tr('The sound videos play with, where they have it'), pic('clear_search_history'), 'sound', soundChoices),
             // Its picture drawn for the app, as Most replayed's
             pref(tr('Pause on chapters'), tr('Up in a video shows its chapters to pick from'), pic('clear_search_history'), 'chaptersPause',
                 onOff(tr('the video waits while you pick'), tr('the video plays on while you pick'))),
+            // (a user's wish, issue #9: "need to go there only when press ok")
+            pref(tr('Left and Right'), tr('What Left and Right do in a video in Bolli\'s player'), pic('clear_search_history'), 'jumpOn', [
+                { value: 'press', name: tr('Jump at once'), note: tr('each press jumps 10 s, as in YouTube\'s TV app') },
+                { value: 'ok', name: tr('Jump on OK'), note: tr('they move the marker and show the picture there; OK jumps, Back stays') }
+            ]),
             // (signed in, its starts are slower than a guest's: measured on the TV)
             pref(tr('Streams by SABR'), tr('How Bolli\'s player gets the videos'), pic('parent_code'), 'sabr',
                 onOff(tr('as YouTube\'s TV app does (signed in, by SABR), as a guest when that fails. Videos start slower this way'),
@@ -767,7 +1068,11 @@ function bolli(pages: StartPage[], more: (pref: LanguagePref) => void, chat: () 
         { title: tr('Speed'), settings: [
             pref(tr('Videos start sooner'), tr('The video or page whose tile you rest on gets ready'), pic('send_feedback'), 'preload',
                 onOff(tr('it opens about a second sooner'), ''))
-        ].concat(android() ? [] : [
+        ].concat(nativeHook() ? [
+            // (the Android app where it has its own video layer: src/youtube/android/native.ts)
+            pref(tr('Android\'s video player'), tr('How videos are shown on this device'), pic('send_feedback'), 'nativePlayer',
+                onOff(tr('on a layer of their own, as YouTube\'s app shows them: smooth in 4K and at 60 fps'), tr('in the page, as before: 4K and 60 fps may stutter on most TVs')))
+        ] : android() ? [] : [
             // (LG TVs: their engine waits 3 s after every jump unless the video seems to end soon; Android has no such wait)
             pref(tr('Quick jumps'), tr('Jumping in a video in Bolli\'s player'), pic('send_feedback'), 'quickJumps',
                 onOff(tr('the picture comes in about half a second (what was loaded further ahead is loaded again)'), tr('the picture comes after about two seconds')))
@@ -789,6 +1094,9 @@ function bolli(pages: StartPage[], more: (pref: LanguagePref) => void, chat: () 
             pref(tr('Start page'), tr('The screen the app starts on'), pic('location'), 'startPage', function () {
                 return pages.map(function (p) { return { value: p.id, name: p.label, note: '' }; });
             }),
+            // (the sidebar in edit mode, the keys in it: main.ts editSidebar; Back there comes back to this row)
+            pageSetting(tr('Edit sidebar'), tr('The sidebar\'s entries in your own order, and the ones you don\'t use hidden'), pic('location'), sidebar,
+                tr('Edit sidebar'), sidebarNote),
             tr('Home'),
             // (Home takes it when it shows next; this setting's picture and Most relevant's drawn for the app, as Most
             // replayed's)
@@ -808,6 +1116,14 @@ function bolli(pages: StartPage[], more: (pref: LanguagePref) => void, chat: () 
                 { value: true, name: tr('On'), note: tr('as YouTube\'s TV app') },
                 { value: false, name: tr('Off'), note: tr('only your subscriptions\' videos, newest first') }
             ]),
+            tr('Channels'),
+            // (a channel's page takes it when it opens next)
+            pref(tr('Channel banner'), tr('The top of a channel\'s page, behind its name: the video it plays there while you rest on Play mix, its cover picture, or neither'),
+                pic('clear_watch_history'), 'channelBanner', [
+                    { value: 'video', name: tr('Video'), note: tr('it starts after a few seconds, with or without sound as Previews says') },
+                    { value: 'cover', name: tr('Cover picture'), note: tr('only the channel\'s picture shows') },
+                    { value: 'black', name: tr('Black'), note: tr('a plain dark band: one picture less to load') }
+                ]),
             // (what is drawn over a video: moved here from Playback)
             tr('Player'),
             pref(tr('Clock in videos'), tr('The time of day in a corner of the picture while a video plays in Bolli\'s player'), 'clock.png',
@@ -825,10 +1141,9 @@ function bolli(pages: StartPage[], more: (pref: LanguagePref) => void, chat: () 
                 { value: 'muted', name: tr('Without sound'), note: '' },
                 { value: 'off', name: tr('Off'), note: '' }
             ]),
-            pref(tr('Channel video'), tr('The video a channel plays behind its header while you rest on Play mix'), pic('clear_watch_history'), 'channelVideo',
-                onOff(tr('it starts after a few seconds, with or without sound as Previews says'), tr('only the channel\'s picture shows'))),
             tr('Playlist page')
         ] as (Setting | string)[]).concat(listPage()) },
+        { title: tr('Filters'), settings: filters(brand.type) },
         { title: tr('Live chat'), settings: [liveChat(chat)] },
         { title: tr('Add-ons'), settings: [
             group('SponsorBlock', [sponsorBlock()]),
@@ -879,7 +1194,7 @@ function historySetting(): Setting {
 
 /** Linking a phone: by casting on the same network, or with a TV code from another (YouTube's steps) */
 var LINK: Setting[] = [
-    { label: tr('Link with Wi-Fi'), summary: '', picture: '', steps: [tr('On your phone, connect to the same Wi-Fi network as this device.'),
+    { label: tr('Link with Wi-Fi'), summary: '', picture: '', wifi: true, steps: [tr('On your phone, connect to the same Wi-Fi network as this device.'),
         tr('Open the YouTube app on your phone.'), tr('Tap the cast icon and select this device.')] },
     { label: tr('Link with TV code'), summary: '', picture: '', code: true, steps: [tr('On your phone, open the YouTube app.'),
         tr('Tap the cast icon.'), tr('Tap \'Link with TV code\' and enter the code below.')] }
@@ -899,6 +1214,8 @@ function about(): Setting {
             where ? tr('On {1}', where) : '',
             tr('Source code: {1}', 'github.com/aktiwers/bolli-youtube'),
             tr('With SponsorBlock, DeArrow, Return YouTube Dislike and the Roboto font (Apache License 2.0)'),
+            // (Android's own player, in its APK alone)
+            android() ? tr('The video player with AndroidX Media3 and OkHttp (Apache License 2.0)') : '',
             tr('The fonts Inter, Google Sans Flex, Geist, Bricolage Grotesque, Nunito, Atkinson Hyperlegible, Space Grotesk, IBM Plex Mono, Exo 2, Oswald, Barlow Condensed, Pixelify Sans and VT323 (SIL Open Font License 1.1)'),
             tr('Not made by YouTube or Google')
         ].concat(problemLines()).filter(function (line) { return line; });
@@ -976,7 +1293,7 @@ function step(i: number, count: number, code: number): number {
  * setting's; '' none) */
 function valueOf(s: Setting): string {
     var c = s.choices;
-    return s.group ? valueOf(s.group[0]) : !c ? '' : s.open ? sentence(c.list()[0].note) : setNames(c);
+    return s.group ? valueOf(s.group[0]) : !c ? '' : s.open ? sentence(c.list()[0].note) : setNames(c) || s.unset || '';
 }
 
 /** Puts settings in a list as rows, each its name and the line for how it is set (a text: a small heading over those
@@ -1083,6 +1400,10 @@ export class SettingsView implements View {
     private previewing: Setting | null = null;
     /** The screen behind is shown (true) or let be (false) while a setting's choices are shown on the app */
     onPreview: (on: boolean) => void = function () { return undefined; };
+    /** The sidebar shown open, or no longer, behind a page over the app (Text size's Sidebar: main.ts) */
+    onRailOpen: (on: boolean) => void = function () { return undefined; };
+    /** The sidebar out of sight, or back, under a page over the whole screen (Live chat settings: main.ts) */
+    onCover: (on: boolean) => void = function () { return undefined; };
     /** The right side's drawing waiting for the next frame (a step through the categories: the left and the middle show
      * first; on the TV that halved a step's time) */
     private panelFrame = 0;
@@ -1096,6 +1417,8 @@ export class SettingsView implements View {
     private colours: ColourPage | null = null;
     /** Settings › Theme › Icons (built on first open): over the app; takes the keys while open */
     private icons: IconPage | null = null;
+    /** Settings › Theme › Text size (built on first open): over the app; takes the keys while open */
+    private sizes: TextSizePage | null = null;
     /** Settings › Theme › Loading spinner's preview over the app (built on its first use) */
     private signs: SignPreview | null = null;
     /** The setting told of the choice the focus is on (Setting.onFocus; null: none), and that choice */
@@ -1111,6 +1434,8 @@ export class SettingsView implements View {
     private chat: ChatSettings | null = null;
     /** Shortcuts (built on first open); takes the keys while open */
     private keys: ShortcutsPage | null = null;
+    /** The focus is leaving for the sidebar's edit mode (Edit sidebar): the place in Settings kept for its return */
+    private forSidebar = false;
     /** The account's History & data group as shown */
     private history: AccountGroup | null = null;
     /** The TV code ('' if none or expired), the text shown instead ('…' while requesting), the rest timer, the expiry
@@ -1122,7 +1447,8 @@ export class SettingsView implements View {
 
     /** link: requests a TV code from YouTube; pages: possible start pages; question: the app's confirmation dialog
      * (gets keys first while shown); restart: starts the app again (a new language); host: what Shortcuts needs */
-    constructor(private link: () => Promise<string>, pages: StartPage[], private question: Question, restart: () => void, private host: ShortcutHost) {
+    constructor(private link: () => Promise<string>, pages: StartPage[], private question: Question, restart: () => void, private host: ShortcutHost,
+        editSidebar: () => void) {
         this.el = h('div', 'by-settings by-settings--split');
         setShown(this.el, false);
         this.el.appendChild(h('div', 'by-settings-title', tr('Settings')));
@@ -1154,15 +1480,16 @@ export class SettingsView implements View {
         var self = this;
         // (a home screen choice the TV did not take: said in one line, the right side anew with the choice put back)
         onHomeRefused(function (e) { self.brandChosen(e); });
-        bolli(pages, function (pref) { self.moreLanguages(pref); }, function () { self.openChat(); }, function () { self.openKeys(); }, restart,
+        bolli(pages, function (pref) { self.moreLanguages(pref); }, function () { self.openChat(); }, function () { self.openKeys(); },
+            function () { self.forSidebar = true; editSidebar(); }, restart,
             { address: function (take) { self.pictureAddress(take); }, name: function () { self.namePage(); },
                 chosen: function (e) { self.brandChosen(e); }, colours: function (mode) { self.openColours(mode); },
-                saveLook: function () { self.saveLook(); }, icons: function () { self.openIcons(); },
-                sign: function (id) { self.previewSign(id); } }).forEach(function (c) {
+                saveLook: function () { self.saveLook(); }, icons: function () { self.openIcons(); }, sizes: function () { self.openSizes(); },
+                sign: function (id) { self.previewSign(id); }, type: function (title, taken) { self.typeText(title, taken); } }).forEach(function (c) {
             self.addCategory(c);
         });
         // (History first: the account's own come and go after it)
-        this.accountOwn = ([historySetting(), tr('Link TV & phone')] as (Setting | string)[]).concat(LINK);
+        this.accountOwn = ([historySetting(), tr('Link TV & phone')] as (Setting | string)[]).concat(foundOnNetwork() ? LINK : LINK.filter(function (way) { return !way.wifi; }));
         this.account = this.addCategory({ title: tr('Account & phone'), settings: this.accountOwn });
         // About, and under it Check for new versions in a build that has the service's address (without it: About
         // alone, shown wide)
@@ -1239,22 +1566,26 @@ export class SettingsView implements View {
             return;
         }
         this.focused = focused;
-        if (!focused) {
+        // (left for the sidebar's edit mode: kept on its row, which Back there comes back to, its note drawn anew)
+        if (!focused && !this.forSidebar) {
             this.closeOwn();
+        } else if (focused && this.forSidebar) {
+            this.forSidebar = false;
+            this.changed();
         }
         this.drawFocus();
     }
 
     /** Its pages made so far: the language picker, Live chat settings, Shortcuts */
     private pages(): SubPage[] {
-        return [this.languages, this.chat, this.keys, this.typing, this.colours, this.icons].filter(function (p) { return !!p; }) as SubPage[];
+        return [this.languages, this.chat, this.keys, this.typing, this.colours, this.icons, this.sizes].filter(function (p) { return !!p; }) as SubPage[];
     }
 
     /** Its page shown over it (null: none) */
     private openPage(): SubPage | null {
         return this.languages && this.languages.shown ? this.languages : this.chat && this.chat.shown ? this.chat :
             this.keys && this.keys.shown ? this.keys : this.typing && this.typing.shown ? this.typing : this.colours && this.colours.shown ? this.colours :
-            this.icons && this.icons.shown ? this.icons : null;
+            this.icons && this.icons.shown ? this.icons : this.sizes && this.sizes.shown ? this.sizes : null;
     }
 
     /** The page of its own while open (null: none; the pointer's layer: core/pointer.ts; it takes every key, the
@@ -1477,11 +1808,13 @@ export class SettingsView implements View {
         this.onPreview(false);
     }
 
-    /** Live chat settings over an example (over the whole screen, the rail too; in this screen, so hidden with it when a
-     * video starts over it) */
+    /** Live chat settings over an example (over the whole screen, the rail too: out of sight while it is open, as the
+     * player has none; in this screen, so hidden with it when a video starts over it) */
     private openChat(): void {
+        var self = this;
         this.chat = this.chat || new ChatSettings(this.el);
-        this.chat.open();
+        this.onCover(true);
+        this.chat.open(function () { self.onCover(false); });
     }
 
     /** Shortcuts over the whole screen (in this screen, so hidden with it when a video starts over it) */
@@ -1601,11 +1934,20 @@ export class SettingsView implements View {
         });
     }
 
+    /** A text typed on the text page (with a space key) handed to taken, the right side drawn anew with the focus where
+     * it was */
+    private typeText(title: string, taken: (text: string) => void): void {
+        var self = this;
+        this.typingPage().open(title, '', true, function (typed) {
+            taken(typed);
+            self.redrawn(true);
+        });
+    }
+
     /** The look as it is saved as a theme under the name typed (none typed: nothing), offered from then on beside the
      * built-in ones (Theme, Who's watching) */
     private saveLook(): void {
-        var self = this;
-        this.typingPage().open(tr('Theme name'), '', true, function (typed) {
+        this.typeText(tr('Theme name'), function (typed) {
             var name = oneLine(typed, THEME_NAME_MAX);
             // (saved: it is the look set now, no longer Custom, which would only repeat it; its logo and loading sign, the
             // ones shown, on top as when it is chosen: one chosen by hand after it makes it Custom. One store write)
@@ -1613,7 +1955,6 @@ export class SettingsView implements View {
                 var parts = lookParts();
                 setLook(parts, { savedLooks: savedLooks().concat([{ id: SAVED + Date.now(), name: name, parts: parts }]), customLook: null });
             }
-            self.redrawn(true);
         });
     }
 
@@ -1633,7 +1974,14 @@ export class SettingsView implements View {
         this.icons.open(this.overApp());
     }
 
-    /** A page of its own over the app (Colours, Icons): Settings' own parts hidden, the screen behind in view as for the
+    /** Settings › Theme › Text size: its page at the right over the app, as Colours */
+    private openSizes(): void {
+        var self = this;
+        this.sizes = this.sizes || new TextSizePage(this.el, function (on) { self.onRailOpen(on); });
+        this.sizes.open(this.overApp());
+    }
+
+    /** A page of its own over the app (Colours, Icons, Text size): Settings' own parts hidden, the screen behind in view as for the
      * Theme settings (onPreview); the returned function, at its close, puts Settings back (closed by a key: onKey draws
      * Settings anew; by Settings hiding: nothing to draw) */
     private overApp(): () => void {

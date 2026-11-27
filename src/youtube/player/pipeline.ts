@@ -138,6 +138,7 @@ function fresh(video: HTMLVideoElement, mimes: string[]): Promise<Pipeline> {
     }
     var pipe = current = new Pipeline(video, source, mimes.map(kindOf), url);
     kept = false;
+    left = null;
     // An emptying under way is moot: its source is replaced now
     emptyings++;
     emptying = playAsked = false;
@@ -207,9 +208,61 @@ function keepLength(pipe: Pipeline): void {
     }
 }
 
+/** The engine about to be stopped leaves a pipeline that is not to be kept (keepPipeline): 'now', it gives way to
+ * formats of another kind on the video it plays (leaveFor); 'soon', it goes right after (leaveSoon) */
+var leaving = '';
+/** The pipeline a stopped engine left playing, to go (keepPipeline; null: none): the next fresh one replaces it, or
+ * letGoLeft lets it go. Never handed to another engine. */
+var left: Pipeline | null = null;
+
+/** Told before an engine is stopped for formats (mimes) that follow on the same video (a quality picked in another
+ * codec, the player's HDR switch, a sound of another type, the next video's): where they need another pipeline and
+ * the video plays, the one there is not kept (paused, emptied: torn down a moment later by the next engine, this TV
+ * takes a full second for it half the time, video.ts unloadVideo) but left playing for the next engine's fresh one
+ * to replace, which that engine opens as it loads, its first requests already sent (dash.ts load); a caller whose
+ * next engine comes later lets it go itself (letGoLeft) */
+export function leaveFor(video: HTMLVideoElement, mimes: string[]): void {
+    leaving = replacesPipeline(mimes) && !video.paused ? 'now' : '';
+}
+
+/** Told before an engine is stopped whose pipeline is to go a frame later (the player closed on a picture in HDR: the
+ * TV stays in HDR while it lives): where the video plays, it is left playing, neither paused nor emptied nor kept
+ * for a next engine, so that it goes as it plays (releasePipeline with playing: ~0.3 s on this TV, where one kept
+ * paused takes its full second every time). Whoever opens a pipeline meanwhile replaces it. */
+export function leaveSoon(video: HTMLVideoElement): void {
+    leaving = !!current && usable(current) && !video.paused ? 'soon' : '';
+}
+
+/** Whether the pipeline is to go as the engine about to be stopped is (leaveFor): the video is then not paused for
+ * the stop either */
+export function leavesNow(): boolean {
+    return leaving === 'now';
+}
+
+/** No engine was stopped after leaveFor or leaveSoon: what they asked no longer holds */
+export function unleave(): void {
+    leaving = '';
+}
+
+/** Lets go the pipeline a stopped engine left playing (leaveFor, leaveSoon), as it plays; true if there was one. For
+ * whoever left it and does not replace it at once, and for any start that comes while it still plays: left alone, it
+ * would play on unseen, its sound on, until some engine opened a pipeline. */
+export function letGoLeft(video: HTMLVideoElement): boolean {
+    var mine = !!left && left === current;
+    left = null;
+    if (mine) {
+        releasePipeline(video, !video.paused);
+    }
+    return mine;
+}
+
 /** Keeps a stopped engine's pipeline for the next one: paused, buffers emptied (none yet: only pauses the video; an
- * engine stopped while its pipeline opens keeps it once open) */
+ * engine stopped while its pipeline opens keeps it once open). Not one that is to go (leaveFor, leaveSoon) while its
+ * video plays: left playing as it is and remembered (left), until the next fresh pipeline replaces it or letGoLeft
+ * lets it go */
 export function keepPipeline(video: HTMLVideoElement, pipe: Pipeline | null): void {
+    var leave = leaving;
+    leaving = '';
     // None yet, or it failed: nothing else plays on the video
     if (!pipe || !current) {
         playAsked = false;
@@ -218,6 +271,14 @@ export function keepPipeline(video: HTMLVideoElement, pipe: Pipeline | null): vo
     }
     // Not one replaced since, or no longer usable
     if (pipe !== current || !usable(pipe)) {
+        return;
+    }
+    if (leave && !video.paused) {
+        note(leave === 'now' ? 'pipeline left' : 'pipeline to go', held(pipe) + ' at ' + video.currentTime.toFixed(2) + ', playing on until it is replaced or let go');
+        pipe.onUpdate = null;
+        kept = false;
+        playAsked = false;
+        left = pipe;
         return;
     }
     // webOS TV 2.x's media pipeline, kept, played a few videos, then the next ones without picture or sound (their
@@ -255,7 +316,7 @@ export function keepPipeline(video: HTMLVideoElement, pipe: Pipeline | null): vo
             emptying = false;
             if (playAsked) {
                 playAsked = false;
-                video.play();
+                play(video);
             }
         }
     });
@@ -344,7 +405,16 @@ export function playVideo(video: HTMLVideoElement): void {
     if (emptying) {
         playAsked = true;
     } else {
-        video.play();
+        play(video);
+    }
+}
+
+/** video.play(), its promise's refusal caught where it gives one (Android: a pause before it starts refuses it, which
+ * is no fault; webOS's gives none) */
+function play(video: HTMLVideoElement): void {
+    var started = video.play() as unknown as { then?: (ok: () => void, no: () => void) => void } | undefined;
+    if (started && started.then) {
+        started.then(function () { return undefined; }, function () { return undefined; });
     }
 }
 
@@ -366,11 +436,13 @@ export function spoilingFail(onFail: (why: string) => void): (why: string) => vo
     };
 }
 
-/** Tears down the pipeline on video now: YouTube's player needs the TV's decoder, or the app goes to the background */
-export function releasePipeline(video: HTMLVideoElement): void {
+/** Tears down the pipeline on video now: YouTube's player needs the TV's decoder, or the app goes to the background;
+ * playing: as it plays, not paused first (video.ts unloadVideo: far sooner on the 2017 TV) */
+export function releasePipeline(video: HTMLVideoElement, playing?: boolean): void {
     asks++;
     emptyings++;
     emptying = playAsked = false;
+    left = null;
     if (current) {
         current.onUpdate = null;
         URL.revokeObjectURL(current.url);
@@ -378,5 +450,5 @@ export function releasePipeline(video: HTMLVideoElement): void {
     } else if (!video.getAttribute('src')) {
         return;
     }
-    unloadVideo(video);
+    unloadVideo(video, playing);
 }

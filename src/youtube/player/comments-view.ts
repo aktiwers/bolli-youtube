@@ -60,6 +60,8 @@ export class CommentsView {
     private gen = 0;
     /** Called once closed (Back from the comments) */
     onClose: () => void = function () { return undefined; };
+    /** The endpoint the comments' tokens are for (api/watch.ts comments: a video's 'next', a Short's 'browse') */
+    private via = 'next';
 
     constructor(parent: HTMLElement) {
         this.el = h('div', 'by-comments');
@@ -103,8 +105,10 @@ export class CommentsView {
         return this.shown ? this.panel : null;
     }
 
-    /** Opens a video's comments (count: as YouTube shows it); first: their first part, if already fetched */
-    open(token: string, count: string, first?: Promise<Comments>): void {
+    /** Opens a video's comments (count: as YouTube shows it); first: their first part, if already fetched; via: the
+     * endpoint their tokens are for (a Short's: 'browse') */
+    open(token: string, count: string, first?: Promise<Comments>, via?: string): void {
+        this.via = via || 'next';
         this.clear();
         setShown(this.el, true);
         this.push(tr('Comments'), count, token, first);
@@ -204,7 +208,7 @@ export class CommentsView {
         level.fetching = true;
         var gen = this.gen;
         var self = this;
-        (first || comments(token)).then(function (part) {
+        (first || comments(token, this.via)).then(function (part) {
             level.fetching = false;
             if (gen !== self.gen || self.levels.indexOf(level) < 0) {
                 return;

@@ -6,7 +6,9 @@
 // beside its name; each tab's rows made the first time it shows while the page is open, kept until it opens again (in
 // the language then), a tab shown or hidden. The set the focus is on shown on the app (ui/theme.ts tryLook) as soon as
 // a key comes on its own, once the keys rest when they come one after another; on the tabs, the one set again; OK sets
-// it, Back closes (what was tried let go).
+// it. The page opens on the tabs, where the arrows go from tab to tab (ui/tab-lines.ts, as Colours' and Text size's);
+// OK, or Down below them, goes to the tab's sets (on the one chosen), Up from the first and Back back
+// to the tab; Back on the tabs closes the page (what was tried let go).
 // The rows scroll where they are more than the page holds (seen on the TV, 2026-11-17: System's last set below the
 // screen): each tab's track of rows slides by a transform to keep the focused row in the middle, worked out from the rows'
 // fixed height (no layout read at a key; the list's height read once as the page opens); the tabs and the focused set's
@@ -19,6 +21,7 @@ import { KEY } from '../core/keys.js';
 import { holding, takesPointer } from '../core/pointer.js';
 import { holdRest } from '../ui/colours.js';
 import { drawIcon, drawRail, iconNames } from '../ui/icons.js';
+import { BELOW, TabLines } from '../ui/tab-lines.js';
 import { LookPart, lookPart, setLookPart, tryLook } from '../ui/theme.js';
 
 /** A set: its value ('' the first: filled, or the sidebar as the rest), its name, what it is */
@@ -99,6 +102,7 @@ export class IconPage {
     private tabs: Tab[] = [];
     private tab = 0;
     private tabEls: HTMLElement[] = [];
+    private tabLines = new TabLines();
     private tabBox: HTMLElement;
     private list: HTMLElement;
     /** The list's height (px; 0: not read yet since the page opened) */
@@ -165,8 +169,8 @@ export class IconPage {
         });
     }
 
-    /** Opens it on the System tab, the focus on the set chosen; done: closed. The rows made anew (in the language now),
-     * each tab's the first time it shows */
+    /** Opens it on the System tab, the focus on the tabs; done: closed. The rows made anew (in the language now), each
+     * tab's the first time it shows */
     open(done: () => void): void {
         var self = this;
         this.done = done;
@@ -174,12 +178,15 @@ export class IconPage {
         this.tabs = tabs();
         this.tabBox.innerHTML = '';
         this.tabEls = this.tabs.map(function (t) { return self.tabBox.appendChild(h('div', 'by-colours-tab', t.name)) as HTMLElement; });
+        this.tabLines.open(this.tabEls);
         this.list.innerHTML = '';
         this.views = this.tabs.map(function () { return null; });
         this.focused = null;
         this.allSet = null;
         this.view = 0;
         this.toTab(0);
+        this.at = -1;
+        this.drawFocus();
         this.drawAll();
         setShown(this.all, true);
         setShown(this.el, true);
@@ -208,33 +215,43 @@ export class IconPage {
     }
 
     onKey(code: number): boolean {
+        var t = this.tabs[this.tab];
         if (code === KEY.BACK) {
-            this.close();
+            // (from the sets back to the tab: the one set again on the app; on the tabs, closed)
+            if (this.at < 0) {
+                this.close();
+            } else {
+                this.at = -1;
+                this.drawFocus();
+                this.later(0);
+            }
             return true;
         }
-        var t = this.tabs[this.tab];
+        var to = this.at >= 0 ? -2 : code === KEY.OK ? BELOW : this.tabLines.move(this.tab, code);
+        if (to === BELOW) {
+            // (down to the tab's sets, on the one chosen)
+            this.at = chosenAt(t);
+            this.drawFocus();
+            this.later(0);
+            return true;
+        }
         if (code === KEY.OK) {
-            if (this.at >= 0) {
-                setLookPart(t.part, t.sets[this.at].value);
-                this.drawSet();
+            setLookPart(t.part, t.sets[this.at].value);
+            this.drawSet();
+            return true;
+        }
+        if (to >= 0) {
+            if (to !== this.tab) {
+                this.toTab(to);
+                this.at = -1;
+                this.drawFocus();
+                this.allSoon();
             }
             return true;
         }
         var now = Date.now();
         var rest = holdRest(now - this.lastAt);
         this.lastAt = now;
-        if (code === KEY.LEFT || code === KEY.RIGHT) {
-            if (this.at < 0) {
-                var to = Math.max(0, Math.min(this.tabs.length - 1, this.tab + (code === KEY.RIGHT ? 1 : -1)));
-                if (to !== this.tab) {
-                    this.toTab(to);
-                    this.at = -1;
-                    this.drawFocus();
-                    this.allSoon();
-                }
-            }
-            return true;
-        }
         if (code === KEY.UP || code === KEY.DOWN) {
             var next = Math.max(-1, Math.min(t.sets.length - 1, this.at + (code === KEY.DOWN ? 1 : -1)));
             if (next !== this.at) {

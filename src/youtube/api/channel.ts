@@ -3,12 +3,13 @@
 // description start; About with the full description and facts; Play mix
 // with its video list; Subscribe), the shelves (api/feed.ts), and the sub
 // pages (Videos, Live, Podcasts, Playlists). Sub pages arrive as tiles that
-// open the channel with params; they are moved out of the rows here, and
-// Shorts is dropped as everywhere in the app. A sub page is a page with tabs
-// (e.g. Videos: Latest, Popular, Oldest).
+// open the channel with params; they are moved out of the rows here, the
+// Shorts tab marked (offered where Shorts show on channel pages: api/filters.ts).
+// A sub page is a page with tabs (e.g. Videos: Latest, Popular, Oldest).
 
 import { language } from '../core/i18n.js';
 import { noteAvatar } from './avatars.js';
+import { prefs } from './prefs.js';
 import { all, browseText, Ended, first, get, lineText, liveNamed, Page, pageKey, paramBytes, picture, rowsOf, Rows, text, Video } from './feed.js';
 import { Keeper } from './kept-pages.js';
 import { hash, VERSION } from './kept-rows.js';
@@ -38,7 +39,8 @@ export interface Channel {
     mix: Video | null;
     mixPreview?: { id: string; delay: number; sound: boolean } | null;
     subscribe: Subscribe | null;
-    pages: { title: string; page: Page }[];
+    /** Its sub pages (shorts: its Shorts tab) */
+    pages: { title: string; page: Page; shorts?: boolean }[];
     rows: Rows;
 }
 
@@ -97,7 +99,7 @@ export function channelAhead(p: Page, fresh?: boolean): void {
     }
     channels.aheadJson(key, function () {
         return asked(p, !!fresh, false).then(function (json) {
-            var url = bannerIn(json);
+            var url = prefs().channelBanner !== 'black' ? bannerIn(json) : '';
             if (url) {
                 bannerAhead = bannerAhead || new Image();
                 bannerAhead.src = url;
@@ -189,13 +191,13 @@ export function channelOf(reply: any, id: string): Channel {
     var description = get(header, 'selectableDescription', 'selectableTextRenderer');
     var about = first(description, 'aboutChannelViewModel') || {};
     var rows = rowsOf(reply);
-    var pages: { title: string; page: Page }[] = [];
+    var pages: { title: string; page: Page; shorts?: boolean }[] = [];
     // Sub pages: tiles that open this channel with params, in any shelf (shelves left empty are dropped)
     rows.shelves = rows.shelves.filter(function (s) {
         s.videos = s.videos.filter(function (v) {
             var sub = !!v.page && v.page.browseId === id && !!v.page.params;
-            if (sub && !shortsTab(v.page as Page)) {
-                pages.push({ title: v.title, page: v.page as Page });
+            if (sub) {
+                pages.push(isShortsTab(v.page as Page) ? { title: v.title, page: v.page as Page, shorts: true } : { title: v.title, page: v.page as Page });
             }
             return !sub;
         });
@@ -204,21 +206,25 @@ export function channelOf(reply: any, id: string): Channel {
     var mix = (header.buttons || []).map(function (b: any) { return b.buttonRenderer; }).filter(function (b: any) {
         return b && get(b, 'navigationEndpoint', 'watchEndpoint', 'videoId');
     })[0];
-    var title = text(header.title);
+    // A game's page has no channel header: its name (" - Topic" off, as tiles name it), picture, banner and Subscribe are
+    // in the page's surface header's avatar lockup
+    var surface = header.title ? {} : get(reply, 'contents', 'tvBrowseRenderer', 'content', 'tvSurfaceContentRenderer', 'header', 'tvSurfaceHeaderRenderer') || {};
+    var lockup = get(surface, 'avatar', 'avatarLockupRenderer') || {};
+    var title = text(header.title) || text(lockup.title).replace(/ - Topic$/, '') || rows.title;
     var inline = get(mix, 'onFocusCommand', 'startInlinePlaybackCommand');
     var inlineId = get(inline, 'playbackEndpoint', 'watchEndpoint', 'videoId');
     return {
         title: title,
         subtitle: lineText(header.subtitle),
-        avatar: picture(header.avatar, AVATAR_PX),
-        banner: banner(header.backgroundImage),
+        avatar: picture(header.avatar || lockup.thumbnail, AVATAR_PX),
+        banner: banner(header.backgroundImage || surface.banner),
         description: shortDescription(get(description, 'compactDescription')),
         about: about.description || '',
         facts: (about.infoRows || []).map(function (r: any) { return text(r.label); }).filter(function (t: string) { return t; }),
         mix: mix ? { id: get(mix, 'navigationEndpoint', 'watchEndpoint', 'videoId'), title: text(mix.text) + ': ' + title, channel: title, length: '', info: '',
             list: idsOf(get(mix, 'navigationEndpoint', 'watchEndpoint', 'params')) } : null,
         mixPreview: inlineId ? { id: inlineId, delay: +inline.delayMs || 0, sound: !inline.muted } : null,
-        subscribe: subscribeOf(all(header.buttons, 'subscribeButtonRenderer')[0]),
+        subscribe: subscribeOf(all(header.buttons || surface.buttons, 'subscribeButtonRenderer')[0]),
         pages: pages,
         rows: rows
     };
@@ -226,7 +232,7 @@ export function channelOf(reply: any, id: string): Channel {
 
 /** Whether a channel's sub page is its Shorts tab: by its params (protobuf field 14 in the tab's message, as YouTube
  * marks it in every language; its name is "Shorts", ショート ...) */
-function shortsTab(p: Page): boolean {
+export function isShortsTab(p: Page): boolean {
     return paramBytes(p.params).indexOf('\x72\x00') >= 0;
 }
 

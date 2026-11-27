@@ -37,7 +37,7 @@ import { base64Bytes, BufferedRange, FormatId, SabrAnswer, SabrReader, sabrReque
 import { streamRequest } from '../api/sabr-stream.js';
 import { Format, Sabr } from '../api/streams.js';
 import { youtubePage } from '../api/youtube.js';
-import { BEHIND_MB, BEHIND_S, bufferedEnd, decodeLoad, Engine, hopHole, jumpTarget, KEYFRAME_IN, landingBetween, LIFT_END_S, LIFT_MS, LIFT_S, MB, QUICK_MIN_S, QUICK_SPEED, QUICK_WAIT_MS, RETRIES, roomAhead, seekTold, SPEED_BYTES, STILL_AHEAD, TICK_MS, TIMEOUT_MS, windowFrom } from './engine.js';
+import { BEHIND_MB, BEHIND_S, bufferedEnd, decodeLoad, Engine, hopHole, jumpTarget, KEYFRAME_IN, landingBetween, LIFT_END_S, LIFT_MS, LIFT_S, MB, QUICK_MIN_S, QUICK_SPEED, QUICK_WAIT_MS, RETRIES, roomAhead, seekTold, SPEED_BYTES, STILL_AHEAD, SWITCH_MIN_S, TICK_MS, TIMEOUT_MS, windowFrom } from './engine.js';
 import { framesFrom, trackScale, wholeFrames } from './containers.js';
 import { lineAnswered, networkFailed, onNetwork, stallWatch } from './networks.js';
 import { keepPipeline, openPipeline, Pipeline, setLength, setLengthSoon, spoilingFail } from './pipeline.js';
@@ -73,6 +73,19 @@ var PIECE_SLACK = 1024;
 var FIRST_S = 0.45;
 var FIRST_MIN = 384 * 1024;
 var FIRST_MAX = 1600 * 1024;
+/** The first video answer of a run of the app (none has come whole yet: warm) brings its first second slower than a
+ * dense format plays, on a connection just made. With FIRST_S of 4K60 in HDR (29 Mbit/s) in, the TV's picture ran dry
+ * 0.6 s in and stood 1.7 to 2.7 s, in five of seven first starts (2026-11-25; the starts after it, three of three,
+ * did not, nor the same video's SDR copy or its 1080p). So a dense format's first piece (one of DENSE_BYTES or more:
+ * about 18 Mbit/s up) is then FIRST_COLD_S of it, FIRST_COLD_MAX bytes at most: the picture a moment later, and
+ * enough behind it to last until the line has come up */
+var FIRST_COLD_S = 1.2;
+var FIRST_COLD_MAX = 5 * MB;
+var DENSE_BYTES = MB;
+var warm = false;
+/** A sound's switch in place is made within a segment only with this much of the segment left after its point (s):
+ * nearer its end, from the end */
+var SOUND_CUT_MIN_S = 0.5;
 /** An answer all there whose text is not all read yet (a segment going in by its parts, the buffer busy): looked at
  * again this often (ms) */
 var REST_MS = 30;
@@ -133,14 +146,37 @@ class Track {
 
     /** The bytes of a segment coming in by its parts that go in first, as one piece (FIRST_S of the format) */
     firstPiece(): number {
-        return this.piece;
+        return warm ? this.piece : this.cold;
     }
 
     private piece: number;
+    /** The same for the run's first video answer (FIRST_COLD_S of a dense format) */
+    private cold: number;
 
     constructor(public format: Format, public kind: number) {
-        this.id = { itag: format.itag, lmt: format.lmt, xtags: format.xtags };
+        this.id = idOf(format);
         this.piece = Math.max(FIRST_MIN, Math.min(FIRST_MAX, Math.round(format.bitrate / 8 * FIRST_S)));
+        this.cold = this.piece < DENSE_BYTES ? this.piece : Math.max(this.piece, Math.min(FIRST_COLD_MAX, Math.round(format.bitrate / 8 * FIRST_COLD_S)));
+    }
+
+    /** Its request in flight dropped (an answer still on its way is ignored), the server's backoff and its empty
+     * answers forgotten: asked anew at the next pump */
+    unask(): void {
+        this.gen++;
+        if (this.xhr) {
+            this.xhr.abort();
+            this.xhr = null;
+        }
+        this.waitUntil = 0;
+        this.empty = 0;
+    }
+
+    /** Another format of the same kind from here on (SabrEngine.switchVideo): named in the requests, its init still
+     * to come */
+    becomes(format: Format): void {
+        this.format = format;
+        this.id = idOf(format);
+        this.inited = false;
     }
 
     /** Each contiguous run of its segments, in the request's form */
@@ -250,18 +286,17 @@ class Track {
 
     /** Drops the request in flight and queued, unappended segments (a seek outside its data) */
     restart(): void {
-        this.gen++;
-        if (this.xhr) {
-            this.xhr.abort();
-            this.xhr = null;
-        }
+        this.unask();
         this.queue = this.queue.filter(function (q) { return q.init; });
         // (one coming in by its parts is not whole in the buffer: asked for again, written over what is there of it)
         this.dropStreamed();
         this.pieces = this.pieces.filter(function (p) { return p.appended; });
-        this.waitUntil = 0;
-        this.empty = 0;
     }
+}
+
+/** A format as the requests name it */
+function idOf(format: Format): FormatId {
+    return { itag: format.itag, lmt: format.lmt, xtags: format.xtags };
 }
 
 /** The keyframes a jump into a segment may land on (s): its own, and the next one's where another follows it (endMs:
@@ -311,6 +346,9 @@ function markAppended(track: Track, seg: SabrSegment): void {
 }
 
 export class SabrEngine implements Engine {
+    /** Engine.bySabr: the account's streams */
+    bySabr = true;
+    loaded?: (bytes: number, ms: number) => void;
     private tracks: Track[] = [];
     /** How many of the start's segments the play log was told of (tell) */
     private told = 0;
@@ -334,6 +372,14 @@ export class SabrEngine implements Engine {
      * resume start), a forward jump snapping only to a keyframe still ahead of it; snapPast: a jump past a skipped
      * part, landing by the segment the answer brings there (startFrom) */
     private pending = -1;
+    /** The video format a switch in place is still to be made to (switchVideo; null: none), and whether from where
+     * what is loaded ends */
+    private switchTo: Format | null = null;
+    private switchAfter = false;
+    /** The sound format a switch in place is still to be made to (switchAudio; null: none) and how far ahead of the
+     * playhead it is to be heard (s) */
+    private soundTo: Format | null = null;
+    private soundAhead = 0;
     private snap = false;
     private snapFrom = -1;
     private snapPast = false;
@@ -367,8 +413,8 @@ export class SabrEngine implements Engine {
      * window) */
     private waits = 0;
     private waitTimer = 0;
-    /** Where seeks' windows cut the audio buffer (s; the last TAILS): the audio segment across one, sent again, goes in
-     * from there on only (resume) */
+    /** Where seeks' windows cut the audio buffer, and sound switches made within a segment (s; the last TAILS): the
+     * audio segment across one, sent again or in the new sound, goes in from there on only (resume) */
     private tails: number[] = [];
     /** The last video answers' speeds (bit/s; those of SPEED_BYTES or more, up to SPEEDS) */
     private speeds: number[] = [];
@@ -554,6 +600,127 @@ export class SabrEngine implements Engine {
         return this.pending;
     }
 
+    /** Switches the video format in place (the same codec and range: the player asks no other), with no stop, as
+     * dash.ts's engine does: the old format's data from the first keyframe SWITCH_MIN_S ahead (what the TV has taken
+     * in: replacing that makes the picture stand) is removed and forgotten, and the server is asked for the new format
+     * from there: named as the video's in the requests from now, its init first (the track counts as not initialised),
+     * the segments kept before that point told as buffered so that it goes on after them. after: from where what is
+     * loaded ends, nothing removed (a step down with little ahead). Made once nothing stands in its way (switchNow);
+     * a later one replaces one still waiting, one back to the format playing gives it up. Until this was here every
+     * quality picked on the signed-in streams, and the player's Super resolution switch, started the video anew. */
+    switchVideo(f: Format, ahead?: number, soon?: boolean, after?: boolean): void {
+        var track = this.tracks[0];
+        if (!track || this.stopped) {
+            return;
+        }
+        this.switchTo = f.itag === track.format.itag ? null : f;
+        this.switchAfter = !!after;
+        this.switchNow();
+    }
+
+    /** The switch asked for (switchVideo), once no seek is asked or on its way, no window is up (a start's, a seek's:
+     * their removals and lengths are their own), no segment comes in by its parts, and the buffer is free; else again
+     * at the next pump */
+    private switchNow(): void {
+        var f = this.switchTo;
+        var track = this.tracks[0];
+        if (!f || !this.free(track)) {
+            return;
+        }
+        this.switchTo = null;
+        var t = this.video.currentTime;
+        var last = track.pieces[track.pieces.length - 1];
+        var cut = last ? last.endMs / 1000 : t;
+        if (!this.switchAfter) {
+            for (var i = 0; i < track.pieces.length; i++) {
+                if (track.pieces[i].startMs / 1000 >= t + SWITCH_MIN_S) {
+                    cut = track.pieces[i].startMs / 1000;
+                    break;
+                }
+            }
+        }
+        var inBuffer = track.pieces.some(function (p) { return p.appended && p.startMs / 1000 >= cut - 0.01; });
+        note('sabr switches', track.format.itag + ' -> ' + f.itag + ' from ' + cut.toFixed(2) + ', playing at ' + t.toFixed(2) + (inBuffer ? ' (the old format removed from there)' : ''));
+        this.swap(track, f, cut, inBuffer);
+    }
+
+    /** Nothing stands in the way of a switch in place on track: no seek asked or on its way, no window up (a start's, a
+     * seek's: their removals and lengths are their own), no segment coming in by its parts, its buffer idle */
+    private free(track: Track | undefined): boolean {
+        var sb = track && track.sb;
+        return !!sb && !this.stopped && this.pending < 0 && !this.going && !this.window && this.landed < 0 && !this.video.seeking && !track!.streamed &&
+            !sb.updating;
+    }
+
+    /** track switched in place to f from s on: its request in flight dropped (it brings the old format, its answer
+     * ignored), the old format's data from s forgotten and, where the buffer has it (inBuffer), removed; f named in the
+     * requests from now, its init first */
+    private swap(track: Track, f: Format, s: number, inBuffer: boolean): void {
+        track.unask();
+        this.forget(track, s);
+        if (inBuffer) {
+            try {
+                track.sb!.remove(s, Math.max(this.length, s) + 1);
+            } catch (e) {
+                // (the source no longer open: stop is near)
+            }
+        }
+        track.becomes(f);
+        this.pump();
+    }
+
+    /** Engine.switchAudio: another sound of the same type (another language's track, the stable volume copy, Voice
+     * boost) from about ahead s past the playhead on, with no stop: the old sound's data from that very point is
+     * removed, the new format named as the sound's in the requests from now, its init first, and its segment across
+     * the point put in from the point on (a sound segment is 10 s: at a segment's start the change would be heard
+     * up to 10 s late). With nothing loaded that far, or the point within half a second of a segment's end, from
+     * the segment's end, nothing cut. Made once nothing stands in its way (soundNow); a later one replaces one still
+     * waiting, one back to the sound playing gives it up. Until this was here every change of the sound on the
+     * signed-in streams started the video anew. */
+    switchAudio(f: Format, ahead?: number): void {
+        var track = this.tracks[1];
+        if (!track || this.stopped) {
+            return;
+        }
+        var now = track.format;
+        this.soundTo = f.itag === now.itag && f.lmt === now.lmt && f.xtags === now.xtags ? null : f;
+        this.soundAhead = ahead || 0;
+        this.soundNow();
+    }
+
+    /** The sound's switch asked for (switchAudio), once nothing stands in its way (free), no jump snaps and no cut
+     * is going in; made within a segment, its point is kept as a window's cut is (tails): the new sound's segment
+     * across it goes in from there on (resume), if what is buffered still ends there then */
+    private soundNow(): void {
+        var f = this.soundTo;
+        var track = this.tracks[1];
+        if (!f || !this.free(track) || this.snap || this.cut || this.cutAt >= 0) {
+            return;
+        }
+        this.soundTo = null;
+        var t = this.video.currentTime;
+        var at = t + this.soundAhead;
+        var p = track.pieces[track.at(at)];
+        var from: number;
+        var within = false;
+        if (!p) {
+            // (with nothing loaded there, from where what is loaded ends)
+            from = Math.max(t, track.ahead(t).end);
+        } else {
+            var start = p.startMs / 1000;
+            var end = p.endMs / 1000;
+            within = at - start > 0.01 && end - at >= SOUND_CUT_MIN_S;
+            // (not within a segment: from its start where the point is that, from its end where the point is near that)
+            from = within ? at : at - start <= 0.01 ? start : end;
+        }
+        var inBuffer = track.pieces.some(function (q) { return q.appended && q.endMs / 1000 > from + 0.01; });
+        if (within) {
+            this.keepTail(from);
+        }
+        note('sabr sound switches', track.format.itag + ' -> ' + f.itag + ' from ' + from.toFixed(2) + (within ? ' (within its segment)' : '') + ', playing at ' + t.toFixed(2));
+        this.swap(track, f, from, inBuffer);
+    }
+
     /** The real length while the TV is told a window's (a seek's, and a start's until its picture has moved) or
      * still has a lifted one's */
     realLength(): number {
@@ -658,6 +825,13 @@ export class SabrEngine implements Engine {
             return;
         }
         var self = this;
+        // (a switch of the video's format still waiting for its moment: switchVideo)
+        if (this.switchTo) {
+            this.switchNow();
+        }
+        if (this.soundTo) {
+            this.soundNow();
+        }
         this.trim();
         this.tracks.forEach(function (track) { self.feed(track); });
         this.endIfDone();
@@ -675,6 +849,12 @@ export class SabrEngine implements Engine {
     hold(s: number): void {
         this.most = s;
         this.pump();
+    }
+
+    /** Engine.readahead: at most this much is loaded ahead (a video loaded ahead of its start: what it holds), which
+     * Auto judges what is loaded against (it had waited for 15 s ahead to step up, which never comes) */
+    get readahead(): number {
+        return this.most || READAHEAD_S;
     }
 
     private ask(track: Track): void {
@@ -823,10 +1003,16 @@ export class SabrEngine implements Engine {
                     var bytes = streaming ? read : (xhr.response as ArrayBuffer).byteLength;
                     var ms = Date.now() - asked;
                     if (track.kind === PICTURE && bytes >= SPEED_BYTES && ms > 0) {
+                        // (a video answer has come whole: the line is up for the starts after this one)
+                        warm = true;
                         self.speeds.push(bytes * 8000 / ms);
                         if (self.speeds.length > SPEEDS) {
                             self.speeds.shift();
                         }
+                    }
+                    // (the connection's speed for the player's Auto quality, as the guest's engine tells it)
+                    if (track.kind === PICTURE && self.loaded) {
+                        self.loaded(bytes, ms);
                     }
                     if (streaming) {
                         note('sabr streamed', Math.round(read / 1024) + ' KB, ' + reads + ' reads (' + untold + ' no end known) ' + readMs + ' ms' + (stream ? ' (read by the worker, first bytes after ' + stream.first + ' ms)' : '') +
@@ -943,7 +1129,7 @@ export class SabrEngine implements Engine {
                     lost(false);
                 };
                 stallWatch(xhr, function () { lost(true); });
-                xhr.send(body.buffer);
+                xhr.send(body);
             } catch (e) {
                 failed();
             }
@@ -1098,9 +1284,11 @@ export class SabrEngine implements Engine {
     /** The picture's segment whose header an answer read as it comes just brought is to go into the buffer by its
      * parts (media), where it is the one a start or a jump begins in and nothing but the init waits before it: a
      * start's first (nothing of the track there yet; a window it ends past is lifted, as feed does for a first
-     * segment), or the one a jump lands on the keyframe of, no window of a seek before it still up (its own is made
-     * with the seek, before the first part goes in: a removal with a segment half in makes the TV drop the rest of
-     * it). Its piece counts from here: the seek, its window and the sound's requests go by it, the server is not
+     * segment), or the one a jump lands on the keyframe of (its window is made with its seek, before the first part goes
+     * in: a removal with a segment half in makes the TV drop the rest of it; so also with a window of a seek before it
+     * still up, which that seek's own lifts first: narrow. Refused then, as it was, a jump made while the one before was
+     * on its way waited for its whole segment before its seek: 25 MB of a 4K60 video in HDR, 3.2 s, the picture 5 s
+     * after the last key). Its piece counts from here: the seek, its window and the sound's requests go by it, the server is not
      * asked for it again. */
     private parts(track: Track, h: SabrSegment): void {
         var start = h.startMs / 1000;
@@ -1110,7 +1298,7 @@ export class SabrEngine implements Engine {
         }
         if (this.going || this.landed >= 0) {
             // (a landing between keyframes: whole, then the seek; asked before its target is in, the TV took 9 s)
-            if (!this.going || this.window || this.pending < start || this.pending > start + KEYFRAME_IN + 0.001) {
+            if (!this.going || this.pending < start || this.pending > start + KEYFRAME_IN + 0.001) {
                 return;
             }
         } else if (track.pieces.length) {
@@ -1272,7 +1460,8 @@ export class SabrEngine implements Engine {
         }
         // (while one comes in by its parts the init alone: the segments queued behind it wait for it)
         var next = init && !by ? track.queue[1] : null;
-        var both = next && !next.init && next.data.length <= JOIN_BYTES ? next : null;
+        // (not one across a cut still to make (tails): a sound switched within a segment, its init first, alone)
+        var both = next && !next.init && next.data.length <= JOIN_BYTES && !(track.kind === SOUND && this.tailIn(next) >= 0) ? next : null;
         var media = init ? both : seg;
         if (this.window && media) {
             var end = (media.startMs + media.durationMs) / 1000;
@@ -1319,11 +1508,34 @@ export class SabrEngine implements Engine {
         }
     }
 
-    /** The audio segment across a seek's window's cut (tails), sent again while its part up to the cut is buffered
-     * (else appended whole, it goes in again over what is about to play): taken without an append, and the window's
-     * cut segment (the lift appends it from the cut on); with no window up, appended from the cut on through the cut
-     * (feed); with a window up that ends further on, its part from the cut to the window now. True: feed goes no
-     * further (an append began, or waits on a full buffer). */
+    /** A cut kept (tails): the last TAILS */
+    private keepTail(at: number): void {
+        if (this.tails.indexOf(at) < 0) {
+            this.tails.push(at);
+            if (this.tails.length > TAILS) {
+                this.tails.shift();
+            }
+        }
+    }
+
+    /** Which of the cuts kept (tails) seg lies across (-1: none) */
+    private tailIn(seg: SabrSegment): number {
+        var start = seg.startMs / 1000;
+        var end = (seg.startMs + seg.durationMs) / 1000;
+        for (var k = 0; k < this.tails.length; k++) {
+            if (start < this.tails[k] - 0.01 && end > this.tails[k] + 0.01) {
+                return k;
+            }
+        }
+        return -1;
+    }
+
+    /** The audio segment across a cut kept (tails: a seek's window's, sent again; a sound switched within a segment,
+     * in the new sound), while what is buffered there ends at the cut (else it is appended whole: the cut is stale, a
+     * jump since; as the old sound or what is not buffered, it goes in over what is about to play or fills the gap):
+     * taken without an append, and the window's cut segment (the lift appends it from the cut on); with no window up,
+     * appended from the cut on through the cut (feed); with a window up that ends further on, its part from the cut to
+     * the window now. True: feed goes no further (an append began, or waits on a full buffer). */
     private resume(track: Track, sb: SourceBuffer): boolean {
         var seg = track.queue[0];
         if (!seg || seg.init) {
@@ -1331,12 +1543,9 @@ export class SabrEngine implements Engine {
         }
         var start = seg.startMs / 1000;
         var end = (seg.startMs + seg.durationMs) / 1000;
-        var k = 0;
-        while (k < this.tails.length && !(start < this.tails[k] - 0.01 && end > this.tails[k] + 0.01)) {
-            k++;
-        }
+        var k = this.tailIn(seg);
         // (a start's cut segment still to go in: first)
-        if (k === this.tails.length || this.cut && !this.window) {
+        if (k < 0 || this.cut && !this.window) {
             return false;
         }
         var tail = this.tails[k];
@@ -1491,11 +1700,8 @@ export class SabrEngine implements Engine {
                     sb.remove(from, last);
                     removing = true;
                     this.forget(track, from);
-                    if (i && this.tails.indexOf(w) < 0) {
-                        this.tails.push(w);
-                        if (this.tails.length > TAILS) {
-                            this.tails.shift();
-                        }
+                    if (i) {
+                        this.keepTail(w);
                     }
                 }
             }
@@ -1536,7 +1742,10 @@ export class SabrEngine implements Engine {
 
     /** A seek whose window must remove, with another seek on its way (this TV hangs on a removal during a seek). True:
      * that one is waited for (settle comes again at its 'seeked'), but only one in a window of its own, which ends within
-     * QUICK_WAIT_MS of being asked. False: no window for this seek. */
+     * QUICK_WAIT_MS of being asked. False: no window for this seek. (Also where the seek waited for cannot end, its
+     * segment let go for this one, two jumps back in a row to where nothing is loaded: not waiting then was tried on
+     * the TV, 2026-11-25, and was slower: the plain seek that follows, asked that much sooner before its media is in,
+     * took 3-9 s with a 4K60 video in HDR, against 1.5-4.4 s after the wait.) */
     private waitSeek(): boolean {
         var self = this;
         var left = QUICK_WAIT_MS - (Date.now() - this.soughtAt);

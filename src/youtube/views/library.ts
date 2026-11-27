@@ -27,7 +27,7 @@ export class LibraryView extends FeedHost implements View {
     private shownCards = '';
 
     /** load: YouTube's rows (a first row of pages without pictures becomes the cards); open: OK on a tile or card */
-    constructor(load: () => Promise<Rows | null>, texts: FeedTexts, private open: (video: Video) => void, opts: FeedOptions) {
+    constructor(load: () => Promise<Rows | null>, texts: FeedTexts, private open: (video: Video, shorts?: Video[]) => void, opts: FeedOptions) {
         super();
         var self = this;
         this.el = h('div', 'by-library');

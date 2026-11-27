@@ -10,6 +10,7 @@ import { clock } from '../core/time.js';
 import { RowStack } from '../ui/row-stack.js';
 import { rowHeight, TileItem, TileLayout, TileRow, TileShape } from '../ui/tile-row.js';
 import { dearrowFetch, dearrowListen, dearrowOn, dearrowPicture, dearrowSettings, dearrowTitle, dearrowWait } from '../api/dearrow.js';
+import { filterShelves, FilterScreen, filterVideos } from '../api/filters.js';
 import { allVideos, listNext, more, pagePicture, Rows, Shelf, thumbnail, thumbnailFallback, Video } from '../api/feed.js';
 import { NoStreams, streams } from '../api/streams.js';
 import { metrics, RowSpacing, themed, word } from '../ui/theme.js';
@@ -22,7 +23,8 @@ var ROWS_AHEAD = 3;
 var LINES_AHEAD = 4;
 /** Length lookups at once (videos YouTube lists without a length, as in its preview carousel) */
 var LOOKUPS = 2;
-/** Consecutive empty parts before fetching stops (until focus moves) */
+/** Consecutive empty parts (nothing left of them once filtered: api/filters.ts) before fetching stops (until focus
+ * moves) */
 var EMPTY_PARTS = 3;
 
 /** A shallow copy of o, with changes over it */
@@ -35,6 +37,17 @@ export function copied<T>(o: T, changes?: { [key: string]: unknown }): T {
         c[key] = changes[key];
     }
     return c as T;
+}
+
+/** A copy of rows without video id (a shelf that had only it goes too) */
+export function withoutVideo(rows: Rows, id: string): Rows {
+    var put = copied(rows);
+    put.shelves = rows.shelves.map(function (s) {
+        var shelf = copied(s);
+        shelf.videos = s.videos.filter(function (v) { return v.id !== id; });
+        return shelf;
+    }).filter(function (s, i) { return s.videos.length > 0 || !rows.shelves[i].videos.length; });
+    return put;
 }
 
 /** Progress and stop time of videos watched in the app's player (History on): shown on their tiles everywhere
@@ -60,10 +73,11 @@ export function watchedAt(id: string): number {
 
 /** Untitled lines of perLine tiles (a grid), their tiles built as they come into view (325 subscribed channels built
  * all at once took the TV ~175 ms). The lines stand still: a grid's tiles are one under the other */
-export function gridLines(items: TileItem[], perLine: number, shape: TileShape, layout: TileLayout): TileRow[] {
+export function gridLines(items: TileItem[], perLine: number, shape: TileShape, layout: TileLayout, kind?: string): TileRow[] {
     var lines: TileRow[] = [];
     for (var i = 0; i < items.length; i += perLine) {
-        lines.push(new TileRow({ title: '', shape: shape, layout: layout, items: items.slice(i, i + perLine), noTitle: true, noWrap: true, still: true, lazy: true }));
+        lines.push(new TileRow({ title: '', shape: shape, layout: layout, items: items.slice(i, i + perLine), noTitle: true, noWrap: true, still: true, lazy: true,
+            kind: kind }));
     }
     return lines;
 }
@@ -82,17 +96,21 @@ export class Paging {
     /** Continuation token for more shelves (for a grid: its next tiles) */
     private next = '';
     /** Adds a grid's next tiles, told the token after them (null: rows of shelves) */
-    private lines: ((videos: Video[], next: string) => void) | null = null;
+    private lines: ((videos: Video[], next: string, sent: Video[]) => void) | null = null;
     /** The grid's next parts are a screen's (Shelf.feed): every shelf of a part is more of its tiles, the token
      * after them where such a list has it (api/feed.ts listNext) */
     private whole = false;
+    /** The grid is of Shorts (its parts' Shorts are its tiles; in any other grid none is) */
+    private shortsGrid = false;
     private fetching = false;
     /** Incremented when the rows change, so late replies for old rows are dropped */
     private gen = 0;
     /** Consecutive parts that brought no rows */
     private empties = 0;
-    /** Told of more shelves added below, and the token after them */
+    /** Told of more shelves added below (as YouTube sent them, before the filters), and the token after them */
     added: (shelves: Shelf[], next: string) => void = function () { return undefined; };
+    /** The screen whose filters the parts pass (api/filters.ts; '' none) */
+    filter: FilterScreen | '' = '';
 
     /** from: the endpoint the tokens are sent to (api/feed.ts more) */
     constructor(private tiles: VideoTiles, private from?: string) {}
@@ -103,14 +121,16 @@ export class Paging {
         this.fetching = false;
     }
 
-    /** Sets the rows shown: their shelves and continuation token (lines: for a grid, adds its tiles; shelves are then
-     * the rows above its lines; whole: its parts are a screen's) */
-    set(shelves: Shelf[], next: string, lines?: (videos: Video[], next: string) => void, whole?: boolean): void {
+    /** Sets the rows shown: their shelves (filtered) and continuation token (lines: for a grid, adds its tiles, told
+     * them filtered and as they came; shelves are then the rows above its lines; whole: its parts are a screen's;
+     * shorts: the grid is of Shorts) */
+    set(shelves: Shelf[], next: string, lines?: (videos: Video[], next: string, sent: Video[]) => void, whole?: boolean, shorts?: boolean): void {
         this.stop();
         this.shelves = shelves;
         this.next = next;
         this.lines = lines || null;
         this.whole = !!whole;
+        this.shortsGrid = !!shorts;
         this.empties = 0;
     }
 
@@ -178,23 +198,40 @@ export class Paging {
             }
             self.fetching = false;
             var first = rows.shelves[0];
+            var got = rows.shelves.length;
             if (shelf) {
-                // The row's next tiles (a search row comes back as a section, whose token may be the section's)
-                shelf.next = first && first.next || rows.next || '';
-                (row as TileRow).append(self.tiles.items(first ? first.videos : []));
+                // The row's next tiles (a search row comes back as a section, whose token may be the section's), kept
+                // in its shelf as sent too: rows drawn again through the filters have them. Of a row of Shorts, the
+                // Shorts; of another, its other videos (its Shorts the parser put apart belong in no row shown here)
+                var next = first && first.next || rows.next || '';
+                var sent = alike(rows.shelves, !!shelf.shorts);
+                var shown = filterVideos(self.filter, sent);
+                var src = shelf.of || shelf;
+                src.next = shelf.next = next;
+                src.videos = src.videos.concat(sent);
+                if (src !== shelf) {
+                    shelf.videos = shelf.videos.concat(shown);
+                }
+                (row as TileRow).append(self.tiles.items(shown));
             } else if (self.lines) {
                 self.next = self.whole ? listNext(rows) : first && first.next || rows.next || '';
-                self.lines(self.whole ? allVideos(rows.shelves) : first ? first.videos : [], self.next);
+                var sent = self.whole ? allVideos(rows.shelves) : alike(rows.shelves, self.shortsGrid);
+                var shown = filterVideos(self.filter, sent);
+                got = shown.length;
+                self.lines(shown, self.next, sent);
             } else {
                 self.next = rows.next;
-                self.shelves = self.shelves.concat(rows.shelves);
-                stack.addAll(self.tiles.rows(rows.shelves, false));
+                var shelves = filterShelves(self.filter, rows.shelves);
+                got = shelves.length;
+                self.shelves = self.shelves.concat(shelves);
+                stack.addAll(self.tiles.rows(shelves, false));
                 self.added(rows.shelves, rows.next);
             }
             // Fetch the next part at once until enough are ready below focus (not within a row: its tiles load as
             // focus moves along; after a row's tiles the rows below get their turn, which a fetch on its way held
-            // back)
-            self.empties = rows.shelves.length ? 0 : self.empties + 1;
+            // back). A part the filters left nothing of counts as empty: a screen they thin out fills up, within
+            // EMPTY_PARTS
+            self.empties = got ? 0 : self.empties + 1;
             if (shelf || self.empties < EMPTY_PARTS) {
                 self.ahead(stack, false);
             }
@@ -205,6 +242,16 @@ export class Paging {
             }
         });
     }
+}
+
+/** The videos of the first of shelves that is a row of Shorts or not as shorts says ([] none) */
+function alike(shelves: Shelf[], shorts: boolean): Video[] {
+    for (var i = 0; i < shelves.length; i++) {
+        if (!!shelves[i].shorts === shorts) {
+            return shelves[i].videos;
+        }
+    }
+    return [];
 }
 
 /** The longest a page waits for DeArrow's branding of its first screen before it draws (the rest come into their tiles
@@ -218,7 +265,8 @@ export function brandedRows(rows: Rows): Promise<Rows> {
         return Promise.resolve(rows);
     }
     var videos: Video[] = [];
-    rows.shelves.slice(0, 2).forEach(function (shelf) {
+    // (not a row of Shorts: hidden by default, and their tiles take DeArrow's branding as it comes where they show)
+    rows.shelves.filter(function (s) { return !s.shorts; }).slice(0, 2).forEach(function (shelf) {
         videos = videos.concat(shelf.videos.slice(0, 6));
     });
     return dearrowWait(videos, DEARROW_WAIT_MS).then(function () { return rows; });
@@ -348,9 +396,14 @@ export class VideoTiles {
         var m = metrics();
         noteNewStyles(shelf);
         // Square tiles (podcasts, releases) or game boxes, as tall as the others (rows keep one height); posters
-        // (Movies) with the focused one wide
-        var shape = shelf.style === 'square' || shelf.style === 'round' ? m.square : shelf.style === 'game' ? m.game : shelf.style === 'poster' ? m.poster : m.tile;
-        return new TileRow({ title: word(shelf.title), subtitle: shelf.subtitle, icon: shelf.icon, shape: shape, layout: layout, extraHeight: extra,
+        // (Movies) with the focused one wide; Shorts upright, their row taller by as much (the rows below it lower)
+        var short = !!shelf.shorts;
+        var shape = short ? m.short : shelf.style === 'square' || shelf.style === 'round' ? m.square : shelf.style === 'game' ? m.game :
+            shelf.style === 'poster' ? m.poster : m.tile;
+        // (a row of Shorts YouTube made no row of has no name: Shorts, as YouTube names its own)
+        var title = short && !shelf.title ? tr('Shorts') : word(shelf.title);
+        return new TileRow({ title: title, subtitle: shelf.subtitle, icon: shelf.icon, shape: shape, layout: layout,
+            extraHeight: extra + (short ? m.short.h - m.tile.h : 0), kind: short ? 'short' : undefined,
             // (made when the row nears the view: titles are tidied, lengths looked up and DeArrow asked only for
             // rows that are reached; making every row of a reply at once held the keys ~0.1 s)
             make: function () { return self.items(shelf.videos); }, noWrap: true, bigShape: self.big && shape === m.tile ? m.big : undefined,
@@ -382,11 +435,13 @@ export class VideoTiles {
                     fallback: page ? page.fallback : thumbnailFallback(v.id) || (branded !== image ? image : ''),
                     wideImage: v.poster ? v.wide || thumbnail(v.id) : undefined,
                     label: labelOf(v), labelIcon: v.labelIcon, stack: v.stack,
-                    lines: self.oneChannel ? [themed(v.info)] : [v.channel, themed(v.info)], progress: watched[v.id] ? watched[v.id].progress : v.progress, round: v.round,
+                    // (a Short: its views under its title, as YouTube's Shorts tiles)
+                    lines: self.oneChannel || v.short ? [themed(v.info)] : [v.channel, themed(v.info)], progress: watched[v.id] ? watched[v.id].progress : v.progress, round: v.round,
                     // In the theme's wording (e.g. "CC" as YouTube's TV app writes it)
                     chips: v.badges && v.badges.map(word), offerChip: v.offer && word(v.offer)
                 });
-                if (!v.page && !v.poster && !v.live && !v.length && !v.bare) {
+                // (a Short has no length on its tile, as YouTube's: none is looked up)
+                if (!v.page && !v.poster && !v.live && !v.length && !v.bare && !v.short) {
                     self.measure(v);
                 }
             }
@@ -481,6 +536,12 @@ export class VideoTiles {
 
     video(item: TileItem | null): Video | null {
         return item ? this.videos[item.id] || null : null;
+    }
+
+    /** The videos of row's tiles, in its order (made on OK on a Short: the Shorts it goes on through) */
+    videosOf(row: TileRow): Video[] {
+        var self = this;
+        return row.items.map(function (item) { return self.videos[item.id]; }).filter(function (v) { return !!v; });
     }
 
     /** Sets video id's watched fraction (0-1), also on its tiles in stack */

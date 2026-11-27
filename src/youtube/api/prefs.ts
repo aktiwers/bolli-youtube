@@ -17,6 +17,8 @@
 // videoClock: the time of day over a video in the app's player: 'off', 'left' or 'right' (the top corner).
 // chaptersPause: the video pauses while its chapters are picked from (Up in the app's player); off by default (it plays on).
 // quickJumps: a jump in a video lands in a window of its own, as a start does (player/dash.ts narrow).
+// jumpOn: Left and Right in a video jump at each press ('press', as YouTube's TV app), or move the marker until OK jumps
+// there ('ok'; own-player.ts jump).
 // background: the screens' colour, #rrggbb ('' YouTube's dark; a light one takes the light stylesheet: ui/theme.ts
 // applyLook). The old pureBlack (on: pure black) is read as '#000000'. sidebar: the rail's colour ('' as the background);
 // highlight: the focus's colour ('' YouTube's: white on a dark page, black on a light one); text: the main text's colour
@@ -25,6 +27,11 @@
 // of ui/theme.ts FONTS. icons: how the icons are drawn ('' filled, else one of ui/icons.ts ICON_STYLES); railIcons: the sidebar's
 // ('' as the others, else one of ui/rail-icons.ts RAIL_SETS). backgroundStyle, sidebarStyle: '' solid, or a still picture made from the colour ('fade', 'glow', 'blend';
 // the background also 'lines', 'dots': ui/theme.ts styleCss). colourRecent: the colours set lately in Settings › Theme › Colours, the last first (views/colour-page.ts).
+// textSizes: each kind of text's size in px, by kind (Settings › Theme › Text size: ui/text-sizes.ts; one not named: the
+// stylesheet's own). The old textSize 'large' is read as the sizes Large drew.
+// progressBar, signColour, signColour2, signColour3, playerPanels: the player's colours (Settings › Theme › Colours):
+// the bars' ('' YouTube's red, 'highlight'), the loading sign's first to third ('' its own, 'highlight'), the panels' over
+// a video ('' YouTube's greys, 'background'), else #rrggbb (ui/theme.ts SAME).
 // subsLayout: where Subscriptions shows its channels: 'side' (a column at the left, as YouTube's TV app), 'top' (round
 // pictures in a row over the videos, as YouTube's phone app; views/subscriptions.ts), or '' (as the theme has it:
 // ui/theme.ts subsLayout gives the one in force).
@@ -39,11 +46,20 @@
 // homeIcon, homeName, homeColor: the app's logo, name and tile colour on the TV's home screen (ui/home-screen.ts; webOS).
 // chatMode, chatPosition, chatHeight, chatBottom, chatSide, chatPicture, chatBox, chatSize, chatBackground, chatTimes, chatAvatars, chatFade: where a
 // live stream's chat shows and how it looks (player/chat-settings.ts).
-// channelVideo: a channel's video plays in its banner while the focus rests on Play mix (main.ts preloadFocused).
+// channelBanner: the top of a channel's page: 'video' (its cover picture, and its video there while the focus rests on
+// Play mix: main.ts preloadFocused), 'cover' (the picture alone) or 'black' (a plain dark band, no picture loaded:
+// views/channel.ts, api/channel.ts channelAhead).
+// railOrder, railHidden: the sidebar's entries in the viewer's order and those hidden (Settings › Screens › Edit sidebar:
+// views/rail.ts; empty: YouTube's TV app's order, all shown).
 // listLayout, listPreview, listAutoplay, listNumbers, listDetails, listButtons, listCarryOn, listKeep: a playlist's page
 // (views/list-stage.ts); listNext, listDown, listSide: the playlist in the player (player/list-panel.ts).
 // shortcuts: the remote's spare buttons (api/shortcuts.ts, Settings › Shortcuts: views/shortcuts.ts).
 // screenOff: how the screen goes black while the sound plays on (ui/screen-off.ts).
+// filterShorter, filterLonger, hideHome, hideSubs, hideSearch, hideChannel, hideLater, hideRelated, homeRows,
+// hiddenRows, hiddenChannels, hiddenChannelsInSubs, keywords, keywordsIn: Settings › Filters (api/filters.ts;
+// defaults: nothing hidden).
+// shorts, shortsOn, shortsLast: where Shorts show (Settings › Filters › Shorts, the Shorts on/off shortcut;
+// api/filters.ts; default: nowhere).
 // versionCheck: whether the app asks once a day if a newer version is out, and tells it (api/version-check.ts).
 
 import { KEY as BUTTON } from '../core/keys.js';
@@ -64,6 +80,10 @@ export interface Prefs {
     startPage: string;
     quality: number;
     codec: 'auto' | 'vp9' | 'av1' | 'h264';
+    /** HDR where a video has it and the device plays it (api/streams.ts streamsOf); off: every video in SDR */
+    hdr: boolean;
+    /** YouTube's upscaled copies ("Super resolution") where a video has them; off: no higher than it was uploaded */
+    upscaled: boolean;
     sound: 'auto' | 'aac' | 'opus' | 'aac51' | 'ac3' | 'eac3' | 'iamf';
     preload: boolean;
     history: boolean;
@@ -74,8 +94,15 @@ export interface Prefs {
     voiceBoost: boolean;
     /** Preview of the focused tile: 'off', 'muted' or 'sound' */
     previews: string;
-    /** A channel's video plays in its banner while the focus rests on Play mix (as Previews says: with sound or without) */
-    channelVideo: boolean;
+    /** The top of a channel's page, behind its name: 'video' (its cover picture, and its video there while the focus
+     * rests on Play mix, as Previews says: with sound or without), 'cover' (the picture alone) or 'black' (a plain dark
+     * band, and no picture loaded) */
+    channelBanner: string;
+    /** The sidebar's entries by id in the viewer's order, 'divider' the line between YouTube's and one's own (views/rail.ts
+     * arrange: an id no longer known is left out, one missing goes to its own place); empty: the app's order */
+    railOrder: string[];
+    /** The sidebar's entries hidden, by id (Settings too: then in the logo's menu) */
+    railHidden: string[];
     captions: string;
     /** The audio a start plays where a video has dubs: '' its own (the original), else its dub in the language of that
      * code; the original where it has none such (api/streams.ts startTrack) */
@@ -92,6 +119,9 @@ export interface Prefs {
     startPicture: string;
     /** Fetch streams by SABR first (api/streams.ts playableStreams) */
     sabr: boolean;
+    /** The Android app alone, where it has its own video layer (src/youtube/android/native.ts): videos play in
+     * Android's own player on a layer under the page; off: in the web view's, as before */
+    nativePlayer: boolean;
     /** Tile thumbnail size: 'standard' (320 px wide), 'sharp' (480) or 'sharpest' (640) */
     pictures: string;
     /** YouTube's most replayed graph over the player's progress bar (api/replays.ts) */
@@ -158,6 +188,9 @@ export interface Prefs {
     videoClock: string;
     /** The video pauses while its chapter row is open (player/own-player.ts openChapters) */
     chaptersPause: boolean;
+    /** Left and Right in a video: 'press' (each press jumps, as YouTube's TV app) or 'ok' (they move the marker, with the
+     * picture there; OK jumps, Back stays where the video is) */
+    jumpOn: string;
     /** Jumps in a video show their picture at once (Engine.quick: what was loaded past the landing's next seconds is
      * loaded again) */
     quickJumps: boolean;
@@ -169,6 +202,9 @@ export interface Prefs {
     highlight: string;
     /** The app's font: '' YouTube's Roboto, else one of ui/theme.ts FONTS ('system': the TV's own) */
     font: string;
+    /** Each kind of text's size in px, by kind (ui/text-sizes.ts TEXT_KINDS; one not named: its default, the stylesheet's
+     * own): Settings › Theme › Text size. Written whole, never changed in place */
+    textSizes: { [kind: string]: number };
     /** The page's main text, #rrggbb ('' automatic: ui/theme.ts autoText) */
     text: string;
     /** The sidebar's names and icons take the text chosen too: 'on', or '' (the sidebar's own; Settings › Theme › Colours ›
@@ -194,6 +230,14 @@ export interface Prefs {
     /** The inputs' and the buttons' style: '' solid, or one of ui/theme.ts SIDEBAR_STYLES */
     inputsStyle: string;
     buttonsStyle: string;
+    /** The player's bars, #rrggbb ('' YouTube's red; 'highlight': the highlight's) */
+    progressBar: string;
+    /** The loading sign's first (its main), second and third colour, #rrggbb ('' the sign's own; 'highlight') */
+    signColour: string;
+    signColour2: string;
+    signColour3: string;
+    /** The panels over a video, #rrggbb ('' YouTube's greys; 'background': the background's) */
+    playerPanels: string;
     /** "Who's watching?" (and the sign-in from it): in one of the looks of Settings › Theme › Theme (ui/theme.ts LOOKS,
      * by id), the same for everyone, or 'mine', this account's own (ui/theme.ts plainLook) */
     whoLook: string;
@@ -242,6 +286,36 @@ export interface Prefs {
     /** The version check (api/version-check.ts): 'notify' (once a day the app asks whether a newer version is out,
      * and tells of one), 'quiet' (it asks, and tells nothing) or 'off' (it asks nothing) */
     versionCheck: string;
+    /** Videos shorter than this many seconds are hidden everywhere (0: none; api/filters.ts) */
+    filterShorter: number;
+    /** Videos longer than this many seconds are hidden everywhere (0: none) */
+    filterLonger: number;
+    /** The kinds of tiles hidden on Home, in Subscriptions, search results, channel pages, Watch later and the watch
+     * page's related videos: 'live', 'upcoming', 'watched', 'mixes', 'playlists', 'members' (api/filters.ts isKind) */
+    hideHome: string[];
+    hideSubs: string[];
+    hideSearch: string[];
+    hideChannel: string[];
+    hideLater: string[];
+    hideRelated: string[];
+    /** The kinds of Home rows hidden: 'continue', 'topics', 'channels', 'shows', 'live' (api/filters.ts isRowKind) */
+    homeRows: string[];
+    /** Home rows hidden by their names (a tile's menu: Hide rows named this) */
+    hiddenRows: string[];
+    /** Channels hidden by their names (a tile's menu: Hide videos from), on Home, in search results and related videos */
+    hiddenChannels: string[];
+    /** Channels hidden also in Subscriptions */
+    hiddenChannelsInSubs: boolean;
+    /** Keywords hiding what has them in it (any case, any part of a word) everywhere but in Watch later */
+    keywords: string[];
+    /** Where keywords match: 'titles', 'channels' (channel names), 'rows' (Home rows' names) */
+    keywordsIn: string[];
+    /** Where Shorts show: 'hidden' (nowhere), 'shown' (everywhere), 'screens' (on those of shortsOn: api/filters.ts
+     * FilterScreen ids 'home', 'subs', 'search', 'channel', 'related') */
+    shorts: string;
+    shortsOn: string[];
+    /** The choice the Shorts on/off shortcut turns them back on to: 'shown' or 'screens' */
+    shortsLast: string;
 }
 
 /** A button's shortcut (api/shortcuts.ts): key (its key code), where it works ('everywhere', 'screens': not in the
@@ -342,11 +416,17 @@ export var CAPTION_SIZES = (function (): number[] {
     return sizes.concat([175, 200]);
 })();
 
-var DEFAULTS: Prefs = { skip: ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'music_offtopic'], theme: 'youtube', startPage: 'home', quality: 0, codec: 'auto', sound: 'auto', preload: true, history: true, autoplay: true, autoplayWait: 10, stableVolume: false, voiceBoost: false, previews: 'sound', channelVideo: true, captions: '', audioLanguage: '', captionStyle: 'words', captionSize: 100, captionLanguages: [], startSign: 'channel', startPicture: 'tile', sabr: false, pictures: 'sharpest', replays: true, dislikes: true, liveChat: true, chatMode: 'over', chatPosition: 'right', chatHeight: 'tall', chatBottom: 'ticker', chatSide: 'right', chatPicture: 'fit', chatBox: null, chatSize: 'normal', chatBackground: 'bubbles', chatTimes: false, chatAvatars: false, chatFade: 0,
+/** What the top of a channel's page may show (Settings › Screens › Channel banner) */
+var BANNERS = ['video', 'cover', 'black'];
+
+var DEFAULTS: Prefs = { skip: ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'music_offtopic'], theme: 'youtube', startPage: 'home', quality: 0, codec: 'auto', hdr: true, upscaled: true, sound: 'auto', preload: true, history: true, autoplay: true, autoplayWait: 10, stableVolume: false, voiceBoost: false, previews: 'sound', channelBanner: 'video', railOrder: [], railHidden: [], captions: '', audioLanguage: '', captionStyle: 'words', captionSize: 100, captionLanguages: [], startSign: 'channel', startPicture: 'tile', sabr: false, nativePlayer: true, pictures: 'sharpest', replays: true, dislikes: true, liveChat: true, chatMode: 'over', chatPosition: 'right', chatHeight: 'tall', chatBottom: 'ticker', chatSide: 'right', chatPicture: 'fit', chatBox: null, chatSize: 'normal', chatBackground: 'bubbles', chatTimes: false, chatAvatars: false, chatFade: 0,
     listLayout: 'stage', listPreview: 'sound', listAutoplay: true, listNumbers: 'charts', listDetails: true, listButtons: ['play', 'shuffle', 'repeat', 'save', 'shortcut'],
-    listCarryOn: true, listKeep: true, listNext: 0, listDown: 'row', listSide: 'over', videoClock: 'off', chaptersPause: false, quickJumps: true, background: '', sidebar: '', highlight: '', text: '', sidebarText: '', inputs: '', buttons: '', icons: '', railIcons: '', customLook: null, savedLooks: [], font: '', backgroundStyle: '', sidebarStyle: '', inputsStyle: '', buttonsStyle: '', whoLook: 'dark', subsLayout: '', homeBig: false, subsRelevant: true, logo: 'red', lookLogo: '', lookSign: '', homeIcon: 'red', homeName: '', homeColor: '', dearrow: '',
+    listCarryOn: true, listKeep: true, listNext: 0, listDown: 'row', listSide: 'over', videoClock: 'off', chaptersPause: false, jumpOn: 'press', quickJumps: true, background: '', sidebar: '', highlight: '', text: '', sidebarText: '', inputs: '', buttons: '', icons: '', railIcons: '', customLook: null, savedLooks: [], font: '', textSizes: {}, backgroundStyle: '', sidebarStyle: '', inputsStyle: '', buttonsStyle: '',
+    progressBar: '', signColour: '', signColour2: '', signColour3: '', playerPanels: '', whoLook: 'dark', subsLayout: '', homeBig: false, subsRelevant: true, logo: 'red', lookLogo: '', lookSign: '', homeIcon: 'red', homeName: '', homeColor: '', dearrow: '',
     dearrowOptions: ['thumbnails', 'frames', 'tidy'], keyboardRecent: [], colourRecent: [], shortcuts: SHORTCUTS,
-    screenOff: 'iris', castWakes: false, screenWake: 'any', versionCheck: 'notify' };
+    screenOff: 'iris', castWakes: false, screenWake: 'any', versionCheck: 'notify',
+    filterShorter: 0, filterLonger: 0, hideHome: [], hideSubs: [], hideSearch: [], hideChannel: [], hideLater: [], hideRelated: [], homeRows: [], hiddenRows: [],
+    hiddenChannels: [], hiddenChannelsInSubs: false, keywords: [], keywordsIn: ['titles', 'channels', 'rows'], shorts: 'hidden', shortsOn: [], shortsLast: 'shown' };
 
 /** Read once (they are read on every key) and updated by setPref. Only changed settings are stored, so a new
  * default still applies to the rest: the TV's (shared) and the account's own, or the TV store's whole while no account
@@ -418,9 +498,25 @@ export function prefs(): Prefs {
     if (LOADING_SIGNS.indexOf(stored.lookSign as string) < 0) {
         delete stored.lookSign;
     }
+    // A channel's banner is one choice of three now: its video switched off was its picture alone, its cover picture
+    // switched off a plain band
+    if (BANNERS.indexOf(stored.channelBanner as string) < 0) {
+        stored.channelBanner = stored.channelCover === false ? 'black' : stored.channelVideo === false ? 'cover' : undefined;
+    }
+    delete stored.channelVideo;
+    delete stored.channelCover;
     // (a subtitle size not offered: the stylesheet's own)
     if (CAPTION_SIZES.indexOf(stored.captionSize as number) < 0) {
         delete stored.captionSize;
+    }
+    // Text size was Standard or Large: Large is the sizes it drew (the tiles' titles 29 px, the lines under them 19 px:
+    // their chips, a Short's title, a channel's and a playlist page's lines in step), where none are set since
+    if (stored.textSize === 'large' && !stored.textSizes) {
+        stored.textSizes = { titles: 29, details: 19 };
+    }
+    delete stored.textSize;
+    if (!stored.textSizes || typeof stored.textSizes !== 'object' || stored.textSizes instanceof Array) {
+        delete stored.textSizes;
     }
     var read: { [name: string]: unknown } = {};
     for (name in DEFAULTS) {

@@ -31,7 +31,7 @@
             android:exported="true"
             android:launchMode="singleTask"
             android:screenOrientation="landscape"
-            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|smallestScreenSize|screenLayout|uiMode|density">
+            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenSize|smallestScreenSize|screenLayout|uiMode|density|fontScale|colorMode">
         </activity>
 
         <!-- Bolli YouTube's entries on the home screen: one for each built-in logo (src/youtube/ui/logo.ts: LOGOS), named

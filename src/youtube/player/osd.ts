@@ -46,6 +46,8 @@ export class PlayerOsd {
     private textShown = true;
     /** Whether the line under the title is shown (as last set) */
     private metaShown = true;
+    /** The picture behind it, as last set (setPicture) */
+    private picture = 'dark';
 
     /** The bar's time up: a look again (stay) or hidden */
     private later: () => void;
@@ -122,6 +124,17 @@ export class PlayerOsd {
         }
         clearTimeout(this.timer);
         this.timer = setTimeout(this.later, SHOW_MS) as unknown as number;
+    }
+
+    /** The picture behind it where it shows: 'light' (a darker fade behind its text, so white text stays readable),
+     * 'dark' (its own fade), '' not known (a live stream: a soft shadow under its text instead). Set only on a change:
+     * it draws its layer anew */
+    setPicture(kind: string): void {
+        if (kind !== this.picture) {
+            this.picture = kind;
+            toggleClass(this.el, 'osd--light', kind === 'light');
+            toggleClass(this.el, 'osd--unknown', !kind);
+        }
     }
 
     /** Where its content starts while shown, under the shade above it (layout units from the top; 0: hidden): what
@@ -228,11 +241,13 @@ export class PlayerOsd {
         setText(this.lineText, text);
     }
 
-    /** The playing picture's codec ("VP9"), height ("1080p") and frame rate, each when known, and "SABR" where its
-     * streams are the signed-in ones (sabr); empty while nothing is decoded */
-    setQuality(height: number, frameRate: number, codec?: string, sabr?: boolean): void {
+    /** The playing picture's codec ("VP9"), height ("1080p") and frame rate, each when known, "HDR" where it is in HDR
+     * (hdr), what else its format is (more: "Super resolution", "Premium"; '' nothing), and "SABR" where its streams
+     * are the signed-in ones (sabr); empty while nothing is decoded */
+    setQuality(height: number, frameRate: number, codec?: string, sabr?: boolean, hdr?: boolean, more?: string): void {
         // When empty the tag hides itself (the theme's :empty rule)
-        setText(this.quality, height ? (codec ? codec + '  ·  ' : '') + height + 'p' + (frameRate ? '  ·  ' + frameRate + ' fps' : '') + (sabr ? '  ·  SABR' : '') : '');
+        setText(this.quality, height ? (codec ? codec + '  ·  ' : '') + height + 'p' + (frameRate ? '  ·  ' + frameRate + ' fps' : '') + (hdr ? '  ·  HDR' : '') +
+            (more ? '  ·  ' + more : '') + (sabr ? '  ·  SABR' : '') : '');
     }
 
     setMessage(text: string): void {

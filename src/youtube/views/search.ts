@@ -18,7 +18,8 @@ import { listen } from '../core/platform.js';
 import { View } from '../core/view.js';
 import { Keyboard } from '../ui/keyboard.js';
 import { RowStack } from '../ui/row-stack.js';
-import { search, Video } from '../api/feed.js';
+import { FilterScreen, filterShelves, FilterStamp, filterStamp, stampHolds } from '../api/filters.js';
+import { Rows, search, Video } from '../api/feed.js';
 import { prefs, setPref } from '../api/prefs.js';
 import { keepSearch, recentSearches, Suggestion, suggestions } from '../api/suggest.js';
 import { icon, setIcon } from '../ui/icons.js';
@@ -27,7 +28,7 @@ import { PanelLine, SidePanel } from '../ui/side-panel.js';
 import { TvField } from '../ui/tv-field.js';
 import { SearchKeyboard } from '../ui/youtube-keyboard.js';
 import { metrics } from '../ui/theme.js';
-import { brandedRows, Paging, rowH, VideoTiles } from './tiles.js';
+import { brandedRows, copied, Paging, rowH, VideoTiles, withoutVideo } from './tiles.js';
 
 /** Suggestions are requested once typing pauses this long (YouTube's app requests on every key) */
 var SUGGEST_MS = 80;
@@ -35,6 +36,9 @@ var SUGGEST_MS = 80;
  * (not a held key's repeat nor quick taps: core/keys.ts ownPress) right after the frame that moves the focus (ASK_MS) */
 var REST_MS = 400;
 var SUGGESTIONS_MAX = 10;
+/** Recent searches listed with nothing typed: as many as fit above YouTube's recommended searches under the keyboard
+ * (its heading starts below the sixth line) */
+var RECENT_SHOWN = 6;
 /** Keyboard languages listed as Recent in its picker */
 
 /** Where the focus is: the back arrow, the suggestions, the keyboard or the results */
@@ -66,6 +70,10 @@ export class SearchView implements View {
     private stack = new RowStack('bd-search-rows', rowH(), metrics().searchRowsTop);
     private tiles = new VideoTiles();
     private paging = new Paging(this.tiles, 'search');
+    /** The result rows drawn (or the recommended searches') as YouTube sent them, and the filters they were drawn
+     * through (Settings › Filters: drawn again when those changed) */
+    private results: Rows | null = null;
+    private filteredBy: FilterStamp | null = null;
     private at: Place = 'keys';
     private focused = true;
     /** The suggestions shown (or the recent searches), their rows, and the focused one */
@@ -84,10 +92,18 @@ export class SearchView implements View {
     /** Where the rows start in the content (measured once) */
     private rowsTop = 0;
 
-    /** open: OK on a tile; onBack: the back arrow (or Back); ahead: prefetches a term's results */
-    constructor(private open: (video: Video) => void, private onBack: () => void, private ahead: (term: string) => void) {
+    /** open: OK on a tile (a Short's: with its row's Shorts); onBack: the back arrow (or Back); ahead: prefetches a term's
+     * results */
+    constructor(private open: (video: Video, shorts?: Video[]) => void, private onBack: () => void, private ahead: (term: string) => void) {
         var self = this;
         this.tiles.shown = function () { return self.stack.rows; };
+        this.paging.filter = 'search';
+        // (more rows below: the rows drawn as they came grow by them, for refilter)
+        this.paging.added = function (shelves, next) {
+            if (self.results) {
+                self.results = copied(self.results, { shelves: self.results.shelves.concat(shelves), next: next });
+            }
+        };
         this.el = h('div', 'bd-search');
         setShown(this.el, false);
         this.content = h('div', 'bd-search-content');
@@ -161,6 +177,9 @@ export class SearchView implements View {
         this.tiles.rebrand();
         setShown(this.el, true);
         this.stack.setShown(true);
+        if (!stampHolds('search', this.filteredBy)) {
+            this.refilter();
+        }
         this.mark();
         // Nothing typed: the recent searches, and YouTube's recommended searches under the keyboard
         if (!this.keyboard.text) {
@@ -179,8 +198,7 @@ export class SearchView implements View {
         search('').then(brandedRows).then(function (rows) {
             if (asked === self.searchAsked && !self.keyboard.text) {
                 self.recommended = true;
-                self.paging.set(rows.shelves, rows.next);
-                self.stack.setRows(self.tiles.rows(rows.shelves, true));
+                self.drawResults(rows);
                 self.mark();
             }
         }, function () { return undefined; });
@@ -201,6 +219,10 @@ export class SearchView implements View {
 
     /** Removes a video's tiles at once (YouTube dropped it: Not interested) */
     removeVideo(id: string): void {
+        // (also from the rows as sent, which the filters draw from again)
+        if (this.results) {
+            this.results = withoutVideo(this.results, id);
+        }
         this.paging.drop(this.stack, id);
         this.place();
     }
@@ -227,8 +249,8 @@ export class SearchView implements View {
     }
 
     onKey(code: number): boolean {
-        if (this.tv.active) {
-            return this.tv.onKey(code, this.keyboard);
+        if (this.tv.onKey(code, this.keyboard)) {
+            return true;
         }
         if (this.panel.shown) {
             this.panel.onKey(code);
@@ -255,6 +277,31 @@ export class SearchView implements View {
     focusedVideo(): Video | null {
         var row = this.stack.row;
         return this.focused && this.at === 'rows' && row ? this.tiles.video(row.focused) : null;
+    }
+
+    filteredAs(): FilterScreen | '' {
+        return 'search';
+    }
+
+    /** The filters changed (a channel hidden from a tile's menu, Filters on/off): the rows drawn again through them,
+     * the focus at the same place (the tile after a hidden one), nothing asked of YouTube */
+    refilter(): void {
+        if (!this.results || !(this.searched || this.recommended)) {
+            return;
+        }
+        var was = this.stack.index;
+        var row = this.stack.row;
+        var at = row ? row.index : 0;
+        var shown = this.drawResults(this.results);
+        if (this.searched) {
+            setText(this.status, shown ? '' : tr('Nothing found for "{1}"', this.searched));
+        }
+        if (!shown && this.at === 'rows') {
+            this.at = 'keys';
+        } else if (shown && this.at === 'rows') {
+            this.stack.focusPlace(was, at);
+        }
+        this.mark();
     }
 
     private go(at: Place): void {
@@ -356,7 +403,7 @@ export class SearchView implements View {
             case KEY.OK:
                 var video = this.tiles.video(row.focused);
                 if (video) {
-                    this.open(video);
+                    this.open(video, video.short ? this.tiles.videosOf(row) : undefined);
                 }
                 return true;
         }
@@ -409,6 +456,8 @@ export class SearchView implements View {
         this.suggest(term, 0);
         this.searched = term;
         this.recommended = false;
+        // (the rows shown are the last term's until the reply: not drawn again under this one)
+        this.results = null;
         this.paging.stop();
         var asked = ++this.searchAsked;
         // No status text while loading
@@ -418,11 +467,10 @@ export class SearchView implements View {
             if (asked !== self.searchAsked) {
                 return;
             }
-            // All of YouTube's rows, as its app shows them
-            self.paging.set(rows.shelves, rows.next);
-            self.stack.setRows(self.tiles.rows(rows.shelves, true));
-            setText(self.status, rows.shelves.length ? '' : tr('Nothing found for "{1}"', term));
-            if (rows.shelves.length) {
+            // All of YouTube's rows, as its app shows them (less what Settings › Filters hides)
+            var shown = self.drawResults(rows);
+            setText(self.status, shown ? '' : tr('Nothing found for "{1}"', term));
+            if (shown) {
                 self.stack.focusRow(0);
                 self.at = 'rows';
             }
@@ -434,7 +482,18 @@ export class SearchView implements View {
         });
     }
 
+    /** Draws result rows through the filters; false: none is left */
+    private drawResults(rows: Rows): boolean {
+        var shelves = filterShelves('search', rows.shelves);
+        this.results = rows;
+        this.filteredBy = filterStamp('search');
+        this.paging.set(shelves, rows.next);
+        this.stack.setRows(this.tiles.rows(shelves, true));
+        return shelves.length > 0;
+    }
+
     private clearResults(): void {
+        this.results = null;
         this.searched = '';
         this.recommended = false;
         this.searchAsked++;
@@ -443,9 +502,9 @@ export class SearchView implements View {
         setText(this.status, '');
     }
 
-    /** The recent searches, as suggestions */
+    /** The recent searches, as suggestions (as many as fit above the recommended searches) */
     private recent(): Suggestion[] {
-        return recentSearches().map(function (text) {
+        return recentSearches().slice(0, RECENT_SHOWN).map(function (text) {
             return { text: text };
         });
     }

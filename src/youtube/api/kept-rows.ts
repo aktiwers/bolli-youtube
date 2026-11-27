@@ -52,9 +52,11 @@ export function keepRows(screen: string, account: string, rows: Rows): void {
         channels: rows.channels,
         channelsLabel: rows.channelsLabel,
         nudge: rows.nudge,
-        // Shape, subtitle and icon too: else square rows and games' boxes draw as plain ones until the fresh rows arrive
+        // Shape, subtitle and icon too: else square rows and games' boxes draw as plain ones until the fresh rows arrive; and
+        // a row of Shorts as one (the filters hide it where they do not show)
         shelves: rows.shelves.slice(0, SHELVES_KEPT).map(function (s) {
-            return { title: s.title, videos: s.videos.slice(0, VIDEOS_KEPT), grid: s.grid, next: s.next, style: s.style, subtitle: s.subtitle, icon: s.icon };
+            return { title: s.title, videos: s.videos.slice(0, VIDEOS_KEPT), grid: s.grid, next: s.next, style: s.style, subtitle: s.subtitle, icon: s.icon,
+                shorts: s.shorts };
         })
     };
     save(KEY + screen, { v: VERSION, account: hash(account), lang: language(), rows: kept });

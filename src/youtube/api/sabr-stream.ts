@@ -34,7 +34,7 @@ export interface StreamRequest {
     ontimeout: (() => void) | null;
     open(method: string, url: string): void;
     overrideMimeType(type: string): void;
-    send(body: ArrayBuffer): void;
+    send(body: Uint8Array): void;
     abort(): void;
     addEventListener(type: string, listener: () => void): void;
     /** The bytes that came since the last take, in order */
@@ -132,7 +132,8 @@ var SCRIPT = [
     '  x.ontimeout = function () { if (s === mine) { over(); postMessage({ n: n, failed: "timeout" }); } };',
     '  var tick = function () { if (s === mine && x.readyState >= 3 && ok()) { mine.look(false); if (!mine.calm && mine.read >= m.first) { mine.calm = true; clearInterval(mine.timer); mine.timer = setInterval(tick, ' + CALM_MS + '); } } };',
     '  mine.timer = setInterval(tick, ' + LOOK_MS + ');',
-    '  x.send(m.body);',
+    // (a view: an ArrayBuffer itself is deprecated there, a warning in webOS 2's log)
+    '  x.send(new Uint8Array(m.body));',
     '};'
 ].join('\n');
 
@@ -209,9 +210,9 @@ class Request implements StreamRequest {
         return undefined;
     }
 
-    send(body: ArrayBuffer): void {
-        // (the body is the worker's from here: a request is built anew for each ask)
-        this.worker.postMessage({ n: this.n, url: this.url, body: body, timeout: this.timeout, early: this.reads.early, first: this.reads.first, most: this.reads.most }, [body]);
+    send(body: Uint8Array): void {
+        // (the body's bytes are the worker's from here, a request built anew for each ask: its own buffer, of its length)
+        this.worker.postMessage({ n: this.n, url: this.url, body: body.buffer, timeout: this.timeout, early: this.reads.early, first: this.reads.first, most: this.reads.most }, [body.buffer]);
     }
 
     abort(): void {

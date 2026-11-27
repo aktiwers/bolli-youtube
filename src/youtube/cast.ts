@@ -14,7 +14,7 @@
 
 import { KEY } from './core/keys.js';
 import { tr } from './core/i18n.js';
-import { android } from './core/platform.js';
+import { android, foundOnNetwork } from './core/platform.js';
 import { toast } from './ui/toast.js';
 import { prefs, setPref } from './api/prefs.js';
 import { offerComments, withdrawComments } from './api/handoff.js';
@@ -130,8 +130,7 @@ export class Cast {
     /** Posts the screen's id and token to LG's DIAL server, which includes them in its answer to phones */
     private announce(): void {
         var body = this.lounge.dialData;
-        // (Android has no DIAL server)
-        if (body && !android()) {
+        if (body && foundOnNetwork()) {
             var xhr = new XMLHttpRequest();
             xhr.open('POST', this.dialUrl);
             xhr.setRequestHeader('Content-Type', 'text/plain');

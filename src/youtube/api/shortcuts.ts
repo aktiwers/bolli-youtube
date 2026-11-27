@@ -21,12 +21,12 @@ KEYS[KEY.YELLOW] = tr('Yellow');
 KEYS[KEY.BLUE] = tr('Blue');
 KEYS[KEY.CH_UP] = 'P+';
 KEYS[KEY.CH_DOWN] = 'P−';
-KEYS[415] = tr('Play');
-KEYS[19] = tr('Pause');
-KEYS[413] = tr('Stop');
-KEYS[412] = tr('Rewind');
-KEYS[417] = tr('Fast-forward');
-KEYS[457] = tr('Info');
+KEYS[KEY.PLAY] = tr('Play');
+KEYS[KEY.PAUSE] = tr('Pause');
+KEYS[KEY.STOP] = tr('Stop');
+KEYS[KEY.REWIND] = tr('Rewind');
+KEYS[KEY.FORWARD] = tr('Fast-forward');
+KEYS[KEY.INFO] = tr('Info');
 KEYS[KEY.GUIDE] = tr('Guide');
 KEYS[KEY.LIST] = tr('List');
 KEYS[KEY.SCREEN_REMOTE] = tr('Screen remote');
@@ -35,7 +35,8 @@ for (var n = 0; n <= 9; n++) {
 }
 /** The named buttons in the order Settings lists them: the colours, P+ and P−, the others, the numbers last (1 to 9,
  * then 0, as on the remote) */
-var ORDER = [KEY.RED, KEY.GREEN, KEY.YELLOW, KEY.BLUE, KEY.CH_UP, KEY.CH_DOWN, 415, 19, 413, 412, 417, 457, KEY.GUIDE, KEY.LIST, KEY.SCREEN_REMOTE];
+var ORDER = [KEY.RED, KEY.GREEN, KEY.YELLOW, KEY.BLUE, KEY.CH_UP, KEY.CH_DOWN, KEY.PLAY, KEY.PAUSE, KEY.STOP, KEY.REWIND, KEY.FORWARD, KEY.INFO, KEY.GUIDE, KEY.LIST,
+    KEY.SCREEN_REMOTE];
 for (var d = 1; d <= 10; d++) {
     ORDER.push(KEY.NUM_0 + d % 10);
 }

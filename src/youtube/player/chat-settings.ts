@@ -132,6 +132,8 @@ export class ChatSettings {
      * and its timer */
     private chat: ChatView;
     private scene: HTMLElement | null = null;
+    /** Told once the page closes (null: nobody) */
+    private done: (() => void) | null = null;
     private examples: ChatMessage[] = [];
     private sent = 0;
     private exampleTimer = 0;
@@ -190,8 +192,9 @@ export class ChatSettings {
         });
     }
 
-    /** Shows the page at its first setting (over Settings: the example messages start) */
-    open(): void {
+    /** Shows the page at its first setting (over Settings: the example messages start); done: closed */
+    open(done?: () => void): void {
+        this.done = done || null;
         this.shown = true;
         this.at = 0;
         this.arranging = '';
@@ -217,6 +220,11 @@ export class ChatSettings {
         if (this.scene) {
             clearTimeout(this.exampleTimer);
             this.chat.stop();
+        }
+        var done = this.done;
+        this.done = null;
+        if (done) {
+            done();
         }
     }
 

@@ -1,4 +1,4 @@
-// The sidebar's own icon sets (Settings › Theme › Sidebar icons): drawings for the rail's ten entries in place of the
+// The sidebar's own icon sets (Settings › Theme › Sidebar icons): drawings for the rail's entries in place of the
 // app's icons there. Of their own: Elements, a tile with two letters of the entry's name (in the app's language) and
 // its number, as the periodic table; 3D, small objects of shaded boxes (their sides from the one colour of the text);
 // Pixel, 12 x 12 pixel art. The others (App tiles, Glass, Fruit, VHS) the system's of the same name (ui/icons.ts markup).
@@ -66,6 +66,8 @@ interface Part {
 var ISO: { [name: string]: Part[] } = {
     home: [{ box: [0, 0, 0, 8, 8, 5] }, { box: [5.5, 1, 6, 1.4, 1.4, 3.2] },
         { face: [[0, 8, 5], [8, 8, 5], [8, 4, 9], [0, 4, 9]], shade: 0.85, order: 30 }, { face: [[8, 0, 5], [8, 8, 5], [8, 4, 9]], shade: 0.45, order: 30 }],
+    // (Shorts: a phone-like card standing on edge, its play triangle on the front)
+    shorts: [{ box: [0, 0, 0, 6, 2, 10] }, { face: [[2, 2, 3.5], [2, 2, 6.5], [4.6, 2, 5]], shade: 0.2, order: 20 }],
     subscriptions: [{ box: [0, 0, 0, 10, 3, 7] }, { face: [[1, 3, 1], [9, 3, 1], [9, 3, 6], [1, 3, 6]], shade: 0.25, order: 20 },
         { face: [[4, 3, 2], [4, 3, 5], [6.6, 3, 3.5]], shade: 1, order: 21 }, { box: [3.5, 0.8, 7, 3, 1.4, 0.6] }],
     library: [{ box: [0, 0, 0, 9, 6, 1.7] }, { box: [0.8, 0.3, 1.7, 7.4, 5.4, 1.7] }, { box: [0.2, 0.6, 3.4, 8.2, 5, 1.7] }],
@@ -142,6 +144,8 @@ var PIX: { [name: string]: string[] } = {
         '.......###..', '........###.', '.........###'],
     home: ['.....##.....', '....####....', '...######...', '..########..', '.##########.', '############', '.##########.', '.####..####.', '.####..####.',
         '.####..####.', '.####..####.', '............'],
+    shorts: ['.....####...', '....######..', '...#######..', '..########..', '..###.####..', '..###..###..', '..###...##..', '..###..###..',
+        '..###.###...', '..#######...', '..######....', '...####.....'],
     subscriptions: ['..#......#..', '...#....#...', '....#..#....', '############', '#..........#', '#...##.....#', '#...###....#', '#...####...#',
         '#...###....#', '#...##.....#', '#..........#', '############'],
     library: ['............', '##.##.##....', '##.##.##..##', '##.##.##.###', '##.##.##.##.', '##.##.##.##.', '##.##.##.##.', '##.##.##.##.',

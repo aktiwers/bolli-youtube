@@ -274,3 +274,9 @@ export function uiScale(): number {
 export function px(size: number): number {
     return Math.round(size * uiScale());
 }
+
+/** fn after the next frame is painted: what a key changed on screen shows before fn's work (a pipeline let go, a
+ * start) holds the thread */
+export function afterFrame(fn: () => void): void {
+    requestAnimationFrame(function () { setTimeout(fn, 0); });
+}

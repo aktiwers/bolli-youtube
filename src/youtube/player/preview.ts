@@ -22,7 +22,8 @@
 
 /** How a preview shows: its look (own-player.ts PeekLook); whole (the whole video, its sound kept); resume (the video
  * the player closed, kept loaded, plays on where it was, at once: a playlist's frame after Back); done (called once it
- * stops), ended (called when the video reached its end, after done) */
+ * stops; the look's began, if the video was displayed, came before it), ended (called when the video reached its end,
+ * after done) */
 export interface PreviewWay extends PeekLook {
     whole?: boolean;
     resume?: boolean;
@@ -30,7 +31,7 @@ export interface PreviewWay extends PeekLook {
     ended?: () => void;
 }
 
-import { firstStreams, Format, kindOf, pickFormat, Streams } from '../api/streams.js';
+import { codecKind, firstStreams, Format, hdrOf, kindOf, pickFormat, Streams } from '../api/streams.js';
 import { OwnPlayer, PeekLook, startOf } from './own-player.js';
 import { android } from '../core/platform.js';
 import { pictureKind, replacesPipeline } from './pipeline.js';
@@ -52,9 +53,19 @@ var GO_ON_MS = 60000;
  * the page 0.2-1 s (a key pressed then waits for it), so only once the focus has rested well */
 var OTHER_KIND_MS = 1500;
 
-/** A preview's format: at HEIGHT in the codec of the start's format (start), so a take-over switches to that in place */
+/** The kind of pipeline an LG TV is quick to leave (SLOW_TO_LEAVE has the others): H.264's */
+var QUICK_KIND = 'video/mp4 avc1';
+
+/** A preview's format: at HEIGHT in the codec of the start's format (start), so a take-over switches to that in place.
+ * Always in SDR, also where the start is in HDR: a tile's preview would put the TV into HDR under the screens, so
+ * that start opens a pipeline of its own and has to leave the preview's: in H.264 then, which the TV leaves quickly
+ * (on the LG TV, 2026-11-25: an HDR start 0.97 and 1.02 s after OK from an H.264 pipeline, 1.62-1.80 s from a VP9
+ * one), else the start's codec in SDR, else any SDR */
 export function previewFormat(s: Streams, start: Format): Format | null {
-    return formatOf(s, kindOf(start.mime));
+    if (!hdrOf(start.mime)) {
+        return formatOf(s, kindOf(start.mime));
+    }
+    return formatOf(s, QUICK_KIND) || formatOf(s, codecKind(start.mime)) || pickFormat(s.videos.filter(function (f) { return !hdrOf(f.mime); }), HEIGHT);
 }
 
 function formatOf(s: Streams, kind: string): Format | null {
@@ -66,7 +77,9 @@ function formatOf(s: Streams, kind: string): Format | null {
  * one (audio: the preview's sound's mime) */
 export function shownFormat(s: Streams, start: Format, audio: string, slow: boolean): Format | null {
     var format = previewFormat(s, start);
-    if (slow && format && SLOW_TO_LEAVE.test(pictureKind()) && replacesPipeline([format.mime, audio])) {
+    // (never a kept HDR pipeline's kind: a preview is in SDR; nor for a start in HDR, whose preview is in the kind
+    // quick to leave on purpose: previewFormat)
+    if (slow && format && !hdrOf(start.mime) && !hdrOf(pictureKind()) && SLOW_TO_LEAVE.test(pictureKind()) && replacesPipeline([format.mime, audio])) {
         var kept = formatOf(s, pictureKind());
         if (kept && kept.height >= KEPT_MIN_HEIGHT && !replacesPipeline([kept.mime, audio])) {
             return kept;
@@ -76,6 +89,9 @@ export function shownFormat(s: Streams, start: Format, audio: string, slow: bool
 }
 
 export class TilePreview {
+    /** It plays the whole video (a playlist's frame: Settings › Autoplay on the playlist page), as a start would: the
+     * TV's screensaver is kept off for it (main.ts) */
+    playsWhole = false;
     private id = '';
     private timer = 0;
     private fadeTimer = 0;
@@ -108,6 +124,7 @@ export class TilePreview {
             var rect = frame.getBoundingClientRect();
             if (rect.width && rect.height && this.player.peekKept(id, rect, sound, stopped, how)) {
                 this.id = id;
+                this.playsWhole = !!how.whole;
                 if (!how.whole) {
                     this.limit(PREVIEW_MS);
                 }
@@ -136,6 +153,7 @@ export class TilePreview {
                 // (the tile's picture, laid over the video until it moves)
                 var picture = (frame.tagName === 'IMG' ? frame : frame.querySelector('.bd-tile-img')) as HTMLImageElement | null;
                 self.player.peekStart(id, s, format, chosen.video, chosen.track, start.t, at, sound, stopped, how, picture && picture.getAttribute('src') || '');
+                self.playsWhole = !!how.whole;
                 // The whole video (its end tells), else until PREVIEW_MS or the video's end if that comes first
                 if (!how.whole) {
                     var left = format.duration > 0 ? (format.duration - start.t) * 1000 : 0;
@@ -185,6 +203,7 @@ export class TilePreview {
      * video) */
     stop(): void {
         this.gen++;
+        this.playsWhole = false;
         var done = this.done;
         this.done = null;
         if (done) {

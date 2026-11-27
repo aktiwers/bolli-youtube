@@ -1,0 +1,17 @@
+/* Bolli YouTube on Android while a video plays in the shell's own player (src/youtube/android/native.ts cut): the
+   picture is on a layer under the web view, so the page is see-through where the player is. In the APK alone
+   (tools/android.mjs).
+   The player full screen (the page marked by-native): the player (app.css .by-player) keeps what it draws over the
+   picture; its own black, the screens under it and the page's colour are not drawn (opacity: nothing of them is
+   painted anew, going or coming). */
+html.by-native, html.by-native body, html.by-native .by-player { background: transparent; }
+html.by-native #app, html.by-native .by-canvas { opacity: 0; }
+/* The player in a box (a tile's preview; by-native-box): the page's colour is a sheet of its own under everything,
+   with the box cut out of it by the script, as the look's own canvas is; the screens stay as they are */
+.by-native-sheet { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; display: none; }
+html.by-native-box, html.by-native-box body { background: transparent; }
+html.by-native-box .by-native-sheet { display: block; }
+/* A channel's header video (its page marked by-channel--preview): the banner under it is not drawn. The script finds
+   what lies under the player along the pointer's path, which the banner is not on (the look's pointer-events: none),
+   so it is named here (tests/youtube-android-native.test.mjs keeps the list of what the pointer does not reach) */
+html.by-native-box .by-channel--preview .by-channel-banner { visibility: hidden; }

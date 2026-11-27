@@ -11,7 +11,7 @@ import { h, setShown, setText } from '../core/dom.js';
 import { tr } from '../core/i18n.js';
 import { KEY } from '../core/keys.js';
 import { Keyboard, KeyboardLabels } from './keyboard.js';
-import { TvField } from './tv-field.js';
+import { ownKeyboard, TvField } from './tv-field.js';
 import { sideKey } from './youtube-keyboard.js';
 
 var DELETE = 'Delete';
@@ -100,8 +100,8 @@ export class TextPage {
     }
 
     onKey(code: number): boolean {
-        if (this.tv.active) {
-            return this.tv.onKey(code, this.keyboard);
+        if (this.tv.onKey(code, this.keyboard)) {
+            return true;
         }
         if (code === KEY.BACK) {
             this.close();
@@ -120,7 +120,7 @@ export class TextPage {
         return [
             letters.slice(0, 13).split('').concat([DELETE]),
             letters.slice(13).split('').concat([this.upper ? LOWER : UPPER]),
-            '1234567890./:'.split('').concat([TV]),
+            '1234567890./:'.split('').concat(ownKeyboard() ? [TV] : []),
             '-_?=&%~+#@,!'.split(''),
             (this.spaces ? [this.labels.space] : []).concat([this.labels.clear, DONE])
         ];

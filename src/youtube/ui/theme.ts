@@ -12,16 +12,20 @@ import { h } from '../core/dom.js';
 import { tr } from '../core/i18n.js';
 import { Prefs, prefs, setPref, setPrefs } from '../api/prefs.js';
 import { contrast, fromLinear, hsl, luminance, mix, rgb, toHsl, toLinear } from './colours.js';
-import { BUTTON_RULES, HIGHLIGHT_RULES, INPUT_RULES, RAIL_TEXT_RULES, TEXT_RULES, WHO_FONT, WHO_RULES } from './highlight.gen.js';
+import { BUTTON_RULES, HIGHLIGHT_RULES, INPUT_RULES, PANEL_RULES, PROGRESS_RULES, RAIL_TEXT_RULES, SIGN_RULES, TEXT_RULES, WHO_FONT, WHO_RULES } from './highlight.gen.js';
 import { ICON_STYLES, setIconStyle, setRailSet } from './icons.js';
-import { logoValue, showLogo } from './logo.js';
+import { CoverBox } from './picture-light.js';
+import { logoValue, showLogo, tryLogo } from './logo.js';
 import { RAIL_SETS } from './rail-icons.js';
 import { LOADING_SIGNS } from './signs.js';
+import { keptSizes, kindRules, posterRules, sameSizes, sizeIn, TEXT_KINDS, TextSizes, tileSpace } from './text-sizes.js';
 import { TileLayout, TileShape } from './tile-row.js';
 
 export interface Metrics {
-    /** Left rail: width (where screens start), first entry's top, entry spacing, bottom entry's top */
-    rail: { width: number; top: number; step: number; bottom: number };
+    /** Left rail: width (where screens start), first entry's top, entry spacing, bottom entry's top; in edit mode (every
+     * entry listed, Settings and Reset under them) the first row's top, the rows' spacing and the open rail's width (its
+     * rows hold an eye at the right of the name) */
+    rail: { width: number; top: number; step: number; bottom: number; editTop: number; editStep: number; editWidth: number };
     /** Where Search's focused results row lands (under the field) */
     searchRowsTop: number;
     /** Subscriptions: first row's top under the channels and pills; channel spacing */
@@ -54,6 +58,8 @@ export interface Metrics {
     game: TileShape;
     /** Poster tiles (Movies) and the wide focused poster */
     poster: TileShape;
+    /** A Short's tile (upright, 9:16), in rows and grids of Shorts: taller than other tiles, its row as much taller */
+    short: TileShape;
     posterWide: TileShape;
     /** Playlist page (two columns): one video per line (thumbnail size, left, first line's top, line pitch) and the
      * title's position in the left column */
@@ -71,8 +77,10 @@ export interface Metrics {
     /** Watch page (player/watch-page.ts): related-video tiles and spacing, first line's top (under the buttons),
      * where a focused line lands */
     watch: { tile: TileShape; rows: TileLayout; top: number; focusTop: number };
-    /** Channel page: first row heading's top with the header shown and with focus in the rows; left margin (no rail) */
-    channel: { rowsTop: number; rowsTopDown: number; pad: number };
+    /** Channel page: first row heading's top with the header shown and with focus in the rows; left margin (no rail);
+     * the banner's box (themes/youtube.css by-channel-banner) and the part of it read for how light it is behind the name
+     * and buttons (ui/picture-light.ts bannerLight) */
+    channel: { rowsTop: number; rowsTopDown: number; pad: number; cover: CoverBox };
     /** Full-screen page (History, a playlist): title top, grid top, right margin of the grid */
     page: { top: number; gridTop: number; right: number };
     /** Behaviour beyond looks (e.g. the YouTube TV app's, for the clone theme) */
@@ -172,9 +180,19 @@ export var YOUTUBE_LIGHT = '#ffffff';
  * inputRules): '' YouTube's greys; the buttons': '' as the inputs; the inputs' and the buttons' style ('' solid, or one of
  * SIDEBAR_STYLES: what stays right on a small round box). Settings › Theme's Logo (ui/logo.ts logoValue: a built-in one's id, the
  * account's picture, a custom one, none) and Loading spinner (one of ui/spinner.ts LOADING_SIGNS): a look shows these
- * on top of the account's own where it names them, never setting them (ON_TOP) */
+ * on top of the account's own where it names them, never setting them (ON_TOP). The player's (Settings › Theme › Colours'
+ * Progress bar, Loading spinner, Player panels): the bars' colour ('' YouTube's red), the loading sign's first, second
+ * and third colour (SIGN_PARTS: '' the sign's own), the panels' over a video ('' YouTube's greys); besides a colour, the
+ * bars and the sign 'highlight' (the highlight's colour), the panels 'background' (the background's: SAME) */
 export type LookPart = 'background' | 'sidebar' | 'highlight' | 'text' | 'inputs' | 'buttons' | 'inputsStyle' | 'buttonsStyle' | 'font' | 'icons' | 'railIcons' | 'backgroundStyle' |
-    'sidebarStyle' | 'sidebarText' | 'logo' | 'startSign';
+    'sidebarStyle' | 'sidebarText' | 'logo' | 'startSign' | 'progressBar' | 'signColour' | 'signColour2' | 'signColour3' | 'playerPanels';
+
+/** The loading sign's colours, its first (its main) to its third (ui/highlight.gen.ts SIGN_COLOURS: as many as a sign has) */
+export var SIGN_PARTS: LookPart[] = ['signColour', 'signColour2', 'signColour3'];
+
+/** The parts that may be another part's colour besides one of their own, and the word for it */
+export var SAME: { [part: string]: string } = { progressBar: 'highlight', signColour: 'highlight', signColour2: 'highlight', signColour3: 'highlight',
+    playerPanels: 'background' };
 
 /** The styles a background can have besides solid (Settings › Theme › Colours), each a still picture made from its
  * colour (styleCss); the sidebar's, the inputs' and the buttons': those that stay right stretched open or on a small
@@ -252,6 +270,9 @@ function valueOf(part: string, value: string | undefined): string {
     }
     if (part === 'sidebarText') {
         return value === 'on' ? value : '';
+    }
+    if (SAME.hasOwnProperty(part) && value === SAME[part]) {
+        return value;
     }
     return value && /^#[0-9a-f]{6}$/i.test(value) ? value.toLowerCase() : '';
 }
@@ -434,8 +455,9 @@ function backgroundRules(color: string, light: boolean, style: string, picture: 
     var n = parseInt(color.slice(1), 16);
     var channels = (n >> 16 & 255) + ', ' + (n >> 8 & 255) + ', ' + (n & 255);
     var ring = ownText(light);
+    // (and the Shorts screen's pieces over its video's corners, so they round it in the page's background whatever it is)
     var bars = '.by-search-top, .by-langs, .by-feed-top, .by-question, .by-channel-top, .by-shortcuts, .by-subs-top, .by-page-top, ' +
-        '.by-settings-backdrop';
+        '.by-settings-backdrop, .by-shorts-corner';
     // (a style: the bars over the screens' tops and the pages over the app show the same picture as the page under
     // them, pinned to the screen, so no band shows where they are; measured on the TV, 2026-11-16: Home's walk no
     // slower. The open rail's shade is stretched open: its own colour, solid)
@@ -517,6 +539,92 @@ function inputRules(rules: string, color: string, style: string, text: string): 
         .split('$T').join(on).split('$G').join(mix(on, back, 0.35)) + '\n';
 }
 
+/** A colour's red, green and blue, as rgba() takes them */
+function channelsOf(color: string): string {
+    var n = parseInt(color.slice(1), 16);
+    return (n >> 16 & 255) + ', ' + (n >> 8 & 255) + ', ' + (n & 255);
+}
+
+/** Settings › Theme › Colours › Progress bar: the bars YouTube draws red (the player's and its marker, Shorts', the watch
+ * page's and its knob, the watched part under a tile: made from the stylesheet, highlight.gen.ts PROGRESS_RULES) in
+ * color, a see-through one as see-through */
+function progressRules(color: string): string {
+    return PROGRESS_RULES.replace(/\$P(?:@([\d.]+))?/g, function (all: string, alpha: string) {
+        return alpha ? 'rgba(' + channelsOf(color) + ', ' + alpha + ')' : color;
+    }) + '\n';
+}
+
+/** A colour by from a panel's (color) as shifted makes it, kept on the panel's side of the cut (the text that reads on the
+ * panel reads on it): YouTube's comment card #363636 on its #171717 is 31 lighter */
+function panelStep(color: string, by: number): string {
+    var c = shifted(color, by);
+    return isLight(c) === isLight(color) ? c : shifted(color, -by);
+}
+
+/** Settings › Theme › Colours › Player panels: what YouTube draws on its dark greys over a video (the comments, the side
+ * panel, the watch page's buttons and Sound panel, Up next, the playlist at the player's side: made from the stylesheet,
+ * highlight.gen.ts PANEL_RULES) in color, what is drawn on a panel its step from it (panelStep); the text the page's
+ * automatic one on the part of them it reads least on (YouTube's near-white or near-black, else white or black: autoText),
+ * its greys in their steps (stepRules); a focus, a hover and the like as the sheet has them on a dark panel, as the light
+ * page has them on a light one (the focus a dark box there), what the highlight draws (lit: one is chosen) left to it */
+function panelRules(color: string, lit: boolean): string {
+    var light = isLight(color);
+    var card = panelStep(color, 32);
+    var weak = luminance(card) < luminance(color) === light ? card : color;
+    var text = autoText(weak);
+    var made = panelTemplate(light, lit).replace(/\$P([+-]\d+)?(?:@([\d.]+))?/g, function (all: string, by: string, alpha: string) {
+        var c = by ? panelStep(color, +by) : color;
+        return alpha ? 'rgba(' + channelsOf(c) + ', ' + alpha + ')' : c;
+    });
+    return stepRules(made.split('$X').join(text), text, weak) + '\n';
+}
+
+/** PANEL_RULES' lines for a light or a dark panel, lit or not (the highlight's), made once each: a colour tried makes
+ * only its own values in them */
+var panelTemplates: { [which: string]: string } = {};
+
+function panelTemplate(light: boolean, lit: boolean): string {
+    var which = (light ? 'L' : 'D') + (lit ? 'H' : '');
+    return panelTemplates[which] || (panelTemplates[which] = PANEL_RULES.split('\n').filter(function (line) {
+        var only = /^([DLP])(H?):/.exec(line);
+        return !only || only[1] === (light ? 'L' : 'D') && !(only[2] && lit);
+    }).map(function (line) {
+        return line.replace(/^[DL]H?:/, '');
+    }).join('\n'));
+}
+
+/** The pointer's hover on the player's panels where they are light (a dark one: the sheet's own), as the light page draws
+ * it (highlight.gen.ts PANEL_RULES' P: lines): a style of its own, written only as the panels turn light or dark, not at
+ * every colour (on the TV a sheet changed with a selector from the pointer's bd-pointer, on html, restyles the whole
+ * page: tools/light_theme.mjs whoSelector) */
+function panelHover(): string {
+    return PANEL_RULES.split('\n').filter(function (line) { return line.indexOf('P:') === 0; }).map(function (line) { return line.slice(2); }).join('\n') + '\n';
+}
+
+/** Settings › Theme › Colours › Loading spinner: the signs' art (made from the stylesheet: highlight.gen.ts SIGN_RULES) in
+ * the colours chosen (slots: each sign's first, second and third, '' its own; the same for every sign), only the rules
+ * with one chosen; each of the art's colours made from the one chosen as it is made from its own (mixed towards white or
+ * black, see-through), the others its own */
+function signRules(slots: string[]): string {
+    var out: string[] = [];
+    SIGN_RULES.split('\n').forEach(function (line) {
+        var chosen = false;
+        var made = line.replace(/\$(\d)([+-][\d.]+)?(?:@([\d.]+))?~([^~]*)~/g, function (all: string, n: string, by: string, alpha: string, own: string) {
+            var c = slots[+n - 1];
+            if (!c) {
+                return own;
+            }
+            chosen = true;
+            var x = by ? mix(c, +by > 0 ? '#ffffff' : '#000000', Math.abs(+by)) : c;
+            return alpha ? 'rgba(' + channelsOf(x) + ', ' + alpha + ')' : x;
+        });
+        if (chosen) {
+            out.push(made);
+        }
+    });
+    return out.join('\n') + '\n';
+}
+
 /** The inputs' and buttons' own colour (none chosen): YouTube's grey on its page, dark or light */
 export function inputGrey(light: boolean): string {
     return light ? '#f2f2f2' : '#303030';
@@ -542,10 +650,12 @@ function shifted(color: string, by: number): string {
  * or body had it restyle the whole page at every change (1153 elements, ~50 ms on the TV, 2026-11-16). The page's
  * own colour and the font: pageLook */
 var partStyles: HTMLStyleElement[] = [];
-var rulesOf = ['', '', '', '', '', '', ''];
-/** The parts' style elements in the page's order: the inputs' (5) and the buttons' (6) before the highlight's (3),
- * which draws their focus */
-var STYLE_ORDER = [0, 1, 2, 5, 6, 3, 4];
+var rulesOf = ['', '', '', '', '', '', '', '', '', '', ''];
+/** The parts' style elements in the page's order: the inputs' (5) and the buttons' (6) before the highlight's (3), which
+ * draws their focus; the player's after them all, the bars' (7), the panels' (8: what of theirs the highlight draws, a
+ * side panel's focused line, left to it where one is chosen: panelRules) and the pointer's hover on them (10: panelHover)
+ * and the loading sign's (9) */
+var STYLE_ORDER = [0, 1, 2, 5, 6, 3, 4, 7, 8, 10, 9];
 
 /** The rules of part i (partStyles' order), made by make ('' none) when its key ('' none) is not the one they were
  * made from */
@@ -579,17 +689,37 @@ export function setRailWidth(pill: number, left: number): void {
             '.by-rail--open .by-rail-shade { -webkit-transform: scaleX(' + (shade / metrics().rail.width).toFixed(4) + '); }\n' +
             // (an even push: on whole pixels of a screen 1.5 times the layout, as this TV's 1080p is; at a half pixel
             // the screen behind cost ~11 ms of frames more per open or close, measured on the TV)
-            '.by-app--rail .bd-stage { -webkit-transform: translate3d(' + 2 * Math.round((shade - SHADE_OVER) / 2) + 'px, 0, 0); }\n';
+            '.by-app--rail .bd-stage { -webkit-transform: translate3d(' + 2 * Math.round((shade - SHADE_OVER) / 2) + 'px, 0, 0); }\n' +
+            // (edit mode, views/rail.ts edit: wider, its rows holding an eye at the right, the same room on both sides)
+            '.by-rail.by-rail--edit .by-rail-item { width: ' + (metrics().rail.editWidth - 2 * left) + 'px; }\n' +
+            '.by-rail--edit .by-rail-shade { -webkit-transform: scaleX(' + (metrics().rail.editWidth / metrics().rail.width).toFixed(4) + '); }\n';
     });
 }
 
-/** What the open sidebar was last fitted for (the font, a sidebar of its own colour), and what fits it again */
+/** What the open sidebar was last fitted for (the font, a sidebar of its own colour), what fits it again, and whether
+ * a look was tried at the last draw */
 var railFor = '';
-var railRefit: (() => void) | null = null;
+var railRefit: ((changed: boolean) => void) | null = null;
+var railTried = false;
 
-/** fn fits the open sidebar to its names again whenever the look changes what sizes them (views/rail.ts) */
-export function onRailLook(fn: () => void): void {
+/** fn fits the open sidebar to its names again whenever the look changes what sizes them (changed), and at the end of
+ * a look tried (not changed: a fit owed meanwhile, views/rail.ts) */
+export function onRailLook(fn: (changed: boolean) => void): void {
     railRefit = fn;
+}
+
+/** A look's part, a whole look or text sizes are tried on the app now (Settings' choices and pages over it: the sidebar
+ * is closed) */
+export function lookTried(): boolean {
+    if (sizesTried) {
+        return true;
+    }
+    for (var part in trying) {
+        if (trying.hasOwnProperty(part)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /** The page's own colour: an empty element under the app the size of the screen (made once a colour is chosen), in
@@ -622,8 +752,11 @@ function pageLook(color: string, font: string): void {
 var facesEl: HTMLStyleElement | null = null;
 var facesOf = '';
 function useFaces(id: string): void {
+    if (id === facesOf) {
+        return;
+    }
     var css = fontFaces(id);
-    if (id === facesOf || !css && !facesEl) {
+    if (!css && !facesEl) {
         return;
     }
     facesOf = id;
@@ -673,6 +806,7 @@ export function applyLook(): void {
         sideText = '';
     }
     showLight(light);
+    showTextSize();
     useFaces(font);
     pageLook(own ? '' : picture, font ? FONTS[font] : '');
     setIconStyle(shown('icons'));
@@ -693,17 +827,37 @@ export function applyLook(): void {
     var buttons = shown('buttons') || shown('inputs') || (buttonsStyle ? inputGrey(light) : '');
     setRules(5, inputs ? inputs + ' ' + inputsStyle + ' ' + text : '', function () { return inputRules(INPUT_RULES, inputs, inputsStyle, text); });
     setRules(6, buttons ? buttons + ' ' + buttonsStyle + ' ' + text : '', function () { return inputRules(BUTTON_RULES, buttons, buttonsStyle, text); });
-    // (the open sidebar fitted to its names again where what sizes them changed: the font, or a sidebar of its own
-    // colour, whose entries stand further left)
-    var railKey = font + ' ' + sideOwn;
-    if (railKey !== railFor) {
+    // (the player's: the bars, the panels over a video, the loading sign's colours; each the highlight's in force, the
+    // panels the background's colour, where that is chosen)
+    var lit = focus || ownText(light);
+    var progress = shown('progressBar');
+    var bar = progress === SAME.progressBar ? lit : progress;
+    setRules(7, bar, function () { return progressRules(bar); });
+    var panels = shown('playerPanels');
+    var panel = panels === SAME.playerPanels ? color : panels;
+    setRules(8, panel ? panel + (focus ? ' lit' : '') : '', function () { return panelRules(panel, !!focus); });
+    setRules(10, panel && isLight(panel) ? 'light' : '', panelHover);
+    var signs = SIGN_PARTS.map(function (part) {
+        var one = shown(part);
+        return one === SAME[part] ? lit : one;
+    });
+    setRules(9, signs.join('') ? signs.join(' ') : '', function () { return signRules(signs); });
+    // (the open sidebar fitted to its names again where what sizes them changed: the font, their text size, or a sidebar
+    // of its own colour, whose entries stand further left. Not for a look or text sizes tried: the sidebar is closed
+    // meanwhile, and a fit rewrites a stylesheet, which restyles the whole page on the TV, for each font tried and as its
+    // letters come; at the try's end only where what is set changed or a fit was owed)
+    var railKey = font + ' ' + sideOwn + ' ' + sizeIn(shownSizes(), 'sidebar');
+    var tried = lookTried();
+    if (!tried && (railKey !== railFor || railTried)) {
+        var changed = railKey !== railFor;
         railFor = railKey;
         if (railRefit) {
-            railRefit();
+            railRefit(changed);
         }
     }
-    // (the logo: drawn anew in its places alone, and only where the one set (the look's on top, else the account's own)
-    // is not the one drawn (ui/logo.ts showLogo); at the start, before anything draws it, nothing. Who's watching
+    railTried = tried;
+    // (the logo: drawn anew in its places alone, and only where the one shown (a look's tried, else the look's on top,
+    // else the account's own) is not the one drawn (ui/logo.ts showLogo); at the start, before anything draws it, nothing. Who's watching
     // (plain) leaves it as the account has it)
     showLogo();
 }
@@ -732,7 +886,7 @@ function fillNewParts(): void {
 }
 
 /** The look's parts shown now: a look's in place of the chosen ones while one is (plainLook); one being tried on the app
- * (tryLook) in place of the one set */
+ * (tryLook, a whole look: tryWholeLook) in place of the one set */
 function shown(part: LookPart): string {
     return plain ? valueOf(part, plain.parts[part] || '') : trying.hasOwnProperty(part) ? valueOf(part, trying[part]) : lookPart(part);
 }
@@ -758,12 +912,13 @@ export function setLookPart(part: LookPart, value: string): void {
 }
 
 /** The parts tried on the app now (Settings › Theme › Colours, Icons: the focus on a colour, a style or a set of icons:
- * views/colour-page.ts, views/icon-page.ts), not set */
+ * views/colour-page.ts, views/icon-page.ts; Theme and Font: the focus on a look or a font), not set */
 var trying: { [part: string]: string } = {};
 
 /** Shows a part on the app as value without setting it ('' its own), or the one set again (null); drawn in the frame
- * after the next, several meanwhile once (applyLookSoon). Of the parts Colours and Icons pick on the app: the logo and
- * the loading sign are never tried (the sign's own preview: views/sign-preview.ts) */
+ * after the next, several meanwhile once (applyLookSoon). Of the parts Colours, Icons and Font pick on the app: the
+ * logo is drawn by ui/logo.ts (a look's tried: tryWholeLook), the loading sign by its own preview
+ * (views/sign-preview.ts) */
 export function tryLook(part: LookPart, value: string | null): void {
     var was = trying.hasOwnProperty(part) ? trying[part] : null;
     if (value === was) {
@@ -773,15 +928,68 @@ export function tryLook(part: LookPart, value: string | null): void {
         delete trying[part];
     } else {
         trying[part] = value;
-        if (onTry) {
-            onTry();
-        }
+        triedNow = true;
     }
     applyLookSoon();
 }
 
-/** Told when a look's part is tried (main.ts: the screens out of view taken out of the display meanwhile) */
+/** A whole look is tried (tryWholeLook) */
+var wholeTried = false;
+
+/** Shows the look of these parts on the app without setting it, every part as setLook would set it (one it names
+ * not: its own), its logo with it (one it names, else the account's own), or the one set again (null; nothing where
+ * none is tried: entering and leaving the looks restyle nothing); drawn in the frame after the next (Settings › Theme
+ * › Theme: the focus on a look) */
+export function tryWholeLook(parts: { [part: string]: string } | null): void {
+    if (!parts && !wholeTried) {
+        return;
+    }
+    wholeTried = !!parts;
+    LOOK_PARTS.forEach(function (part) {
+        if (parts) {
+            trying[part] = parts[part] || '';
+        } else {
+            delete trying[part];
+        }
+    });
+    if (parts) {
+        triedNow = true;
+    }
+    tryLogo(parts ? valueOf('logo', parts.logo) || prefs().logo : null);
+    applyLookSoon();
+}
+
+/** The text sizes shown on the app in place of the ones set while Settings › Theme › Text size changes them
+ * (views/text-size-page.ts), not set; null: none */
+var sizesTried: TextSizes | null = null;
+
+/** Shows the text sizes sizes on the app without setting them, or the ones set again (null); drawn in the frame after
+ * the next (each kind whose size changed written anew, the screen behind Settings spaced for them: showTextSize) */
+export function tryTextSizes(sizes: TextSizes | null): void {
+    if (sizes === null ? !sizesTried : sizesTried && sameSizes(sizes, sizesTried)) {
+        return;
+    }
+    sizesTried = sizes === null ? null : keptSizes(sizes);
+    if (sizes !== null) {
+        triedNow = true;
+    }
+    applyLookSoon();
+}
+
+/** Whether text sizes are tried now (tryTextSizes) */
+export function sizesTrying(): boolean {
+    return !!sizesTried;
+}
+
+/** The text sizes shown: those tried, else those set */
+export function shownSizes(): TextSizes {
+    return sizesTried || prefs().textSizes;
+}
+
+/** Told when a look's part is tried (main.ts: the screens out of view taken out of the display meanwhile), in the
+ * frame that draws it (applyLookSoon), not in the key's: that frame restyles the app anyway; triedNow: to be told */
 var onTry: (() => void) | null = null;
+var triedNow = false;
 export function onTrying(fn: () => void): void {
     onTry = fn;
 }
@@ -866,7 +1074,7 @@ export var MINE = 'mine';
 
 /** Every part a look sets (the ones it does not name to their own: '', but ON_TOP's) */
 export var LOOK_PARTS: LookPart[] = ['background', 'sidebar', 'highlight', 'text', 'inputs', 'buttons', 'inputsStyle', 'buttonsStyle', 'font', 'icons', 'railIcons', 'backgroundStyle',
-    'sidebarStyle', 'sidebarText', 'logo', 'startSign'];
+    'sidebarStyle', 'sidebarText', 'progressBar', 'signColour', 'signColour2', 'signColour3', 'playerPanels', 'logo', 'startSign'];
 
 /** A saved look's id: this and when it was saved */
 export var SAVED = 'saved:';
@@ -900,7 +1108,8 @@ export function lookParts(): { [part: string]: string } {
 /** Sets every part of the look to parts' (Settings › Theme › Theme: a look chosen, Custom, a theme saved): those not
  * named to their own; ON_TOP's on top of the account's own (not named: none, the account's own shows), a logo no longer
  * there the first (ui/logo.ts logoValue). One store write, with also's settings in it (a theme saved: the list of saved
- * ones); drawn by applyLook (applyLookSoon), the logo in its places alone */
+ * ones); drawn by applyLook (applyLookSoon), the logo in its places alone. A whole look tried ends (tryWholeLook: drawn
+ * after, it would be over the one set) */
 export function setLook(parts: { [part: string]: string }, also?: Partial<Prefs>): void {
     var all: { [name: string]: unknown } = {};
     for (var name in also || {}) {
@@ -911,6 +1120,7 @@ export function setLook(parts: { [part: string]: string }, also?: Partial<Prefs>
         all[top || part] = top ? valueOf(part, parts[part]) : parts[part] || '';
     });
     setPrefs(all as Partial<Prefs>);
+    tryWholeLook(null);
 }
 
 /** The look whose every part is as set now ('' none: the look is one's own). ON_TOP's by the look's on top: a look
@@ -972,6 +1182,12 @@ export function applyLookSoon(): void {
     lookFrame = requestAnimationFrame(function () {
         lookFrame = requestAnimationFrame(function () {
             lookFrame = 0;
+            if (triedNow) {
+                triedNow = false;
+                if (onTry) {
+                    onTry();
+                }
+            }
             applyLook();
         });
     });
@@ -986,7 +1202,12 @@ var lookFrame = 0;
  * only */
 var lightSheet: HTMLLinkElement | null = null;
 
-/** The light colours on (the sheet added if not yet there) or off */
+/** The light colours on (the sheet added if not yet there) or off. A sheet that has loaded is switched by its own
+ * disabled, on every engine. The link's is for one that has not: off, it keeps a web view of today from making the
+ * sheet at all (the TV's Chrome 38 makes and applies it all the same: lightOn below). It is never switched on by the
+ * link: a web view of today makes no sheet for a link switched on after its file came, and drops one it had (the
+ * light look chosen in Settings stayed dark until the app's next start, Android, 2026-11-25), so a link without a
+ * sheet that was switched off is added anew */
 function showLight(on: boolean): void {
     if (!lightSheet) {
         if (!on) {
@@ -995,13 +1216,21 @@ function showLight(on: boolean): void {
         lightSheet = addLight();
     }
     lightOn = on;
-    // (its sheet's own switch where it has loaded: the link's may say off while the sheet is on, below)
-    var sheet = lightSheet.sheet;
-    if (sheet && sheet.disabled === on) {
-        sheet.disabled = !on;
-    }
-    if (lightSheet.disabled === on) {
-        lightSheet.disabled = !on;
+    var link = lightSheet;
+    var sheet = link.sheet;
+    if (sheet) {
+        if (sheet.disabled === on) {
+            sheet.disabled = !on;
+        }
+    } else if (!link.disabled) {
+        if (!on) {
+            link.disabled = true;
+        }
+    } else if (on) {
+        lightSheet = addLight();
+        if (link.parentNode) {
+            link.parentNode.removeChild(link);
+        }
     }
 }
 
@@ -1029,22 +1258,158 @@ function addLight(): HTMLLinkElement {
     return link;
 }
 
-/** Settings shows the looks (its Theme settings): the light sheet loaded now, off while the look is dark, so that a
- * change to a light one only switches it on */
+/** Settings shows the looks (its Theme settings): the light sheet's link added now, off while the look is dark, so
+ * that its file is loaded and parsed by the time a light look is chosen and the change only switches the sheet on
+ * (the colours change 3 frames after OK, the first time as later: Android 16's web view 143, 2026-11-25; Android
+ * 5.1's web view 39 makes the sheet the same way). An engine that makes no sheet for a link that is off loads the
+ * file at the first light look instead (showLight adds the link anew) */
 export function prepareSheets(): void {
     if (current && !lightSheet) {
         lightOn = isLight(lookPart('background') || YOUTUBE_DARK);
         lightSheet = addLight();
-        lightSheet.disabled = !lightOn;
+        if (!lightOn) {
+            lightSheet.disabled = true;
+        }
     }
 }
 
-/** The current theme's sizes */
+/** The current theme's sizes, with the room for the text by tiles at the text sizes shown (spacedMetrics) */
 export function metrics(): Metrics {
     if (!current) {
         throw new Error('no theme applied');
     }
-    return current.metrics;
+    return space.under || space.beside || space.head ? spacedMetrics(current) : current.metrics;
+}
+
+/** The room the text by tiles takes beyond the stylesheet's own at the text sizes shown (ui/text-sizes.ts tileSpace),
+ * and the titles', the lines' and the rows' names' sizes it was worked out for; the room shown and the one set when the screens were laid
+ * out last (null before the first look is applied); what lays the screens out anew when it changes (main.ts; behind:
+ * only the screen behind Settings, as text sizes are tried) */
+interface Room {
+    under: number;
+    beside: number;
+    head: number;
+}
+var space: Room = { under: 0, beside: 0, head: 0 };
+var spaceTitles = 0;
+var spaceDetails = 0;
+var spaceRows = 0;
+var laidShown: Room | null = null;
+var laidSet: Room | null = null;
+var textAnew: ((behind: boolean) => void) | null = null;
+
+export function onTextSize(fn: (behind: boolean) => void): void {
+    textAnew = fn;
+}
+
+/** The room the text by tiles takes at the text sizes shown, as a key (the same: the screens' rows stand as they are) */
+export function spaceKey(): string {
+    return roomKey(space);
+}
+
+/** The room the text by tiles takes at the text sizes set, as a key (an account's: main.ts ownSettings) */
+export function setSpaceKey(): string {
+    return roomKey(tileSpace(prefs().textSizes, current!.metrics.list.tile.h));
+}
+
+function roomKey(room: Room): string {
+    return room.under + ' ' + room.beside + ' ' + room.head;
+}
+
+/** Each kind's rules as written (ui/text-sizes.ts kindRules), in a style element of its own made the first time it is
+ * not at its default, by kind, and the px they were written for; a Movies row's poster's (posterRules) */
+var kindStyles: { [kind: string]: HTMLStyleElement } = {};
+var kindPx: { [kind: string]: number } = {};
+var posterStyle: HTMLStyleElement | null = null;
+var posterCss = '';
+
+/** kind's rules for px, written only where they changed: a change to one kind restyles its text alone (each rule names
+ * a class); none made for a kind at its default */
+function writeKind(kind: string, px: number): void {
+    if (kindPx[kind] === px) {
+        return;
+    }
+    kindPx[kind] = px;
+    var css = kindRules(kind, px);
+    if (!kindStyles[kind]) {
+        if (!css) {
+            return;
+        }
+        kindStyles[kind] = document.head.appendChild(h('style')) as HTMLStyleElement;
+    }
+    kindStyles[kind].textContent = css;
+}
+
+/** The text sizes given to the page: each kind's rules where its size changed (writeKind), the poster's, the room by
+ * tiles with them (metrics). A change of that room after the first lays the screens out anew: the screen behind
+ * Settings alone where only a try changed it (the others stay laid out in the sizes set), all where the sizes set
+ * changed */
+function showTextSize(): void {
+    var shown = shownSizes();
+    for (var i = 0; i < TEXT_KINDS.length; i++) {
+        writeKind(TEXT_KINDS[i], sizeIn(shown, TEXT_KINDS[i]));
+    }
+    var titles = sizeIn(shown, 'titles');
+    var details = sizeIn(shown, 'details');
+    var rows = sizeIn(shown, 'rows');
+    if (titles !== spaceTitles || details !== spaceDetails || rows !== spaceRows) {
+        spaceTitles = titles;
+        spaceDetails = details;
+        spaceRows = rows;
+        var poster = posterRules(shown);
+        if (poster !== posterCss) {
+            posterCss = poster;
+            posterStyle = posterStyle || document.head.appendChild(h('style')) as HTMLStyleElement;
+            posterStyle.textContent = poster;
+        }
+        space = tileSpace(shown, current!.metrics.list.tile.h);
+        spaced = null;
+    }
+    var set = sizesTried ? tileSpace(prefs().textSizes, current!.metrics.list.tile.h) : space;
+    if (sameRoom(laidShown, space) && sameRoom(laidSet, set)) {
+        return;
+    }
+    var first = !laidShown;
+    var behind = sameRoom(laidSet, set);
+    laidShown = space;
+    laidSet = set;
+    if (!first && textAnew) {
+        textAnew(behind);
+    }
+}
+
+/** Whether room a (null: none yet) is b */
+function sameRoom(a: Room | null, b: Room): boolean {
+    return !!a && a.under === b.under && a.beside === b.beside && a.head === b.head;
+}
+
+/** A theme's sizes with the text by tiles taking more room (space), made once for each: the rows', the grids' and
+ * their pitches by space.under, a playlist page's by space.beside, a row's head (its name) by space.head */
+var spaced: { theme: Theme; metrics: Metrics } | null = null;
+
+function spacedMetrics(theme: Theme): Metrics {
+    // (made again where the room changed: showTextSize lets it go)
+    if (spaced && spaced.theme === theme) {
+        return spaced.metrics;
+    }
+    var up = space.under;
+    var out = copy(theme.metrics);
+    out.rows.under += up;
+    out.watch.rows.under += up;
+    out.gridPitch += up;
+    out.subs.pitch += up;
+    out.library.pitch += up;
+    out.list.pitch += space.beside;
+    if (out.rows.head) {
+        out.rows.head += space.head;
+    }
+    spaced = { theme: theme, metrics: out };
+    return out;
+}
+
+/** A deep copy of plain data */
+function copy<T>(value: T): T {
+    return JSON.parse(JSON.stringify(value));
 }
 
 /** Where Subscriptions shows its channels: the viewer's choice (Settings › Screens; prefs.subsLayout), else the current

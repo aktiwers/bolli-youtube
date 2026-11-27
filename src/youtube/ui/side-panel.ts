@@ -2,7 +2,7 @@
 // lists (settings, description, comments, About): a title over a column of lines navigated with
 // Up/Down (the list scrolls to keep the focused line in view; a list opens on its chosen line).
 // A line is a choice (OK picks it; the chosen one has a checkmark; the panel closes unless the
-// line stays, then the list is redrawn to show the change), text to read, or a heading the focus passes over. A list pushed over
+// line stays, then the list is redrawn to show the change, or goes back to the list under it: PanelLine.back), text to read, or a heading the focus passes over. A list pushed over
 // another returns to it on Back (or Left); otherwise Back closes the panel. A click (the Magic Remote's pointer) is OK
 // on the line under it; a click beside the panel is Back (core/pointer.ts: the panel is the open layer). Styled by
 // themes/<id>.css (by-panel, by-line).
@@ -30,6 +30,9 @@ export interface PanelLine {
     action?: () => void;
     /** The panel stays open after the action (it opened another, or shows the change) */
     stay?: boolean;
+    /** A pick in a list pushed over another: after the action the panel goes back to that one, drawn anew (the pick
+     * shows there, more can be set); in a list opened on its own the panel closes as ever */
+    back?: boolean;
     /** Called as the line gets the focus (a choice tried at once where it is seen: the player's subtitle size) */
     focus?: () => void;
 }
@@ -195,23 +198,32 @@ export class SidePanel {
                 var depth = this.stack.length;
                 if (line && line.action) {
                     line.action();
-                    if (!line.stay) {
-                        this.close();
-                    } else if (this.stack.length === depth) {
+                    if (line.stay) {
                         // It changed something here (no other list opened): redraw
-                        this.refresh();
+                        if (this.stack.length === depth) {
+                            this.refresh();
+                        }
+                    } else if (line.back && this.stack.length === depth) {
+                        this.up();
+                    } else {
+                        this.close();
                     }
                 }
                 break;
             case KEY.LEFT:
             case KEY.BACK:
-                if (this.stack.length > 1) {
-                    leaveList(this.stack.pop() as List);
-                    this.draw();
-                } else {
-                    this.close();
-                }
+                this.up();
                 break;
+        }
+    }
+
+    /** Back to the list under the one shown, drawn anew; with none under it the panel closes */
+    private up(): void {
+        if (this.stack.length > 1) {
+            leaveList(this.stack.pop() as List);
+            this.draw();
+        } else {
+            this.close();
         }
     }
 

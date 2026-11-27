@@ -3,12 +3,13 @@
 // app's rows off the main thread. The result goes back as a JSON string:
 // on the TV, reading a structured-cloned object of a channel's rows takes
 // ~160 ms, parsing the JSON is quicker.
-// The makers come from api/feed.ts, api/channel.ts and api/watch.ts, so
+// The makers come from api/feed.ts, api/channel.ts, api/watch.ts and api/shorts.ts, so
 // nothing they use may touch the page (window, document, localStorage).
 
 import { liveNowOf, madeChannel } from './api/channel.js';
 import { moreOf, rowsOf, setWindowWidth, subscriptionsOf } from './api/feed.js';
 import { dataJson } from './api/off-thread.js';
+import { reelOf, sequenceOf } from './api/shorts.js';
 import { watchInfoOf } from './api/watch.js';
 
 var MAKERS: { [kind: string]: (reply: any, arg: string) => unknown } = {
@@ -17,7 +18,9 @@ var MAKERS: { [kind: string]: (reply: any, arg: string) => unknown } = {
     subscriptions: subscriptionsOf,
     channel: madeChannel,
     liveNow: liveNowOf,
-    watch: watchInfoOf
+    watch: watchInfoOf,
+    reel: reelOf,
+    reelSequence: sequenceOf
 };
 
 var scope = self as any;

@@ -11,6 +11,7 @@
 // hides it at once.
 
 import { h, toggleClass } from '../core/dom.js';
+import { tr } from '../core/i18n.js';
 import { holdRest, REPEAT_GAP_MS } from '../ui/colours.js';
 import { FillLoader, GLIDE_EASE } from '../ui/fill-loader.js';
 import { logo, logoFile, logoRound, LOGOS } from '../ui/logo.js';
@@ -18,6 +19,24 @@ import { isSpinner, Spinner } from '../ui/spinner.js';
 
 /** How long a sign shows */
 export var SHOW_MS = 3000;
+
+/** Each sign's name and note by its id (ui/signs.ts LOADING_SIGNS: Settings › Theme › Loading spinner's choices; the
+ * Colours page's model of the one in force), in the app's language now; the spinners by the names of the themes they
+ * are of */
+export function signSays(): { [id: string]: string[] } {
+    return {
+        off: [tr('Off'), tr('the screen stays dark until the video plays')],
+        channel: [tr('Channel picture'), tr('the channel\'s picture fills up')],
+        logo: [tr('Your logo'), tr('the logo you chose fills up')],
+        youtube: ['YouTube', tr('a white arc turning, as YouTube\'s own')],
+        midnight: ['Midnight', tr('soft rings breathing out of a glowing dot')],
+        arcade: ['Arcade', tr('pixel blocks chasing round a square')],
+        vhs: ['VHS', tr('PLAY with its triangle blinking, a tracking bar rolling past')],
+        mission: ['Mission Control', tr('a moon orbiting a planet')],
+        paper: ['Paper', tr('three ink dots rising and settling in turn')],
+        cinema: ['Cinema', tr('marquee bulbs chasing round a ring')]
+    };
+}
 /** The channel's picture fills up over the time shown but this, eased as at a start: full a moment before it goes */
 var FILL_LEFT_MS = 400;
 

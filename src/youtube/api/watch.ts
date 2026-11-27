@@ -26,6 +26,9 @@ export interface WatchInfo {
     published: string;
     likes: string;
     related: Video[];
+    /** The Shorts among the related videos (a row of their own on the watch page where they show: api/filters.ts; none:
+     * absent) */
+    shorts?: Video[];
     /** Asked for as one of a phone's queue (watchFrom): the queue's name as YouTube words it, how many videos it has,
      * and its videos around this one (some twenty, with their titles) */
     queue?: { title: string; total: number; videos: Video[] };
@@ -219,8 +222,9 @@ function nextText(id: string): Promise<string> {
     return nextTexts.get(keyOf(id), function () { return innertubeText('next', list ? { videoId: id, playlistId: list } : { videoId: id }); });
 }
 
-export function comments(token: string): Promise<Comments> {
-    return innertube('next', { continuation: token }).then(commentsOf);
+/** A part of the comments (via: the endpoint their token is for: a video's 'next', a Short's 'browse') */
+export function comments(token: string, via: string): Promise<Comments> {
+    return innertube(via, { continuation: token }).then(commentsOf);
 }
 
 /** Recent saves made here (key "video playlist": saved or not, and when), applied over YouTube's list for a while,
@@ -350,10 +354,15 @@ export function watchInfoOf(reply: any): WatchInfo {
     var list = get(results, 'playlist', 'playlist');
     var rows: any[] = get(results, 'pivot', 'sectionListRenderer', 'contents') || [];
     var inList = get(rows[0], 'shelfRenderer', 'content', 'horizontalListRenderer', 'items', 0, 'tileRenderer', 'onSelectCommand', 'watchEndpoint', 'playlistId');
+    var shorts: Video[] = [];
     var playable = function (part: any[]): Video[] {
         var videos: Video[] = [];
         rowsOf({ sectionListRenderer: { contents: part } }).shelves.forEach(function (s) {
-            videos = videos.concat(s.videos.filter(function (v) { return !v.page; }));
+            if (s.shorts) {
+                shorts = shorts.concat(s.videos);
+            } else {
+                videos = videos.concat(s.videos.filter(function (v) { return !v.page; }));
+            }
         });
         return videos;
     };
@@ -386,6 +395,9 @@ export function watchInfoOf(reply: any): WatchInfo {
     // (only where there is one: a video's details are compared and stored whole)
     if (queue) {
         info.queue = queue;
+    }
+    if (shorts.length) {
+        info.shorts = shorts;
     }
     return info;
 }

@@ -37,6 +37,19 @@ export interface AndroidShell {
      * the app is off the screen. False: the shell has none of that id.
      * Missing in shells built before it */
     setHomeLogo?(id: string): boolean;
+    /** The display's mode as JSON: hz (now), width and height (the mode's), rates (the modes' at that size), match
+     * (Android's match-content-frame-rate choice: never, seamless, always), asked (the rate the app's window asks
+     * for, 0 none); a field the device does not tell is left out. Missing in shells built before it */
+    display?(): string;
+    /** Android's own keyboard for the text field that has the focus (shown), or put away. Missing in shells built
+     * before it, which bring none */
+    keyboard?(shown: boolean): void;
+    /** A key the page keeps, as now stored (null: removed), into the page's second copy, which a power cut cannot
+     * break (core/store.ts); kept: that copy as JSON, each key with its value. Each asks the key the shell gave the
+     * page in its address (#), which no frame of another site can read: without it nothing is kept and the copy is
+     * empty. Missing in shells built before it */
+    keep?(key: string, value: string | null, token: string): void;
+    kept?(token: string): string;
 }
 
 /** webOS TV 1.x-2.x's old engine: promise.js stood in for its Promise and marked it (never where the engine names its
@@ -48,6 +61,11 @@ export function oldEngine(): boolean {
 /** The Android app around the page, or null (webOS, a browser) */
 export function android(): AndroidShell | null {
     return (window as unknown as { BolliAndroid?: AndroidShell }).BolliAndroid || null;
+}
+
+/** Phones find the app by casting on the same network: LG's DIAL server answers for it; the Android app has none */
+export function foundOnNetwork(): boolean {
+    return !android();
 }
 
 /** The device can turn speech into text (Android with speech recognition) */

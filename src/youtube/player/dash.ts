@@ -19,7 +19,7 @@
 import { fakedRequest } from '../core/fake-net.js';
 import { Format } from '../api/streams.js';
 import { framesFrom, parseCues, parseSidx, Segment, trackScale } from './containers.js';
-import { BEHIND_MB, BEHIND_S, bufferedEnd, decodeLoad, Engine, hopHole, jumpTarget, KEYFRAME_IN, LIFT_END_S, LIFT_MS, LIFT_S, MB, QUICK_MIN_S, QUICK_SPEED, QUICK_WAIT_MS, RETRIES, roomAhead, seekTold, Skip, skipLanding, SPEED_BYTES, STILL_AHEAD, TICK_MS, TIMEOUT_MS, WINDOW_S, windowFrom } from './engine.js';
+import { BEHIND_MB, BEHIND_S, bufferedEnd, decodeLoad, Engine, hopHole, jumpTarget, KEYFRAME_IN, SWAP_S, SWITCH_MIN_S, LIFT_END_S, LIFT_MS, LIFT_S, MB, QUICK_MIN_S, QUICK_SPEED, QUICK_WAIT_MS, RETRIES, roomAhead, seekTold, Skip, skipLanding, SPEED_BYTES, STILL_AHEAD, TICK_MS, TIMEOUT_MS, WINDOW_S, windowFrom } from './engine.js';
 import { onLost, onNetwork } from './networks.js';
 import { keepPipeline, openPipeline, Pipeline, setLength, setLengthSoon, spoilingFail } from './pipeline.js';
 import { note, ranges } from './play-log.js';
@@ -39,13 +39,11 @@ var FIRST_MIN = 384 * 1024;
 var FIRST_SHARE = 0.42;
 var FIRST_S = 0.2;
 /** A format switch (switchVideo, switchAudio) takes effect about this far ahead of the playhead (s); video never
- * nearer than SWITCH_MIN_S (the TV has taken in the video 4.7-4.9 s ahead of the picture it shows: replacing what it
- * holds makes the picture stand for seconds at the switch), nor than the distance the caller asks (the new format's
+ * nearer than SWITCH_MIN_S (engine.ts: what the TV has taken in), nor than the distance the caller asks (the new format's
  * first segment has that long to come: the old format's data from the switch point is removed, and a picture that
  * runs into the gap stands until the freeze watcher nudges it), retried every SWITCH_RETRY_MS until the buffer
  * reaches that far */
 var SWITCH_S = 3;
-export var SWITCH_MIN_S = 5.5;
 var SWITCH_RETRY_MS = 1000;
 /** A video switch to come soon (switchSoon) fetches the new format's first part before the old one's data goes, so
  * its point is only SWITCH_MIN_S and that fetch ahead: the part's bytes at the line's speed, SOON_MARGIN times, and a
@@ -410,6 +408,7 @@ function headParts(f: Format, data: ArrayBuffer, keep: boolean): { segments: Seg
 }
 
 export class DashEngine implements Engine {
+    near = false;
     private tracks: Track[] = [];
     private timer = 0;
     private stopped = false;
@@ -774,8 +773,21 @@ export class DashEngine implements Engine {
         if (preview) {
             tracks.forEach(function (t) { t.traced = TRACE_APPENDS; });
         }
+        // Both heads kept (a start mid-video in formats read lately: the player's switch of range, a quality picked
+        // in another codec, a return to a video): read here, and their first media asked before the pipeline opens.
+        // Opening a fresh one in place of another kind's holds this thread while the TV lets the old one go (0.2-1.0 s
+        // on the 2017 TV, 2026-11-25), and what the heads' answer starts (below) runs only after that: asked here,
+        // the media comes meanwhile (it went in ~150 ms after the pipeline, now with it)
+        // (both looked up before either is read: one alone is read where its answer is taken, below)
+        var read = !preview && tracks.every(function (track) { return !!keptHead(track.format, headEnd(track.format, startAt)); }) &&
+            tracks.every(function (track) {
+                var parts = headParts(track.format, keptHead(track.format, headEnd(track.format, startAt)) as ArrayBuffer, true);
+                track.segments = parts.segments;
+                track.init = parts.init;
+                return parts.segments.length > 0;
+            });
         // Fetch the heads while Media Source opens
-        var heads = Promise.all(tracks.map(function (track) {
+        var heads: Promise<unknown> = read ? Promise.resolve() : Promise.all(tracks.map(function (track) {
             var f = track.format;
             var end = headEnd(f, startAt);
             var tried = false;
@@ -806,12 +818,16 @@ export class DashEngine implements Engine {
                 }
             });
         }));
-        // The first media of a start mid-video asked while the pipeline opens
-        heads.then(function () {
-            if (!self.stopped && self.tracks === tracks) {
-                self.early(startAt);
-            }
-        }, function () { return undefined; });
+        // The first media of a start mid-video asked while the pipeline opens (its heads read above: before it does)
+        if (read) {
+            this.early(startAt);
+        } else {
+            heads.then(function () {
+                if (!self.stopped && self.tracks === tracks) {
+                    self.early(startAt);
+                }
+            }, function () { return undefined; });
+        }
         // Reuse the previous video's pipeline if it takes these formats, else open a fresh one (a start that seeks
         // does so itself: no seek by the pipeline before it, open)
         this.startDue = startAt > 0 ? startAt : -1;
@@ -843,8 +859,7 @@ export class DashEngine implements Engine {
         if (startAt < 1 || this.pending >= 0 || this.pipe) {
             return;
         }
-        var keys = tracks[0].segments;
-        var at = keys[Math.min(segmentAt(keys, startAt), keys.length - 1)].start + KEYFRAME_IN;
+        var at = this.startAt(startAt);
         for (var i = 0; i < tracks.length; i++) {
             var track = tracks[i];
             var k = segmentAt(track.segments, at);
@@ -854,6 +869,18 @@ export class DashEngine implements Engine {
             var from = track.segments[k].from;
             this.askAhead(track, from, Math.min(track.segments[k].to, from + pieceOf(track.chunk) - 1));
         }
+    }
+
+    /** Where a start at t (s, not 0) begins: KEYFRAME_IN into the video's segment t is in; near (a start in the middle
+     * of a video that was playing): the next one's where that lies nearer where the picture will be by then (SWAP_S
+     * on). A seek asked before the pipeline opened goes where it says: not near. */
+    private startAt(t: number): number {
+        var keys = this.tracks[0].segments;
+        var i = segmentAt(keys, t);
+        if (i >= keys.length - 1 || !this.near || this.pending >= 0) {
+            return keys[Math.min(i, keys.length - 1)].start + KEYFRAME_IN;
+        }
+        return keys[keys[i + 1].start - (t + SWAP_S) < t + SWAP_S - keys[i].start ? i + 1 : i].start + KEYFRAME_IN;
     }
 
     /** Switches the video format in place (switchTrack), e.g. when a preview taken over full screen moves to the
@@ -1137,10 +1164,9 @@ export class DashEngine implements Engine {
             if (this.pending >= 0) {
                 startAt = this.pending;
             }
-            // Not from 0: both tracks start at the keyframe at or before startAt
+            // Not from 0: both tracks start at the keyframe at or before startAt (near: the nearest, startAt)
             if (startAt > 0) {
-                var keys = tracks[0].segments;
-                startAt = keys[Math.min(segmentAt(keys, startAt), keys.length - 1)].start + KEYFRAME_IN;
+                startAt = this.startAt(startAt);
             }
             this.length = Math.max(tracks[0].segments[tracks[0].segments.length - 1].end, tracks[1].segments[tracks[1].segments.length - 1].end);
             this.window = windowEnd(tracks[0].segments, startAt, this.length);
@@ -1459,6 +1485,10 @@ export class DashEngine implements Engine {
     private pump(track: Track): void {
         var sb = track.sb;
         if (this.stopped || this.lineWait || !sb || sb.updating || track.xhr || track.retryTimer) {
+            return;
+        }
+        // (a source closed, as after a media error, has let its buffers go: reading one throws)
+        if (this.pipe && this.pipe.source.readyState === 'closed') {
             return;
         }
         // The start's window lifted (widen): the segment it cut loaded again, its frames before the cut dropped (as a

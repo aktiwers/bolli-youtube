@@ -21,7 +21,7 @@ Bolli YouTube is not made by or connected to YouTube or Google. You sign in with
 ## What it does
 
 - Home, Subscriptions, Library, Gaming, Podcasts, Music, Movies and Sports, like YouTube's TV app
-- Its own player: up to 4K (8K and AV1 on TVs that play them), live streams, chapters, subtitles (also auto-translated), dubbed audio tracks and stable volume
+- Its own player: up to 4K (8K and AV1 on TVs that play them), HDR on TVs that show it, live streams, chapters, subtitles (also auto-translated), dubbed audio tracks and stable volume
 - Skips sponsors, intros and the like with [SponsorBlock](https://sponsor.ajay.app)
 - YouTube's "Most replayed" graph over the progress bar
 - Dislike counts are back, from [Return YouTube Dislike](https://returnyoutubedislike.com)
@@ -30,8 +30,15 @@ Bolli YouTube is not made by or connected to YouTube or Google. You sign in with
 - Previews when you rest on a video
 - Search with YouTube's suggestions and its keyboard in 28 languages, and voice search on Android TV (the microphone, or the remote's search key)
 - Cast from YouTube on your phone
-- More than one account, with "Who's watching?"
-- No Shorts
+- More than one account, with "Who's watching?", each with its own settings
+- Live chat and comments
+- Save to playlist, Watch later and History
+- Customize the look of everything (colours, fonts, text sizes, icons, logos and the sidebar), or start from one of the ready-made themes, a light one too
+- Put things on the remote's spare buttons, like a playlist or subtitles on/off
+- Filters: hide live streams, watched videos, mixes, whole channels or videos with certain words, everywhere or screen by screen
+- ~~No Shorts~~ Shorts are hidden by default. Turn them on in Settings › Filters, everywhere or screen by screen, with a Shorts screen like YouTube's
+- The app in 51 languages
+- And more
 
 ## Google TV and Android TV
 
@@ -93,6 +100,8 @@ That gives you the app in `apps/bolli-youtube`.
   mkdir -p android/app/src/main/assets
   cp -r apps/bolli-youtube/* android/app/src/main/assets/
   sed -i 's|<meta charset="utf-8">|&\n<meta name="viewport" content="width=1280, user-scalable=no">|' android/app/src/main/assets/index.html
+  cp build/android/native.js android/app/src/main/web/native.css android/app/src/main/assets/
+  sed -i 's|</head>|<link rel="stylesheet" href="native.css">\n&|; s|<script src="app.js"></script>|&\n<script src="native.js"></script>|' android/app/src/main/assets/index.html
   cd android && ./gradlew assembleDebug
   ```
 
@@ -103,7 +112,8 @@ That gives you the app in `apps/bolli-youtube`.
 - [DeArrow](https://dearrow.ajay.app): the titles and thumbnails its users submit (CC BY-NC-SA 4.0). Its logo is based on [Twemoji](https://github.com/twitter/twemoji) (CC-BY 4.0).
 - [Return YouTube Dislike](https://returnyoutubedislike.com): the dislike counts.
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [NewPipe](https://github.com/TeamNewPipe/NewPipeExtractor): the YouTube client the player asks for streams.
-- Fonts: Roboto (Apache 2.0) and Inter (SIL Open Font License). QR codes: [QR Code Generator](https://github.com/kazuhikoarase/qrcode-generator) by Kazuhiko Arase (MIT).
+- [AndroidX Media3](https://github.com/androidx/media) and [OkHttp](https://github.com/square/okhttp) (Apache 2.0): Android's own video player and its connections, which the Android app plays videos with.
+- Fonts: Roboto (Apache 2.0); Inter, Google Sans Flex, Geist, Bricolage Grotesque, Nunito, Atkinson Hyperlegible, Space Grotesk, IBM Plex Mono, Exo 2, Oswald, Barlow Condensed, Pixelify Sans and VT323 (SIL Open Font License 1.1). QR codes: [QR Code Generator](https://github.com/kazuhikoarase/qrcode-generator) by Kazuhiko Arase (MIT).
 
 ## License
 

@@ -8,16 +8,37 @@
 
 import { h, setShown } from '../core/dom.js';
 import { KEY, setTyping } from '../core/keys.js';
+import { android } from '../core/platform.js';
 import { Keyboard } from './keyboard.js';
 
 var ENTER = 13;
 var ESCAPE = 27;
+/** Android's keyboard is given this long to come before the remote's keys that reach the page say anything of it
+ * (ms; on the emulators it showed within 0.3 s of the field's focus) */
+var OPENING_MS = 500;
+
+/** Whether the device brings a keyboard of its own to a text field that takes the focus: the TV's does by itself,
+ * Android's where the shell can be asked for it (a focus a script gives brings none: a shell without the call left
+ * the field standing with no keyboard and no key answering, so the app's keyboards leave the key out there) */
+export function ownKeyboard(): boolean {
+    var shell = android();
+    return !shell || !!shell.keyboard;
+}
+
+/** Android's own keyboard for the field that has the focus, or put away (the TV shows and hides its own) */
+function androidKeyboard(shown: boolean): void {
+    var shell = android();
+    if (shell && shell.keyboard) {
+        shell.keyboard(shown);
+    }
+}
 
 export class TvField {
     /** The real text field */
     input: HTMLInputElement;
-    /** It has the focus and the keys now */
+    /** It has the focus and the keys now, since enteredAt (ms) */
     active = false;
+    private enteredAt = 0;
     /** The text in the field changed (typed on the TV's keyboard, a phone, a plugged-in keyboard) */
     onText: (text: string) => void = function () { return undefined; };
     /** Enter in the field: the text handed over (the field left first) */
@@ -56,11 +77,13 @@ export class TvField {
         var self = this;
         var input = this.input;
         this.active = true;
+        this.enteredAt = Date.now();
         input.value = text;
         setShown(this.shown, false);
         setShown(input, true);
         setTyping(function (code) { return self.key(code); });
         input.focus();
+        androidKeyboard(true);
         try {
             input.setSelectionRange(input.value.length, input.value.length);
         } catch (e) {
@@ -76,16 +99,33 @@ export class TvField {
         this.active = false;
         setTyping(null);
         this.onText(this.input.value);
+        androidKeyboard(false);
         this.input.blur();
         setShown(this.input, false);
         setShown(this.shown, true);
         this.onLeave();
     }
 
-    /** A key the app hands its owner while the field is active (the Android app hands the remote's keys to the page also
-     * while the field has the focus): Enter and Back as on a TV (key), a number key typed on keyboard and into the field
-     * (it never reaches the field there); the key is taken (true) */
+    /** A key the app hands its owner, taken only while the field is active (the Android app hands the remote's keys
+     * to the page also while the field has the focus; on a TV a pointer's wheel or a casting phone's arrows come so):
+     * Enter and Back as on a TV (key), a number key typed on keyboard and into the field (it never reaches the field
+     * there); taken (true). The remote's OK or an arrow in the Android app is one its keyboard did not take, so that is
+     * away (its own Back put it away, which nothing tells): the field is left and the key is the app's keyboard's
+     * (false), an OK on its TV keyboard key bringing Android's keyboard back (a keyboard's Enter is typed into the
+     * field by the shell). Not while Android's keyboard is still coming (OPENING_MS from the field's focus): an OK or
+     * an arrow then is no word on it, a second OK least */
     onKey(code: number, keyboard: Keyboard): boolean {
+        if (!this.active) {
+            return false;
+        }
+        var remote = code === KEY.OK || code === KEY.LEFT || code === KEY.RIGHT || code === KEY.UP || code === KEY.DOWN;
+        if (remote && android()) {
+            if (Date.now() - this.enteredAt < OPENING_MS) {
+                return true;
+            }
+            this.leave();
+            return false;
+        }
         if (!this.key(code) && keyboard.typeDigit(code)) {
             this.input.value = keyboard.text;
         }

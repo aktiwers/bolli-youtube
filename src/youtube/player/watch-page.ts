@@ -24,6 +24,7 @@ import { rowHeight, TileRow } from '../ui/tile-row.js';
 import { dearrowTitle } from '../api/dearrow.js';
 import { dislikes, shortCount } from '../api/dislikes.js';
 import { dots, Page, placeIn, PlaylistInfo, Video, videoOf } from '../api/feed.js';
+import { filterVideos, shortsShown } from '../api/filters.js';
 import { prefs } from '../api/prefs.js';
 import { Segment } from '../api/sponsorblock.js';
 import { Comments, comments, WatchInfo } from '../api/watch.js';
@@ -486,16 +487,20 @@ export class WatchPage {
     }
 
     /** The related videos, three a line (they arrive during a start, the page hidden: tiles built once drawn), after the
-     * playlist's row */
+     * playlist's row; their Shorts in a row after them where Shorts show there */
     private drawRows(): void {
         var m = metrics().watch;
         this.tiles = new VideoTiles();
         var self = this;
         this.tiles.shown = function () { return self.stack.rows; };
-        var lines = gridLines(this.tiles.items((this.info as WatchInfo).related), 3, m.tile, m.rows);
+        // (less what Settings › Filters hides there)
+        var lines = gridLines(this.tiles.items(filterVideos('related', (this.info as WatchInfo).related)), 3, m.tile, m.rows);
         var row = this.listRow();
+        var shorts = this.shortsRow();
         this.rowsFor = prefs().listDown;
-        this.stack.setRows(row ? [row].concat(lines) : lines);
+        // (the page is kept from video to video: its pitch as the text size has it now)
+        this.stack.setPitch(rowHeight(m.tile, true, m.rows));
+        this.stack.setRows((row ? [row] : []).concat(lines, shorts ? [shorts] : []));
         this.stack.setFocused(this.zone === 'related');
         this.setStatus(lines.length ? '' : tr('No related videos.'));
     }
@@ -524,6 +529,17 @@ export class WatchPage {
         this.listAt = at;
         return new TileRow({ title: list.title + KEYS_GAP + placeIn(list, id), shape: m.tile, layout: copied(m.rows, { head: LIST_HEAD }), extraHeight: LIST_HEAD,
             items: items, noWrap: true, lazy: true });
+    }
+
+    /** The related Shorts' row, upright tiles under their heading (null: none, or Shorts do not show there) */
+    private shortsRow(): TileRow | null {
+        var shorts = filterVideos('related', (this.info as WatchInfo).shorts || []);
+        if (!shorts.length || !shortsShown('related')) {
+            return null;
+        }
+        var m = metrics();
+        return new TileRow({ title: tr('Shorts'), shape: m.short, layout: copied(m.watch.rows, { head: LIST_HEAD }), extraHeight: LIST_HEAD + m.short.h - m.watch.tile.h,
+            items: this.tiles.items(shorts), noWrap: true, lazy: true, kind: 'short' });
     }
 
     /** The video YouTube would play next: its related tile, else the first related (null: unknown) */
@@ -715,7 +731,7 @@ export class WatchPage {
             } else if (video) {
                 self.actions.rest(video);
             } else if (token && !(self.commentsAhead && self.commentsAhead.token === token)) {
-                var ahead = self.commentsAhead = { token: token, part: comments(token) };
+                var ahead = self.commentsAhead = { token: token, part: comments(token, 'next') };
                 ahead.part.then(null, function () {
                     if (self.commentsAhead === ahead) {
                         self.commentsAhead = null;

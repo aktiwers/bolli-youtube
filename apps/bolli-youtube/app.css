@@ -16,8 +16,9 @@
 /* The own player (player/own-player.ts): over everything while a video plays, its info bar (base.css .osd) over the video */
 .by-tv-wait { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; z-index: 45; background: #000; }
 .by-player { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; z-index: 40; background: #000; }
-/* While looks are tried (main.ts trialsOut): the sections out of view, and the player with no video, out of the display */
-.by-app--trying .by-section:not(.by-settings), .by-app--trying-player .by-player { display: none; }
+/* While looks are tried (main.ts trialsOut): the sections out of view (not the one behind Settings' choices over the app:
+   by-section--behind), and the player with no video, out of the display */
+.by-app--trying .by-section:not(.by-settings):not(.by-section--behind), .by-app--trying-player .by-player { display: none; }
 .by-player video { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
 /* Over the video until it moves, then faded out (own-player.ts uncoverOnMove): a video's thumbnail (cover crops the
    black bars of YouTube's 4:3 thumbnails; a preview's with the tile's corners; its background keeps the crop once the
@@ -39,6 +40,9 @@
 /* The left rail (views/rail.ts): its items are placed by the theme's metrics; the clock is in it. Open, it pushes
    the screens right (main.ts by-app--rail); Search has none (by-app--search: its back arrow instead) */
 .by-rail { position: absolute; left: 0; top: 0; width: 1280px; height: 0; z-index: 10; }
+/* Under a page over the whole screen in the screens' layer (Settings' Live chat settings: views/rail.ts cover), which
+   no z-index lifts over the rail since the screens are a layer of their own (.bd-stage) */
+.by-rail--covered { visibility: hidden; }
 /* (the screen slid by the open rail a layer of its own for good: made one only while it slid, the TV made it anew at
    every open and close and drew the page under it again, ~20 ms of rasterizing a time; traced on the TV 2026-11-17) */
 .bd-stage { -webkit-transition: -webkit-transform .2s ease; will-change: transform; }
@@ -47,6 +51,11 @@
 /* A page over a section (views/videos.ts page: History, a playlist) has no rail either (main.ts by-app--page): its back
    arrow at the left, its buttons at the top right */
 .by-app--page .by-rail-item, .by-app--page .by-rail-logo, .by-app--page .by-rail-divider { display: none; }
+/* Nor the rail's strip, where a look gives the sidebar a colour of its own (ui/theme.ts sidebarRules): left drawn, it
+   lay empty over the page's left edge, a channel's picture and its first button cut by it (seen in the Android
+   emulator, 2026-11-25, with a dark sidebar on a white background). Hidden, not taken out: the shade stays the layer
+   it is, and stretches open as before when the rail is opened from there */
+.by-app--search .by-rail-shade, .by-app--page .by-rail-shade { visibility: hidden; }
 .by-page-buttons { position: absolute; white-space: nowrap; }
 .by-page-button { display: inline-block; position: relative; }
 .by-page-button-icon { display: inline-block; vertical-align: middle; }
@@ -59,6 +68,9 @@
 .by-rail-icon { position: absolute; }
 .by-rail-icon svg { display: block; }
 .by-rail-label { position: absolute; white-space: nowrap; }
+/* Edit sidebar's parts (views/rail.ts edit) */
+.by-rail-dim, .by-rail-title, .by-rail-hint, .by-rail-mark, .by-rail-rule { position: absolute; }
+.by-rail-mark svg { display: block; }
 .by-rail-drop { position: absolute; }
 .by-clock { position: absolute; white-space: nowrap; }
 
@@ -318,6 +330,69 @@
 .by-player--peek { background: transparent; overflow: hidden; }
 .by-player--peek > * { display: none; }
 .by-player--peek > video, .by-player--peek > .by-player-poster { display: block; }
+/* The Shorts screen (player/shorts.ts): the look's background under the video, the video in the upright box
+   (player/shorts.ts SHORTS_BOX: 397, 6, 398 x 708), nothing over it before its first frame, the player's clock, sign and
+   chip not shown, its bar fitted to the box's foot (times and the seek bar only, the play or pause sign beside them);
+   what is laid over the video (its corners, dim, ring, the progress line) at the same place */
+/* (the player see-through: the page's own background under it, the look's) */
+.by-player.by-player--shorts { background: transparent; }
+.by-player.by-player--shorts .osd { left: 397px; right: auto; width: 398px; bottom: 6px; padding: 96px 20px 18px 64px; -webkit-box-sizing: border-box;
+    box-sizing: border-box; border-radius: 0 0 12px 12px; }
+.by-player.by-player--shorts .osd-head, .by-player.by-player--shorts .osd-now, .by-player.by-player--shorts .osd-meta,
+.by-player.by-player--shorts .osd-text, .by-player.by-player--shorts .osd-next, .by-player.by-player--shorts .osd-message { display: none; }
+.by-player.by-player--shorts .osd-bar { width: auto; }
+.by-player.by-player--shorts .by-video-clock, .by-player.by-player--shorts .by-paid--start,
+.by-player.by-player--shorts > .by-loader { display: none; }
+.by-player.by-player--shorts .vod-subtitles { left: 397px; right: 485px; bottom: 72px; }
+.by-shorts { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; }
+/* (the loading sign while Down waits for more Shorts on the last one: in the box's middle) */
+.by-player--shorts > .by-loader-spin { left: 596px; top: 360px; }
+/* (the video's corners: a piece over each, in the page's background (themes), cut round by a mask) */
+.by-shorts-corner { position: absolute; width: 12px; height: 12px; }
+.by-shorts-corner--tl { left: 397px; top: 6px; -webkit-mask-image: radial-gradient(circle at 100% 100%, transparent 11.5px, currentColor 12px); }
+.by-shorts-corner--tr { left: 783px; top: 6px; -webkit-mask-image: radial-gradient(circle at 0 100%, transparent 11.5px, currentColor 12px); }
+.by-shorts-corner--bl { left: 397px; top: 702px; -webkit-mask-image: radial-gradient(circle at 100% 0, transparent 11.5px, currentColor 12px); }
+.by-shorts-corner--br { left: 783px; top: 702px; -webkit-mask-image: radial-gradient(circle at 0 0, transparent 11.5px, currentColor 12px); }
+.by-shorts-dim, .by-shorts-ring { position: absolute; left: 397px; top: 6px; width: 398px; height: 708px; border-radius: 12px; }
+.by-shorts-dim { visibility: hidden; }
+.by-shorts--column .by-shorts-dim { visibility: inherit; }
+.by-shorts-progress { position: absolute; left: 397px; top: 711px; width: 398px; height: 3px; overflow: hidden; border-radius: 0 0 12px 12px; }
+.by-shorts-progress-fill { height: 100%; -webkit-transform-origin: 0 0; -webkit-transform: scaleX(0); }
+/* (the player's bar shown: its own line instead, the play or pause sign beside it) */
+.by-player--osd .by-shorts-progress { visibility: hidden; }
+.by-shorts-state { display: none; position: absolute; left: 417px; bottom: 26px; }
+.by-player--osd .by-shorts-state--pause, .by-player--osd.by-player--paused .by-shorts-state--play { display: block; }
+.by-player--osd.by-player--paused .by-shorts-state--pause { display: none; }
+/* (the hint's chevron on the middle of its line, as YouTube's) */
+.by-shorts-hint { position: absolute; right: 48px; top: 48px; white-space: nowrap; display: -webkit-flex; display: flex; -webkit-align-items: center; align-items: center; }
+.by-shorts-hint-icon { -webkit-flex: none; flex: none; }
+.by-shorts-column { position: absolute; left: 836px; bottom: 37px; width: 408px; -webkit-transform: translate3d(0, 0, 0); }
+.by-shorts--opened .by-shorts-column, .by-shorts--opened .by-shorts-hint { visibility: hidden; }
+.by-shorts-item { position: relative; overflow: hidden; }
+.by-shorts-title-text, .by-shorts-age { overflow: hidden; }
+.by-shorts-age { white-space: nowrap; text-overflow: ellipsis; }
+/* (a row of an icon or picture and its text: on one line, the text cut to what is left) */
+.by-shorts-link, .by-shorts-channel, .by-shorts-subscribe { display: -webkit-flex; display: flex; -webkit-align-items: center; align-items: center; }
+.by-shorts-item-icon, .by-shorts-avatar { -webkit-flex: none; flex: none; }
+.by-shorts-item-text { -webkit-flex: 1; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.by-shorts-buttons { position: relative; white-space: nowrap; }
+.by-shorts-button { display: inline-block; position: relative; vertical-align: top; }
+.by-shorts-count { position: absolute; left: -24px; right: -24px; text-align: center; white-space: nowrap; visibility: hidden; }
+.by-shorts-item--focused .by-shorts-count { visibility: inherit; }
+.by-shorts-about, .by-shorts-remix { position: absolute; left: 836px; width: 408px; }
+.by-shorts-fact { display: inline-block; width: 33%; vertical-align: top; text-align: center; }
+.by-shorts .by-comments-dim { display: none; }
+/* Between two Shorts (player/shorts.ts SLIDE_MS) the video is replaced in place; the column's texts slide out over the
+   first half and back in over the second (drawn anew between them; Down moves them up, Up down), on a layer of their
+   own kept (the translate3d above), each half an animation of its own: a class anew starts it */
+.by-shorts-column--out-up { -webkit-animation: by-shorts-column-out-up .075s ease-in both; }
+.by-shorts-column--in-up { -webkit-animation: by-shorts-column-in-up .075s ease-out both; }
+.by-shorts-column--out-down { -webkit-animation: by-shorts-column-out-down .075s ease-in both; }
+.by-shorts-column--in-down { -webkit-animation: by-shorts-column-in-down .075s ease-out both; }
+@-webkit-keyframes by-shorts-column-out-up { from { -webkit-transform: translate3d(0, 0, 0); opacity: 1; } to { -webkit-transform: translate3d(0, -48px, 0); opacity: 0; } }
+@-webkit-keyframes by-shorts-column-in-up { from { -webkit-transform: translate3d(0, 48px, 0); opacity: 0; } to { -webkit-transform: translate3d(0, 0, 0); opacity: 1; } }
+@-webkit-keyframes by-shorts-column-out-down { from { -webkit-transform: translate3d(0, 0, 0); opacity: 1; } to { -webkit-transform: translate3d(0, 48px, 0); opacity: 0; } }
+@-webkit-keyframes by-shorts-column-in-down { from { -webkit-transform: translate3d(0, -48px, 0); opacity: 0; } to { -webkit-transform: translate3d(0, 0, 0); opacity: 1; } }
 /* Comments over the video (player/comments-view.ts): the watch page's own content hidden meanwhile */
 .by-watch--comments .by-watch-body, .by-watch--comments .by-watch-shade, .by-watch--comments .by-watch-dim { visibility: hidden; }
 .by-comments, .by-comments-dim { position: absolute; left: 0; top: 0; width: 1280px; height: 720px; }
@@ -351,7 +426,7 @@
 .by-search-bar, .by-search-mic { position: absolute; }
 /* A playlist's page (views/list-stage.ts): the focused video's frame under the list, over it with Backdrop the shade and
    the dark band behind the list, the video's details; while its preview fills the screen the page lies over the
-   player's video (bd-page--previewing) */
+   player's video (bd-page--previewing: the player under the page) */
 .by-list-back, .by-list-frame, .by-list-shade, .by-list-band, .by-list-info, .bd-tile-rank { position: absolute; }
 .by-list-back { left: 0; top: 0; width: 1280px; height: 720px; }
 .by-list-frame { overflow: hidden; }
@@ -362,8 +437,9 @@
 .by-list-line, .by-list-votes { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .by-list-vote-icon { display: inline-block; vertical-align: middle; line-height: 0; }
 .by-list-vote-icon svg { display: block; }
-.bd-page--previewing .by-list-shade, .bd-page--previewing .by-list-band, .bd-page--previewing .bd-page-content, .bd-page--previewing .by-heading,
-.bd-page--previewing .by-page-byline, .bd-page--previewing .by-page-buttons, .bd-page--previewing .by-list-info, .by-app--behind .by-rail { z-index: 45; }
+/* (the preview fills the screen under the page, as a channel's banner video: by-player--under and bd-stage--over
+   below; the frame with the video's picture gives way to it, the shade, the band and all the page draws stay over it) */
+.bd-page--previewing .by-list-frame { visibility: hidden; }
 /* The playlist over the player (player/list-panel.ts): a strip across the bottom or a list at the side, over the
    picture's layers (under the watch page), only the videos near the focus drawn */
 .by-list-panel, .by-list-panel-head, .by-list-panel-items, .by-list-item, .by-list-item-number, .by-list-item-label,
@@ -375,9 +451,14 @@
 .by-list-picture, .by-list-item-img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .by-list-item-title, .by-list-item-line { overflow: hidden; text-overflow: ellipsis; }
 .by-list-panel--strip .by-list-item-title, .by-list-item-line { white-space: nowrap; }
-/* Play mix's preview plays in a channel's banner: its shade, name, buttons and search bar over the player's video */
-.by-channel--preview .by-channel-shade, .by-channel--preview .by-channel-head, .by-channel--preview .by-search-bar,
-.by-channel--preview .by-search-mic { z-index: 45; }
+/* Play mix's preview plays in a channel's banner, the player under the page for it (the page is a layer of its own,
+   bd-stage, so nothing in it can be raised over the player): the player at the page's own level and the page one
+   above it meanwhile (bd-stage--over, set on the layer itself: a class on the app would have every element under it
+   looked at; over the background's canvas, under the sidebar and the panels as ever), the banner's picture gives
+   way, and what the page draws there (its shade, name, buttons, the search bar) is over the video */
+.by-player--under { z-index: 0; }
+.bd-stage--over { z-index: 1; }
+.by-channel--preview .by-channel-banner { visibility: hidden; }
 .by-feed-top { position: absolute; left: 0; top: 0; width: 1280px; }
 /* (a page's grid: over its lines that have scrolled up, under its title and buttons; the view sets its height) */
 .by-page-top { position: absolute; left: 0; top: 0; width: 1280px; display: none; }

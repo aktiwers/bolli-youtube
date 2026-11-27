@@ -22,7 +22,7 @@ import { load, save } from '../core/store.js';
 import { Ended, paramBytes, text } from './feed.js';
 import { languageOrder, subtitleLanguages, trackName } from './languages.js';
 import { prefs } from './prefs.js';
-import { forgetScript, playerScript, playerSts } from './player-script.js';
+import { forgetScript, playerScript, playerSts, scriptAtHand } from './player-script.js';
 import { SabrClient } from './sabr.js';
 import { forgetOnesie, onesie, prepareOnesie } from './onesie.js';
 import { freshSignIn, innertubeViaText, lastAccount, newCpn, noAnswer, objectAt, postYouTubeJson, restartPage, tvClient, youtubeLanguage } from './youtube.js';
@@ -58,7 +58,9 @@ export interface Range {
 export interface Format {
     itag: number;
     url: string;
-    /** For Media Source: 'video/mp4; codecs="avc1.64002A"' */
+    /** For Media Source: 'video/mp4; codecs="avc1.64002A"'; an HDR format's with its range after it as TVs' Media
+     * Sources name it ('video/webm; codecs="vp9.2"; eotf=smpte2084': eotfOf), so every comparison of kinds (kindOf)
+     * tells HDR from SDR, and HDR10 from HLG */
     mime: string;
     width: number;
     height: number;
@@ -79,6 +81,10 @@ export interface Format {
     drc?: boolean;
     boost?: boolean;
     channels?: number;
+    /** Video: one of YouTube's "Super resolution" copies (upscaledOf), and its higher-bitrate copy for Premium accounts
+     * ("1080p Premium") */
+    upscaled?: boolean;
+    premium?: boolean;
 }
 
 /** A track's formats in one sound (soundOf): the best, its stable-volume copy and its Voice boost copy (null: none) */
@@ -133,6 +139,25 @@ export interface Streams {
     translations: Translations | null;
     /** SABR source of the formats (null: each format has its own URL) */
     sabr: Sabr | null;
+    /** Every video format the device plays, whatever Settings keep of them (HDR formats, YouTube's upscaled copies),
+     * ordered as videos: videos is what the settings keep of these (chosen), made again when they change (reread) with
+     * nothing asked: a switch of HDR or Super resolution, in the player or in Settings, costs no request */
+    every: Format[];
+    /** The settings videos was made under (readUnder): under other choices (another account's, a setting changed)
+     * it is made again from every (reread) */
+    under: string;
+    /** The list is short of what the video has for this device: the video has a size above all the list has for the
+     * device, in formats the device does not play, and the device plays that size in some codec (YouTube gives some
+     * viewers, for some videos, a list with AV1 alone above 1080p and H.264 below: a TV without AV1 then plays a 4K
+     * video in HDR at 1080p in SDR; seen 2026-11-24, as a guest for two of eleven videos, the account's list of the
+     * same videos whole). The other method's list may have it in a codec it does play: playableStreams asks (shortOf,
+     * fuller) */
+    short: boolean;
+    /** The video has formats in HDR that this device plays (and that may still play in this run: playableHdr), and
+     * upscaled copies ("Super resolution"), kept or not: the player offers a switch for each only where there is
+     * something to switch */
+    hasHdr: boolean;
+    hasUpscaled: boolean;
     /** The other method failed for this video (playableStreams): no point retrying it */
     only?: boolean;
     /** YouTube's paid promotion notice and how long to show it at the start (ms) */
@@ -261,7 +286,7 @@ var BACK_STUCK_MS = 5000;
 var TRACKING_MS = 10 * 60 * 1000;
 var TRACKING_MAX = 4;
 /** at: when it was asked, or answered once done */
-var kept: { id: string; sabr: boolean; at: number; done: boolean; streams: Promise<Streams> }[] = [];
+var kept: { id: string; sabr: boolean; at: number; streams: Promise<Streams>; got: Streams | null }[] = [];
 
 /** A video's streams as a guest (cached for KEEP_MS; fresh: asked anew, past the cache); rejects with NoStreams */
 export function streams(id: string, fresh?: boolean): Promise<Streams> {
@@ -274,9 +299,15 @@ export function sabrStreams(id: string, reloadToken?: string, fresh?: boolean): 
 }
 
 /** The method that worked lately where the other failed for reasons not the video's own (SABR or as a guest): it goes
- * first until LEARNED_MS later, then the Settings choice again */
+ * first until LEARNED_MS later (SABR: BOT_MS), then the Settings choice again */
 var learned: { sabr: boolean; at: number } | null = null;
 var LEARNED_MS = 30 * 60 * 1000;
+/** SABR first for every video after YouTube's bot check refused the guest path (which it does for every video alike
+ * while it lasts: a start would pay two refused requests first), until the guest path is asked again this much later.
+ * With Settings › Streams by SABR off, SABR is for what the guest path cannot play, its starts being the slower: a start
+ * that finds the check still on pays the two refusals once (~0.3 s), one that finds it gone plays as a guest at most
+ * this long after */
+var BOT_MS = 10 * 60 * 1000;
 
 /** Videos the guest path refused for a reason of their own (an age check, members only) and SABR played, and when:
  * SABR goes first for them for LEARNED_MS (each of their starts and preloads paid the refusal first) */
@@ -288,7 +319,7 @@ export function sabrFirstNow(sabrFirst: boolean, id?: string): boolean {
     if (id && signedInOnlyNow(id)) {
         return true;
     }
-    return learned && Date.now() - learned.at < LEARNED_MS ? learned.sabr : sabrFirst;
+    return learned && Date.now() - learned.at < (learned.sabr ? BOT_MS : LEARNED_MS) ? learned.sabr : sabrFirst;
 }
 
 /** Whether only SABR played video id lately (the guest path refused it for a reason of its own) */
@@ -296,11 +327,13 @@ function signedInOnlyNow(id: string): boolean {
     return Date.now() - (signedInOnly[id] || 0) < LEARNED_MS;
 }
 
-/** The method (sabr or as a guest) played where the other failed (why: the other's reason, if known); unless that was
- * about the video itself, it goes first for a while; if it was and SABR played, SABR goes first for that video (id) */
+/** The method (sabr or as a guest) played where the other failed (why: the other's reason, if known; none: the
+ * player's ladder switched methods for a start that did not move). SABR goes first for every video only after the bot
+ * check (botRefused): after any other refusal, or a ladder's switch, SABR goes first for that video (id) alone; the
+ * guest path goes first for a while after SABR failed for a reason not the video's own */
 export function learnMethod(sabr: boolean, why?: NoStreams, id?: string): void {
     var now = Date.now();
-    if (!why || !aboutTheVideo(why)) {
+    if (sabr ? !!why && botRefused(why) : !why || !aboutTheVideo(why)) {
         learned = { sabr: sabr, at: now };
     } else if (sabr && id) {
         for (var other in signedInOnly) {
@@ -351,7 +384,8 @@ export function reasonInLanguage(id: string, e: NoStreams): Promise<string> {
  * SABR needs YouTube's player script), or SABR first where a start would ask so (signedInFirst), or for a video only
  * SABR played lately (sabrFirstNow) */
 export function firstStreams(id: string): Promise<Streams> {
-    return sabrFirstNow(signedInFirst(), id) ? playableStreams(id, true) : streams(id);
+    // (a guest's list short of what the video has: the other method's asked now, ahead of the start, not at OK)
+    return sabrFirstNow(signedInFirst(), id) ? playableStreams(id, true) : streams(id).then(function (s) { return shortOf(s) ? playableStreams(id, false) : s; });
 }
 
 /** A video's streams for the own player: as a guest, else via SABR (age check, members only); sabrFirst reverses
@@ -368,7 +402,15 @@ export function playableStreams(id: string, sabrFirst: boolean, asking?: Asking)
         return asking ? patient(ask, function () { return asking(viaSabr, true); }, stuckFor(viaSabr)) : ask(false);
     };
     return by(sabr).then(function (s) {
-        return signedIn ? onlyBy(s) : s;
+        if (signedIn) {
+            return onlyBy(s);
+        }
+        // Short of what the video has for this device (Streams.short): the other method's list, taken where it has
+        // a higher format the device plays (one request more, for such a video alone; not once the viewer has gone)
+        if (!shortOf(s) || asking && !asking(!sabr, false)) {
+            return s;
+        }
+        return orFuller(s, function () { return sabr ? streams(id) : sabrStreams(id); });
     }, function (e: NoStreams) {
         // Removed, an upcoming live stream, or no network: the other method cannot play it either; nor is it asked once
         // the viewer has gone, or for a request let go (askAnew)
@@ -396,6 +438,50 @@ export function playableStreams(id: string, sabrFirst: boolean, asking?: Asking)
     });
 }
 
+/** s, or the other method's list (ask) where that has more for the device (fuller): asked once, not patiently, and
+ * waited for FULLER_MS at most. The list in hand plays where the other does not come in that time, fails, or cannot
+ * even be asked */
+export function orFuller(s: Streams, ask: () => Promise<Streams>): Promise<Streams> {
+    return new Promise<Streams>(function (resolve) {
+        var timer = setTimeout(function () { resolve(s); }, FULLER_MS);
+        var no = function (): void {
+            clearTimeout(timer);
+            resolve(s);
+        };
+        try {
+            ask().then(function (o) {
+                clearTimeout(timer);
+                resolve(fuller(s, o));
+            }, no);
+        } catch (e) {
+            no();
+        }
+    });
+}
+
+/** The highest format of s the device plays, whatever Settings keep (lines; 0 none) */
+function top(s: Streams): number {
+    return s.every.length ? s.every[0].height : 0;
+}
+
+/** How long a start waits for the other method's list where the first is short (ms): the first plays if it does not
+ * come (a kept one comes at once; one asked ahead, with the tile's streams, is kept by the time of OK) */
+var FULLER_MS = 1500;
+
+/** Whether the other method's list is worth asking for: s is short of what the video has for this device, and what
+ * it has is below the most Settings › Quality play (Auto: 4K). A guest's short list only while YouTube's player
+ * script is at hand (the signed-in method needs it: asked cold, while browsing or at a start, it would fetch and
+ * start the script for a list that then comes too late; it is at hand from a session's first video on, which asks
+ * the signed-in streams for its sound: the player's soundAhead) */
+export function shortOf(s: Streams): boolean {
+    return s.short && top(s) < (prefs().quality || AUTO_LINES) && (!!s.sabr || scriptAtHand());
+}
+
+/** s, or other (the other method's streams of the same video) where that has a higher format the device plays */
+export function fuller(s: Streams, other: Streams): Streams {
+    return top(other) > top(s) ? other : s;
+}
+
 /** A copy of s marked as playable by its method only (the kept one serves later plays, which try the first method
  * again) */
 function onlyBy(s: Streams): Streams {
@@ -409,7 +495,84 @@ function onlyBy(s: Streams): Streams {
 
 /** A video's streams kept by this method at now: answered within KEEP_MS, or on their way for less than stuck */
 function keptOf(id: string, sabr: boolean, now: number): typeof kept[0] | undefined {
-    return kept.filter(function (k) { return k.id === id && k.sabr === sabr && now - k.at < (k.done ? KEEP_MS : stuckFor(sabr)); })[0];
+    return kept.filter(function (k) { return k.id === id && k.sabr === sabr && now - k.at < (k.got ? KEEP_MS : stuckFor(sabr)); })[0];
+}
+
+/** The settings that decide what is kept of a video's formats, as they are now: HDR, and YouTube's upscaled copies;
+ * and the HDR kinds left alone for this run (hdrFailed) */
+function readUnder(): string {
+    var p = prefs();
+    return (p.hdr ? 'hdr' : '') + (p.upscaled ? ' upscaled' : '') + failedHdr;
+}
+
+/** The HDR kinds that did not start in this run of the app while the video then played in another kind (' -kind'
+ * each; '' none): left alone until the app starts anew (chosen) */
+var failedHdr = '';
+
+/** A format of kind did not start (the player's fallback went on to another kind, which plays): where it is an HDR
+ * kind, no video is started in it again in this run of the app. A device whose Media Source says yes to an HDR
+ * format its decoder then does not show would otherwise pay the wait for the fallback (the player's
+ * START_GIVE_UP_MS) at every video that has HDR; the next run tries once more. SDR kinds are left as they are: one
+ * video's fault must not take a codec away for the rest of the run. */
+export function hdrFailed(kind: string): void {
+    if (hdrOf(kind) && failedHdr.indexOf(' -' + kind) < 0) {
+        failedHdr += ' -' + kind;
+    }
+}
+
+/** What the settings as they are keep of every (a video's formats the device plays): HDR formats where Settings want
+ * HDR (left out, a video plays as it always did, in SDR), YouTube's upscaled copies where they want those (left out,
+ * a video plays no higher than uploaded) */
+function chosen(every: Format[]): Format[] {
+    var p = prefs();
+    return p.hdr && p.upscaled && !failedHdr ? every : every.filter(function (f) {
+        return (p.hdr && notFailed(f) || !hdrOf(f.mime)) && (p.upscaled || !f.upscaled);
+    });
+}
+
+/** Whether f's kind has not been left alone in this run (hdrFailed) */
+function notFailed(f: Format): boolean {
+    return !failedHdr || failedHdr.indexOf(' -' + kindOf(f.mime)) < 0;
+}
+
+/** s's videos as the settings now keep them: made again from every where they were made under other choices (each
+ * account has its own; a switch in the player or in Settings), nothing asked. True if that changed them. Whoever
+ * holds s sees it: the kept streams, the player's, a video loaded ahead (whose format may no longer be among them:
+ * keeps) */
+export function reread(s: Streams): boolean {
+    var under = readUnder();
+    if (s.under === under) {
+        return false;
+    }
+    s.under = under;
+    s.videos = chosen(s.every);
+    s.hasHdr = playableHdr(s.every);
+    return true;
+}
+
+/** Whether every has formats in HDR that may still play in this run: not of a kind left alone since it showed no
+ * picture (hdrFailed). The player offers its HDR switch for them alone: after the fallback on the TV (2026-11-25, the
+ * failure made to happen) the switch stood at On over a picture in SDR, and did nothing */
+function playableHdr(every: Format[]): boolean {
+    return every.some(function (f) { return !!hdrOf(f.mime) && notFailed(f); });
+}
+
+/** Whether f is among what the settings now keep of s's formats (a video loaded ahead in a format they no longer
+ * keep is not taken up) */
+export function keeps(s: Streams, f: Format): boolean {
+    reread(s);
+    return s.videos.indexOf(f) >= 0;
+}
+
+/** A video's streams as a start would get them first, where they are at hand now (kept, answered: nothing asked;
+ * null: not): a start reads from them what it is about to play before it stops what plays (the player's start) */
+export function streamsNow(id: string, sabrFirst: boolean): Streams | null {
+    var had = keptOf(id, sabrFirstNow(sabrFirst, id), Date.now());
+    if (!had || !had.got) {
+        return null;
+    }
+    reread(had.got);
+    return had.got;
 }
 
 /** How long a request by this method may be on its way before it counts as hung */
@@ -426,15 +589,19 @@ function keep(id: string, sabr: boolean, asking: () => Promise<Streams>, fresh?:
     var now = Date.now();
     var had = keptOf(id, sabr, now);
     // (fresh: past one on its way, not past streams that came)
-    if (had && (had.done || !fresh)) {
+    if (had && (had.got || !fresh)) {
+        // (read under other settings: what these keep of its formats, with nothing asked)
+        if (had.got) {
+            reread(had.got);
+        }
         return had.streams;
     }
     var asked = asking();
-    var entry = { id: id, sabr: sabr, at: now, done: false, streams: asked };
+    var entry: typeof kept[0] = { id: id, sabr: sabr, at: now, streams: asked, got: null };
     kept = kept.filter(function (k) { return !(k.id === id && k.sabr === sabr); }).concat([entry]).slice(-KEEP_COUNT);
-    asked.then(function () {
-        entry.done = true;
+    asked.then(function (s) {
         entry.at = Date.now();
+        entry.got = s;
     }, function () {
         kept = kept.filter(function (k) { return k !== entry; });
     });
@@ -467,7 +634,7 @@ export function askAnew(id: string): void {
         return;
     }
     backAt = Date.now();
-    kept = kept.filter(function (k) { return k.done || k.id !== id; });
+    kept = kept.filter(function (k) { return !!k.got || k.id !== id; });
     abortSent(ASKED + id);
     waiting.slice().forEach(function (anew) { anew(); });
 }
@@ -774,6 +941,13 @@ function botCheck(playable: any): boolean {
     return /bot/i.test(playable.reason || '');
 }
 
+/** Whether e is YouTube's bot check ("Sign in to confirm you're not a bot"): a refusal of the guest path itself, for
+ * every video alike while it lasts (seen 2026-11-27 for every signed-out client from one home's address, after two
+ * days of test starts) */
+export function botRefused(e: NoStreams): boolean {
+    return e.status === 'LOGIN_REQUIRED' && botCheck(e);
+}
+
 /** A failure as NoStreams: an HTTP or other error gets status HTTP and its message */
 function noStreams(e: NoStreams | { message: string }): NoStreams {
     return (e as NoStreams).reason !== undefined ? e as NoStreams : { status: 'HTTP', reason: (e as { message: string }).message };
@@ -823,10 +997,20 @@ export function takeLiveAsOver(on: boolean): void {
     liveAsOver = on;
 }
 
+/** Told every /player reply's formats as they come, before any is left out (debug.ts formats: all that YouTube offers
+ * for a video; null, as ever outside a check: nobody looks) */
+var rawSeen: ((formats: any[]) => void) | null = null;
+export function onRawFormats(seen: ((formats: any[]) => void) | null): void {
+    rawSeen = seen;
+}
+
 /** What the own player can play from a /player reply (sabr: formats come via SABR, not URLs) */
 export function streamsOf(reply: any, sabr?: boolean): Streams {
     var details = reply.videoDetails || {};
     var formats: any[] = reply.streamingData && reply.streamingData.adaptiveFormats || [];
+    if (rawSeen) {
+        rawSeen(formats);
+    }
     // A live stream's formats are numbered segments (no index). So are those of a stream that has just ended, until
     // YouTube has made a video of it: no format of it has an index yet (over). Only of a stream: an upload whose
     // formats come without an index is no stream that ended, and the live engine has no head to find in it
@@ -837,14 +1021,29 @@ export function streamsOf(reply: any, sabr?: boolean): Streams {
         // (a WebM video needs its length: its last segment ends there; a live stream's segments are numbered, SABR's
         // come whole)
         return (f.url || sabr) && (live ? f.targetDurationSec : f.initRange && f.indexRange && (sabr || !/webm/.test(f.mimeType || '') || +f.contentLength > 0)) &&
-            /^((video|audio)\/mp4;|video\/webm; codecs="vp9"|audio\/webm; codecs="opus")/.test(f.mimeType || '') && shown(f) && supported(f);
+            /^((video|audio)\/mp4;|video\/webm; codecs="vp0?9[".]|audio\/webm; codecs="opus")/.test(f.mimeType || '') &&
+            // (an HDR format in a range the app can name; the device is asked about it with its range: supported.
+            // Whether Settings want HDR, and YouTube's upscaled copies, is decided over what is kept here: chosen)
+            eotfOf(f) !== ODD_RANGE && shown(f) && supported(f);
     });
     // VP9 before AV1 before H.264 at the same height and frame rate: VP9 goes up to 4K, so most videos use one codec
     // and the TV's pipeline can be reused for the next video (a codec change tears it down: player/pipeline.ts); AV1
     // (where the TV plays it) saves bandwidth over H.264, and may be all there is at 8K
-    var videos = playable.filter(function (f) { return /^video\/(mp4; codecs="(avc1|av01)|webm)/.test(f.mimeType); }).map(formatOf);
+    var every = playable.filter(function (f) { return /^video\/(mp4; codecs="(avc1|av01)|webm)/.test(f.mimeType); }).map(formatOf);
     var rank = function (f: Format): number { return /webm/.test(f.mime) ? 2 : /av01/.test(f.mime) ? 1 : 0; };
-    videos.sort(function (a, b) { return b.height - a.height || b.fps - a.fps || rank(b) - rank(a) || b.bitrate - a.bitrate; });
+    // (HDR before SDR at the same height and frame rate: where Settings want HDR and the device plays it, a video that
+    // has it starts in it; the steps after that stay in the start's range: a kind of its own, kindOf)
+    var hdr = function (f: Format): number { return hdrOf(f.mime) ? 1 : 0; };
+    every.sort(function (a, b) { return b.height - a.height || b.fps - a.fps || hdr(b) - hdr(a) || rank(b) - rank(a) || b.bitrate - a.bitrate; });
+    // (whether the video has a size above all this list has for the device, which the device plays in some codec:
+    // Streams.short. Asked only for sizes above the list's own top: none for a list that is whole. A size the
+    // device plays in no codec is not missing: no other list has it either, and a TV with a Full HD decoder would
+    // ask twice for every 4K video; a codec the device plays only up to a lower size counts as lacking above it: a
+    // device with AV1 up to 1080p and VP9 up to 4K is short of a 4K video whose list has 4K in AV1 alone)
+    var has = every.length ? every[0].height : 0;
+    var short = !live && has > 0 && formats.some(function (f) {
+        return f.height > has && /^video\//.test(f.mimeType || '') && shown(f) && sizePlays(f);
+    });
     // Every sound the device plays: stereo AAC and Opus, and with SABR the surround ones (Dolby Digital 5.1 and Plus,
     // 5.1 AAC, Eclipsa), which YouTube offers for some videos, to the signed-in TV client only (a surround start's
     // audio cut is handled in the SABR engine: containers.ts wholeFrames)
@@ -858,11 +1057,17 @@ export function streamsOf(reply: any, sabr?: boolean): Streams {
         title: details.title || '',
         channel: details.author || '',
         description: details.shortDescription || '',
-        videos: videos,
+        videos: chosen(every),
+        every: every,
         audios: audios,
         captions: captionsOf(tracklist),
         translations: translationsOf(tracklist),
         sabr: null,
+        under: readUnder(),
+        short: short,
+        // (what the video has of each among the formats the device plays, whatever Settings keep: the player's switches)
+        hasHdr: playableHdr(every),
+        hasUpscaled: every.some(function (f) { return !!f.upscaled; }),
         storyboard: storyboardOf(reply.storyboards),
         live: live ? { segment: +live.targetDurationSec, dvr: +live.maxDvrDurationSec || 0 } : null
     };
@@ -1100,12 +1305,40 @@ function sameCode(language: string): string {
     return old ? old + language.slice(b.length) : language;
 }
 
-/** Media Source's answers by codec, height and frame rate (asked once each: a video with dubs has ~100 formats of a
- * few kinds) */
+/** Media Source's answers by codec, range, height and frame rate (asked once each: a video with dubs has ~100 formats
+ * of a few kinds) */
 var SUPPORTED: { [key: string]: boolean } = {};
+
+/** For a check in a TV's simulator (debug.ts asTv): its Media Source taken at its word as a TV's is (sized: AV1 where
+ * it says yes, as on a webOS TV that plays AV1; a desktop's ignores sizes, so the app would use none of its AV1), the
+ * answers so far asked anew */
+export function takeSized(on: boolean): void {
+    sized = on;
+    ranged = on;
+    SUPPORTED = {};
+    kept = [];
+}
 /** Whether Media Source here checks a video's size and frame rate (webOS does; elsewhere they are ignored; null: not
  * asked yet) */
 var sized: boolean | null = null;
+/** Whether Media Source here answers for a video's range (eotf; a TV's does; null: not asked yet) */
+var ranged: boolean | null = null;
+/** What the device's own configuration says of its screen (takeScreenHdr): false, it shows no HDR, and no HDR format
+ * is played whatever its Media Source says (null: it says nothing, the Media Source's word stands) */
+var screenHdr: boolean | null = null;
+
+/** The device's own word on whether its screen shows HDR (a webOS TV's model configuration, asked once as the app
+ * starts: main.ts). Where it says no, HDR formats are not played (a decoder may take them all the same, the picture
+ * then mapped down by the TV, or shown flat), Settings › HDR says so (hdrPlays), and the answers so far and the
+ * streams kept are let go; where it says yes, nothing changes: the Media Source is asked as ever. */
+export function takeScreenHdr(shows: boolean): void {
+    var was = screenHdr !== false;
+    screenHdr = shows;
+    if (was !== shows) {
+        SUPPORTED = {};
+        kept = [];
+    }
+}
 /** Whether this device plays the format: its codec, and its size and frame rate where Media Source checks them (webOS)
  * or, on Android, as its decoders say; so 8K, 60 fps or AV1 formats are used only where the device plays them. AV1
  * not where nothing tells (a Media Source may say yes to AV1 it would decode in software) */
@@ -1118,10 +1351,21 @@ function supported(f: any): boolean {
         sized = MediaSource.isTypeSupported('video/mp4; codecs="avc1.4d401e"; width=640; height=360; framerate=30') &&
             !MediaSource.isTypeSupported('video/mp4; codecs="avc1.4d401e"; width=30000; height=20000; framerate=30');
     }
-    var key = f.mimeType + ' ' + (f.width || 0) + 'x' + (f.height || 0) + ' ' + (f.fps || 0);
+    var eotf = eotfOf(f);
+    if (eotf && screenHdr === false) {
+        return false;
+    }
+    if (eotf && ranged === null) {
+        // A range every HDR TV knows and one none does: only a Media Source that reads the field tells them apart (one
+        // that ignores it says yes to both, and then says nothing about HDR: a desktop's, a web view's)
+        ranged = sized && MediaSource.isTypeSupported('video/webm; codecs="vp9"; eotf=bt709') &&
+            !MediaSource.isTypeSupported('video/webm; codecs="vp9"; eotf=bolli-none');
+    }
+    var key = f.mimeType + ' ' + eotf + ' ' + (f.width || 0) + 'x' + (f.height || 0) + ' ' + (f.fps || 0);
     if (SUPPORTED[key] === undefined) {
-        var asked = MediaSource.isTypeSupported(f.mimeType + (sized && f.width && f.height ? '; width=' + f.width + '; height=' + f.height +
-            (f.fps ? '; framerate=' + f.fps : '') : ''));
+        // (HDR only where the device's Media Source answers for the range: nothing else tells whether its screen shows it)
+        var asked = (!eotf || !!ranged) && MediaSource.isTypeSupported(f.mimeType + (eotf ? '; eotf=' + eotf : '') +
+            (sized && f.width && f.height ? '; width=' + f.width + '; height=' + f.height + (f.fps ? '; framerate=' + f.fps : '') : ''));
         var shell = android();
         var codec = (/codecs="([^".]+)/.exec(f.mimeType) || [])[1] || '';
         var decoders = shell && shell.decodes && f.width && f.height ? shell.decodes(codec, f.width, f.height, f.fps || 0) : null;
@@ -1132,15 +1376,23 @@ function supported(f: any): boolean {
 
 /** A format's codec as viewers name it ("VP9", "AV1", "H.264"; '' one not known) */
 export function codecName(mime: string): string {
-    var kind = kindOf(mime);
+    var kind = codecKind(mime);
     return kind === 'video/webm vp9' ? 'VP9' : kind === 'video/mp4 av01' ? 'AV1' : kind === 'video/mp4 avc1' ? 'H.264' : '';
 }
 
-/** Settings › Video codec's choices as format kinds (kindOf) */
+/** Whether this device plays HDR at all (Settings say so where it plays none): YouTube's HDR10 in VP9 or AV1, at
+ * 1080p, asked as its formats are (supported) */
+export function hdrPlays(): boolean {
+    return supported({ mimeType: 'video/webm; codecs="vp9.2"', width: 1920, height: 1080, fps: 30 }) ||
+        supported({ mimeType: 'video/mp4; codecs="av01.0.08M.10.0.110.09.16.09.0"', width: 1920, height: 1080, fps: 30 });
+}
+
+/** Settings › Video codec's choices as format kinds without their range (codecKind) */
 var CODEC_KINDS: { [codec: string]: string } = { vp9: 'video/webm vp9', av1: 'video/mp4 av01', h264: 'video/mp4 avc1' };
 /** A format of each codec that a device playing the codec at all plays: 1080p at 30 fps, in the codec string YouTube
  * gives its 1080p (H.264 High 4.0, AV1 Main 4.0 8-bit), so the device is asked about the codec, not about 4K or 60 fps
- * (H.264 has no more than 1080p here) */
+ * (H.264 has no more than 1080p here). sizePlays asks the same strings at a format's own size and frame rate: a
+ * device that holds a size against the string's level says no there, and its list then counts as whole, as before */
 var CODEC_SAMPLES: { [codec: string]: string } = { vp9: 'video/webm; codecs="vp9"', av1: 'video/mp4; codecs="av01.0.08M.08"', h264: 'video/mp4; codecs="avc1.640028"' };
 
 /** Whether this device plays the codec ('vp9', 'av1', 'h264'), asked as its formats are (supported): Settings say so
@@ -1150,11 +1402,22 @@ export function codecPlays(codec: string): boolean {
     return !!mime && supported({ mimeType: mime, width: 1920, height: 1080, fps: 30 });
 }
 
+/** Whether the device plays f's size and frame rate in any codec (in SDR, asked as its formats are: supported): a list
+ * that has that size only in formats the device does not play is short of it then (Streams.short) */
+function sizePlays(f: any): boolean {
+    for (var codec in CODEC_SAMPLES) {
+        if (supported({ mimeType: CODEC_SAMPLES[codec], width: f.width, height: f.height, fps: f.fps })) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /** The formats a start or the quality menu picks from: those of the codec Settings prefer if the video has any, else
  * all (Auto: all). The streams keep every codec, for the fallback ladder's codec step */
 export function preferred(videos: Format[]): Format[] {
     var kind = CODEC_KINDS[prefs().codec];
-    var mine = kind ? videos.filter(function (f) { return kindOf(f.mime) === kind; }) : [];
+    var mine = kind ? videos.filter(function (f) { return codecKind(f.mime) === kind; }) : [];
     return mine.length ? mine : videos;
 }
 
@@ -1368,10 +1631,11 @@ function rangeOf(r: any): Range {
 }
 
 function formatOf(f: any): Format {
+    var eotf = eotfOf(f);
     return {
         itag: f.itag,
         url: f.url,
-        mime: f.mimeType,
+        mime: f.mimeType + (eotf ? '; eotf=' + eotf : ''),
         width: f.width || 0,
         height: f.height || 0,
         fps: f.fps || 0,
@@ -1384,8 +1648,17 @@ function formatOf(f: any): Format {
         xtags: f.xtags || '',
         track: f.audioTrack && f.audioTrack.id || '',
         drc: !!f.isDrc,
-        channels: +f.audioChannels || 0
+        channels: +f.audioChannels || 0,
+        upscaled: upscaledOf(f),
+        premium: /Premium/.test(f.qualityLabel || '')
     };
+}
+
+/** Whether a /player reply's format is one of YouTube's "Super resolution" copies: a video uploaded below 1080p,
+ * upscaled by YouTube to the heights above its own (since 2025-10; seen 2026-11-25: a 240p upload with 360p, 480p and
+ * 720p copies, in VP9 and AV1). Its xtags say so: a base64 protobuf holding the key "sr" with the value "1" */
+export function upscaledOf(f: { mimeType?: string; xtags?: string }): boolean {
+    return !!f.xtags && (f.mimeType || '').indexOf('video/') === 0 && xtag(f.xtags, 'sr') === '1';
 }
 
 /** The format to play: the highest up to maxHeight (0: any), else the lowest. At equal height and frame rate, prefer
@@ -1394,16 +1667,69 @@ export function pickFormat(videos: Format[], maxHeight: number, kind?: string): 
     for (var i = 0; i < videos.length; i++) {
         if (!maxHeight || videos[i].height <= maxHeight) {
             var first = videos[i];
-            var same = kind ? videos.filter(function (f) { return f.height === first.height && f.fps === first.fps && kindOf(f.mime) === kind; })[0] : null;
+            // (the kept pipeline's kind only where it is the first's range: a video that starts in HDR is not taken
+            // back to SDR to save a pipeline, nor the other way)
+            var same = kind && hdrOf(kind) === hdrOf(first.mime) ? videos.filter(function (f) {
+                return f.height === first.height && f.fps === first.fps && kindOf(f.mime) === kind;
+            })[0] : null;
             return same || first;
         }
     }
     return videos.length ? videos[videos.length - 1] : null;
 }
 
+/** kindOf's answers by mime, read once each (YouTube's mimes are a few dozen in all; a playing video's formats are
+ * asked for theirs every second while its quality follows the connection, player/own-player.ts autoStep, and at every
+ * start, preview and quality step: after a mime's first time an ask reads nothing and makes nothing) */
+var MIME_KINDS: { [mime: string]: string } = {};
+
 /** A format's container and codec, which decide the Media Source buffer it needs ('video/webm vp9', 'video/mp4 avc1',
- * 'audio/mp4 mp4a') */
+ * 'audio/mp4 mp4a'), and an HDR format's range after them ('video/webm vp9 smpte2084'): a TV sets its picture to a
+ * pipeline's range when the pipeline is made and keeps it (seen 2026-11-12: an SDR video on an HDR pipeline shown as
+ * HDR, and the other way dull), so HDR and SDR, and HDR10 and HLG, are kinds of their own and never share one */
 export function kindOf(mime: string): string {
+    var kind = MIME_KINDS[mime];
+    if (kind === undefined) {
+        var eotf = hdrOf(mime);
+        kind = MIME_KINDS[mime] = codecKind(mime) + (eotf ? ' ' + eotf : '');
+    }
+    return kind;
+}
+
+/** A format's container and codec without its range ('video/webm vp9' for VP9 in SDR and HDR, under either of
+ * YouTube's names for it: "vp9", "vp9.2", "vp09.02..."): what Settings › Video codec chooses by, and a codec's name */
+export function codecKind(mime: string): string {
     var m = /^([^;]+);\s*codecs="([^.",]+)/.exec(mime);
-    return m ? m[1] + ' ' + m[2] : mime;
+    return m ? m[1] + ' ' + (m[2] === 'vp09' ? 'vp9' : m[2]) : mime;
+}
+
+/** An HDR format's range as its mime (or a kind) names it: 'smpte2084' (HDR10), 'arib-std-b67' (HLG); '' SDR */
+export function hdrOf(mime: string): string {
+    // (nearly every format asked about is in SDR, and a sort asks at every comparison: nothing is made for those)
+    var m = /(?:; eotf=| )(smpte2084|arib-std-b67)$/.exec(mime);
+    return m ? m[1] : '';
+}
+
+/** A 10-bit format in a range the player does not know (neither HDR10's nor HLG's: YouTube has none, 2026-11): never
+ * played, with HDR on or off (eotfOf) */
+export var ODD_RANGE = 'other';
+
+/** A /player reply's format's range, as TVs' Media Sources name it (their eotf): 'smpte2084' (PQ: HDR10),
+ * 'arib-std-b67' (HLG), '' (SDR). By what YouTube says of its colours (colorInfo's transfer); where it says nothing,
+ * by the codec's own word: VP9 profile 2 ("vp9.2", "vp09.02...") and a 10-bit AV1 are YouTube's HDR formats, and the
+ * long names carry the transfer (16 PQ, 18 HLG; none named: PQ, as nearly all of YouTube's HDR). A 10-bit format in
+ * any other range: ODD_RANGE */
+export function eotfOf(f: { mimeType?: string; colorInfo?: { transferCharacteristics?: string } }): string {
+    var mime = f.mimeType || '';
+    if (mime.indexOf('video/') !== 0) {
+        return '';
+    }
+    var parts = ((/codecs="([^"]+)"/.exec(mime) || [])[1] || '').split('.');
+    var deep = parts[0] === 'vp9' ? parts[1] === '2' : parts[0] === 'vp09' ? parts[1] === '02' : parts[0] === 'av01' && parts[3] === '10';
+    var transfer = f.colorInfo && f.colorInfo.transferCharacteristics || '';
+    if (transfer) {
+        return /SMPTEST2084/.test(transfer) ? 'smpte2084' : /ARIB_STD_B67/.test(transfer) ? 'arib-std-b67' : deep ? ODD_RANGE : '';
+    }
+    var named = parts[0] === 'vp09' ? parts[6] : parts[0] === 'av01' ? parts[7] : '';
+    return !deep ? '' : named === '18' ? 'arib-std-b67' : !named || named === '16' ? 'smpte2084' : ODD_RANGE;
 }

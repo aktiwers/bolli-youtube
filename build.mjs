@@ -14,6 +14,16 @@ for (const [entry, file] of Object.entries(bundles)) {
     execFileSync('node_modules/.bin/rollup', ['build/tsc/src/youtube/' + entry + '.js', '--format', 'iife', '--file', out, '--silent'], { stdio: 'inherit' });
     fs.writeFileSync(out, compact(fs.readFileSync(out, 'utf8').split('__BOLLI_VERSION__').join(version)));
 }
+// The Android app's own scripts (README.md: copied into its assets with the app): built outside the app's folder,
+// which webOS's package takes whole. Each runs beside app.js, which has the app's modules: a module a script uses
+// nothing of stays out of it whole
+const android = {"android/native":"native.js"};
+fs.mkdirSync('build/android', { recursive: true });
+for (const [entry, file] of Object.entries(android)) {
+    const out = 'build/android/' + file;
+    execFileSync('node_modules/.bin/rollup', ['build/tsc/src/youtube/' + entry + '.js', '--format', 'iife', '--file', out, '--silent', ...["--no-treeshake.moduleSideEffects"]], { stdio: 'inherit' });
+    fs.writeFileSync(out, compact(fs.readFileSync(out, 'utf8')));
+}
 
 function compact(code) {
     const comments = [];

@@ -81,6 +81,21 @@ export class RowStack {
         this.mark();
     }
 
+    /** The rows' pitch from the next setRows on (a stack kept while the theme's sizes change: the watch page's, as the
+     * text size does) */
+    setPitch(rowH: number): void {
+        this.rowH = rowH;
+    }
+
+    /** The rows' pitch now, the rows placed anew at it in place (the text under the tiles another height: views/videos.ts
+     * respace): their tops alone, the rows drawn and their tiles as they are */
+    respace(rowH: number): void {
+        if (rowH !== this.rowH) {
+            this.rowH = rowH;
+            this.layOut(0);
+        }
+    }
+
     /** Shows the focused row in its bigShape, extra px taller; the rows below shift down by that much */
     setBig(extra: number): void {
         this.bigExtra = extra;
@@ -229,6 +244,15 @@ export class RowStack {
         this.underIndex = row.index;
         this.underLeft = row.focusLeft;
         return true;
+    }
+
+    /** Focuses row index and in it tile col (each clamped): the same place after the rows were drawn anew */
+    focusPlace(index: number, col: number): void {
+        this.focusRow(index);
+        var row = this.row;
+        if (row && row.count) {
+            row.focusAt(col);
+        }
     }
 
     /** Focuses row index (clamped) */

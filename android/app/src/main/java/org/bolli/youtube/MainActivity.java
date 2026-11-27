@@ -12,6 +12,7 @@ package org.bolli.youtube;
 import android.annotation.TargetApi;
 import android.app.Activity;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.ComponentName;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ApplicationInfo;
@@ -22,25 +23,33 @@ import android.graphics.Point;
 import android.hardware.display.DisplayManager;
 import android.media.MediaCodecInfo;
 import android.media.MediaCodecList;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.speech.RecognizerIntent;
+import android.util.TypedValue;
 import android.view.Display;
 import android.view.KeyEvent;
 import android.view.ViewGroup;
 import android.view.WindowManager;
+import android.view.inputmethod.InputMethodManager;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.PermissionRequest;
 import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 
+import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.UUID;
 
 public class MainActivity extends Activity {
     /** startActivityForResult's code for Android's speech recognition */
@@ -51,12 +60,33 @@ public class MainActivity extends Activity {
      * in a flavour's manifest; a flavour without them has the one entry of this activity) */
     private static final String LOGO = "org.bolli.logo.";
     private WebView web;
+    /** Android's keyboard asked for the web view's text field, and put away (the page's calls, run on the app's own
+     * thread) */
+    private final Runnable showKeyboard = () -> ((InputMethodManager) getSystemService(INPUT_METHOD_SERVICE)).showSoftInput(web, 0);
+    private final Runnable hideKeyboard = () -> ((InputMethodManager) getSystemService(INPUT_METHOD_SERVICE))
+            .hideSoftInputFromWindow(web.getWindowToken(), 0);
+    /** The page's text field has Android's keyboard (asked for, not put away since: the page's calls) */
+    private volatile boolean typing;
     /** The logo the page asked for on the home screen (null: none asked) */
     private volatile String wantedLogo;
     /** Speech recognition is up over the app: the app is not left */
     private boolean listening;
     /** The viewer is leaving the app by their own doing (onUserLeaveHint), until it is back in front */
     private boolean leaving;
+    /** The part only this app's build has (null: none) */
+    private Extra extra;
+    /** The key of the page's second copy of what it keeps (copy, keep, kept), given to the page in its address (#):
+     * the bridge is in every frame of the web view, YouTube's own and other sites' too, and those cannot read the
+     * page's address */
+    private final String copyKey = UUID.randomUUID().toString();
+
+    /** A part only one app's build has (BuildConfig.EXTRA names its class): given the web view before the page loads,
+     * told when the app is off the screen and when it goes */
+    public interface Extra {
+        void attach(WebView web);
+        void stop();
+        void destroy();
+    }
 
     @Override
     protected void onCreate(Bundle state) {
@@ -66,7 +96,7 @@ public class MainActivity extends Activity {
             WebView.setWebContentsDebuggingEnabled(true);
         }
         web = new WebView(this);
-        web.setBackgroundColor(getResources().getColor(R.color.background));
+        opaque(web);
         WebSettings s = web.getSettings();
         if (BuildConfig.USER_AGENT != null) {
             s.setUserAgentString(BuildConfig.USER_AGENT);
@@ -77,18 +107,39 @@ public class MainActivity extends Activity {
         s.setDomStorageEnabled(true);
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setAllowFileAccess(true);
-        s.setAllowUniversalAccessFromFileURLs(true);
+        otherSitesFromFile(s);
         // The page is laid out at 1280 wide (its viewport) and drawn at the
         // screen's size
         s.setUseWideViewPort(true);
         s.setLoadWithOverviewMode(true);
         s.setSupportZoom(false);
+        // The page's text at the page's own sizes: Android's text size
+        // (Accessibility) would enlarge it inside boxes measured for it
+        s.setTextZoom(100);
         web.setWebChromeClient(new WebChromeClient() {
             @Override
             public Bitmap getDefaultVideoPoster() {
                 // Nothing until a stream's first picture (the web view's own
                 // poster is a grey play icon; webOS draws none)
                 return Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
+            }
+
+            @Override
+            public void onPermissionRequest(PermissionRequest request) {
+                // Protected media for YouTube's own pages alone (a film in
+                // its player, framed in Bolli YouTube's page: asked of the
+                // web view, which says no where nobody answers); all else
+                // is refused
+                Uri origin = request.getOrigin();
+                String host = origin == null ? null : origin.getHost();
+                boolean youtube = host != null && "https".equals(origin.getScheme())
+                        && (host.equals("youtube.com") || host.endsWith(".youtube.com"));
+                String media = PermissionRequest.RESOURCE_PROTECTED_MEDIA_ID;
+                if (youtube && Arrays.asList(request.getResources()).contains(media)) {
+                    request.grant(new String[] { media });
+                } else {
+                    request.deny();
+                }
             }
         });
         web.setWebViewClient(new WebViewClient() {
@@ -102,7 +153,16 @@ public class MainActivity extends Activity {
         });
         web.addJavascriptInterface(new Shell(), "BolliAndroid");
         setContentView(web);
-        web.loadUrl("file:///android_asset/index.html");
+        if (BuildConfig.EXTRA != null) {
+            try {
+                extra = (Extra) Class.forName(BuildConfig.EXTRA).getDeclaredConstructor().newInstance();
+            } catch (ReflectiveOperationException e) {
+                // (the build names its own class: one it has not is the build's fault, not to be run past)
+                throw new IllegalStateException(e);
+            }
+            extra.attach(web);
+        }
+        web.loadUrl("file:///android_asset/index.html#" + copyKey);
     }
 
     @Override
@@ -139,10 +199,16 @@ public class MainActivity extends Activity {
         if (!listening && (leaving || isFinishing())) {
             showHomeLogo();
         }
+        if (extra != null) {
+            extra.stop();
+        }
     }
 
     @Override
     protected void onDestroy() {
+        if (extra != null) {
+            extra.destroy();
+        }
         // A web view is destroyed out of its window (also after recreate())
         ((ViewGroup) web.getParent()).removeView(web);
         web.destroy();
@@ -166,16 +232,25 @@ public class MainActivity extends Activity {
 
     @Override
     public boolean dispatchKeyEvent(KeyEvent e) {
-        int code = lgCode(e.getKeyCode());
+        int key = e.getKeyCode();
+        // A keyboard's Enter while the page's text field has Android's
+        // keyboard: the field's own, a key typed there (the page hands the
+        // text over by it), where the remote's OK stays the app's (the
+        // field left, it brings Android's keyboard back)
+        if (typing && (key == KeyEvent.KEYCODE_ENTER || key == KeyEvent.KEYCODE_NUMPAD_ENTER)) {
+            return super.dispatchKeyEvent(e);
+        }
+        int code = lgCode(key);
         if (code == 0) {
             // Home, volume, the Assistant: the system's
             return super.dispatchKeyEvent(e);
         }
-        // Down (also its repeats while held); up only for OK, as holding OK
-        // is a key of its own (the page has no use for the others)
+        // Down, with whether it is a press and not a held key's repeat
+        // (Android counts those); up only for OK, as holding OK is a key
+        // of its own (the page has no use for the others)
         boolean up = e.getAction() == KeyEvent.ACTION_UP;
         if (!up || code == 13) {
-            web.evaluateJavascript("window.bolliKey&&bolliKey(" + code + "," + up + ")", null);
+            web.evaluateJavascript("window.bolliKey&&bolliKey(" + code + "," + up + "," + (e.getRepeatCount() == 0) + ")", null);
         }
         return true;
     }
@@ -286,6 +361,15 @@ public class MainActivity extends Activity {
             case KeyEvent.KEYCODE_PROG_YELLOW: return 405;
             case KeyEvent.KEYCODE_PROG_BLUE: return 406;
             case KeyEvent.KEYCODE_GUIDE: return 458;
+            // The media keys as LG's remote sends them; play/pause in one key as the browsers' code (Bolli Twitch
+            // knew it from the web view before)
+            case KeyEvent.KEYCODE_MEDIA_PLAY: return 415;
+            case KeyEvent.KEYCODE_MEDIA_PAUSE: return 19;
+            case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE: return 179;
+            case KeyEvent.KEYCODE_MEDIA_REWIND: return 412;
+            case KeyEvent.KEYCODE_MEDIA_FAST_FORWARD: return 417;
+            case KeyEvent.KEYCODE_MEDIA_STOP: return 413;
+            case KeyEvent.KEYCODE_INFO: return 457;
             // A search key (the Assistant key never comes: the system keeps it)
             case KeyEvent.KEYCODE_SEARCH: return 10084;
             default: return 0;
@@ -301,7 +385,52 @@ public class MainActivity extends Activity {
         return !name.startsWith("omx.google.") && !name.startsWith("c2.android.") && !name.contains(".sw.");
     }
 
+    /** The TV's screen */
+    private Display screen() {
+        return ((DisplayManager) getSystemService(DISPLAY_SERVICE)).getDisplay(Display.DEFAULT_DISPLAY);
+    }
+
+    /** The web view opaque again, in the page's own colour (read as a
+     * value: the calls that name a colour are out of use, or newer than
+     * Android 5.1) */
+    public static void opaque(WebView web) {
+        TypedValue page = new TypedValue();
+        web.getResources().getValue(R.color.background, page, true);
+        web.setBackgroundColor(page.data);
+    }
+
+    /** The page is a file of the app's own and asks other sites (the
+     * broadcaster's, YouTube's): allowed by a switch Android marks as
+     * out of use, with nothing in its place short of serving the page
+     * from an address */
+    @SuppressWarnings("deprecation")
+    private static void otherSitesFromFile(WebSettings s) {
+        s.setAllowUniversalAccessFromFileURLs(true);
+    }
+
+    /** The screen's lines on Android 5.1, which names no modes: by the
+     * call Android marks as out of use (the size the app is drawn at
+     * lacks a navigation bar's lines where a device has one) */
+    @SuppressWarnings("deprecation")
+    private static int realLines(Display display) {
+        Point size = new Point();
+        display.getRealSize(size);
+        return Math.min(size.x, size.y);
+    }
+
+    /** A decoder's word on a picture's size at a frame rate (0: any) */
+    private static boolean sized(MediaCodecInfo.VideoCapabilities caps, int width, int height, double fps) {
+        return fps > 0 ? caps.areSizeAndRateSupported(width, height, fps) : caps.isSizeSupported(width, height);
+    }
+
     /** The page's calls (src/core/platform.ts: AndroidShell); they come on a thread of their own */
+    /** The page's second copy (keep, kept): a power cut cannot break it, where the web view's own storage can lose
+     * what was written after a write the cut broke (Android keeps the file before as a backup while it writes it anew
+     * and syncs it to the disk, and goes back to the backup if a write did not end) */
+    private SharedPreferences copy() {
+        return getSharedPreferences("page-copy", MODE_PRIVATE);
+    }
+
     private class Shell {
         @JavascriptInterface
         public void exit() {
@@ -345,7 +474,7 @@ public class MainActivity extends Activity {
                 });
                 return true;
             }
-            Display display = getWindowManager().getDefaultDisplay();
+            Display display = screen();
             if (Math.abs(display.getMode().getRefreshRate() - hz) < 0.1f) {
                 return true;
             }
@@ -384,7 +513,9 @@ public class MainActivity extends Activity {
                         continue;
                     }
                     MediaCodecInfo.VideoCapabilities caps = info.getCapabilitiesForType(type).getVideoCapabilities();
-                    if (caps != null && (fps > 0 ? caps.areSizeAndRateSupported(width, height, fps) : caps.isSizeSupported(width, height))) {
+                    // (an upright picture also as the same one lying: decoders name their sizes lying, 1920x1088
+                    // at most on many, and play 1080x1920 all the same; Android's own player asks them so too)
+                    if (caps != null && (sized(caps, width, height, fps) || height > width && sized(caps, height, width, fps))) {
                         return true;
                     }
                 }
@@ -395,6 +526,21 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void keepScreenOn(boolean on) {
             runOnUiThread(() -> web.setKeepScreenOn(on));
+        }
+
+        /** Android's own keyboard for the page's text field that has the
+         * focus (the page asks: a focus a script gives brings none), or
+         * put away; what was asked before and has not run yet is dropped
+         * (a field left at once gets no keyboard after it). Its own Back
+         * puts it away with nothing told: the page learns of that by the
+         * next OK or arrow that reaches it, which the keyboard would have
+         * taken */
+        @JavascriptInterface
+        public void keyboard(boolean shown) {
+            typing = shown;
+            web.removeCallbacks(showKeyboard);
+            web.removeCallbacks(hideKeyboard);
+            web.post(shown ? showKeyboard : hideKeyboard);
         }
 
         @JavascriptInterface
@@ -436,17 +582,67 @@ public class MainActivity extends Activity {
             return !getPackageManager().queryIntentActivities(speech(), 0).isEmpty();
         }
 
+        /** The display's mode for Stats for nerds, as JSON (src/core/platform.ts display): hz, width, height, rates
+         * (the modes' at this size), match (the user's match-content-frame-rate choice), asked (the rate this window
+         * asks for, 0 none); what the API level does not tell is left out */
+        @JavascriptInterface
+        public String display() {
+            JSONObject o = new JSONObject();
+            try {
+                Display display = screen();
+                o.put("hz", display.getRefreshRate());
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    Display.Mode now = display.getMode();
+                    o.put("width", now.getPhysicalWidth());
+                    o.put("height", now.getPhysicalHeight());
+                    int asked = getWindow().getAttributes().preferredDisplayModeId;
+                    JSONArray rates = new JSONArray();
+                    for (Display.Mode m : display.getSupportedModes()) {
+                        if (m.getPhysicalWidth() == now.getPhysicalWidth() && m.getPhysicalHeight() == now.getPhysicalHeight()) {
+                            rates.put((double) m.getRefreshRate());
+                        }
+                        if (asked != 0 && m.getModeId() == asked) {
+                            o.put("asked", m.getRefreshRate());
+                        }
+                    }
+                    o.put("rates", rates);
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    int match = getSystemService(DisplayManager.class).getMatchContentFrameRateUserPreference();
+                    o.put("match", match == DisplayManager.MATCH_CONTENT_FRAMERATE_ALWAYS ? "always"
+                            : match == DisplayManager.MATCH_CONTENT_FRAMERATE_SEAMLESSS_ONLY ? "seamless"
+                            : match == DisplayManager.MATCH_CONTENT_FRAMERATE_NEVER ? "never" : "unknown");
+                }
+            } catch (JSONException e) {
+                // (a rate that is not a number: what was put so far)
+            }
+            return o.toString();
+        }
+
+        /** A key the page keeps, as it is now stored there (null: removed), into its second copy (src/youtube/core/
+         * store.ts), for the page that has the copy's key alone and for the page's own keys: written in the
+         * background, at once */
+        @JavascriptInterface
+        public void keep(String key, String value, String token) {
+            if (copyKey.equals(token) && key != null && key.startsWith("bolli.")) {
+                copy().edit().putString(key, value).apply();
+            }
+        }
+
+        /** The page's second copy, as JSON (each key with its value), for the page that has its key alone */
+        @JavascriptInterface
+        public String kept(String token) {
+            return copyKey.equals(token) ? new JSONObject(copy().getAll()).toString() : "{}";
+        }
+
         @JavascriptInterface
         public int screenHeight() {
-            Display display = getWindowManager().getDefaultDisplay();
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
-                Point size = new Point();
-                display.getRealSize(size);
-                return Math.min(size.x, size.y);
+                return realLines(screen());
             }
             // (The largest mode: the UI often runs at 1080p on a 4K TV)
             int most = 0;
-            for (Display.Mode m : display.getSupportedModes()) {
+            for (Display.Mode m : screen().getSupportedModes()) {
                 most = Math.max(most, Math.min(m.getPhysicalWidth(), m.getPhysicalHeight()));
             }
             return most;

@@ -16,6 +16,16 @@ export var KEY = {
     BACK: 461,
     CH_UP: 33,
     CH_DOWN: 34,
+    /** The remote's media keys: play, pause, rewind, fast-forward */
+    PLAY: 415,
+    PAUSE: 19,
+    REWIND: 412,
+    FORWARD: 417,
+    /** Play/pause in one key: the browsers' code, which Android's remotes send (MainActivity; LG's have none) */
+    PLAY_PAUSE: 179,
+    /** Stop and Info (the shortcuts' keys) */
+    STOP: 413,
+    INFO: 457,
     RED: 403,
     GREEN: 404,
     YELLOW: 405,
@@ -51,7 +61,11 @@ var active: KeyHandler | null = null;
 var REPEAT_MS = 80;
 var lastCode = -1;
 var lastTime = 0;
-var HOLD_MS = 500;
+/** OK down this long is a hold (a tile's menu): Android's own long press, as Bolli Twitch has it since 2026-11-14. The
+ * remotes' first repeat of a held key comes about 0.5 s after the press; at 500 ms a release that came with it could
+ * be read first and the hold taken for a press (a user, issue #9, 2026-11-24, on a webOS 4 TV: "sometimes when long
+ * press a video to enter in a profile, video play"; not reproduced here) */
+var HOLD_MS = 400;
 var holdOk = false;
 var okDown = false;
 var okTimer = 0;
@@ -66,7 +80,7 @@ var own = true;
 var OWN_STEP_MS = 250;
 /** What a press of its own lands on is asked for this long after it: right after the frame that moves the focus */
 export var ASK_MS = 40;
-/** The key let go since its last press (a keyup came) */
+/** The key let go since its last press (a keyup came, or the Android app told a key down as a press) */
 var released = true;
 
 export function setActive(handler: KeyHandler): void {
@@ -92,6 +106,9 @@ export function setHoldOk(on: boolean): void {
     releaseOk();
 }
 
+/** The Android app's call for each key of the remote (initKeys): pressed, a press and not a held key's repeat */
+export type BolliKey = (code: number, isUp?: boolean, pressed?: boolean) => void;
+
 export function initKeys(): void {
     document.addEventListener('keydown', function (e: KeyboardEvent) {
         if (typing ? typing(e.keyCode) : down(e.keyCode)) {
@@ -103,14 +120,18 @@ export function initKeys(): void {
             e.preventDefault();
         }
     }, true);
-    // The Android app intercepts the remote's keys before its web view and
-    // passes each one here as the codes above (android/: MainActivity)
-    (window as unknown as { bolliKey?: (code: number, isUp?: boolean) => void }).bolliKey = function (code: number, isUp?: boolean) {
+    // The Android app intercepts the remote's keys before its web view and passes each one here as the codes above
+    // (android/: MainActivity). pressed: a press, not a held key's repeat (Android counts those; the release that
+    // tells it for the TV's own keys is passed for OK alone)
+    (window as unknown as { bolliKey?: BolliKey }).bolliKey = function (code: number, isUp?: boolean, pressed?: boolean) {
         if (isUp) {
             up(code);
-        } else {
-            down(code);
+            return;
         }
+        if (pressed) {
+            released = true;
+        }
+        down(code);
     };
     // An OK release while the app is hidden never arrives
     document.addEventListener('visibilitychange', releaseOk);

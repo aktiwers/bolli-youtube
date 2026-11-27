@@ -2,7 +2,9 @@
 // clickbait), in its classic mode, or its casual one (YouTube's titles stay where its users voted them fine); with
 // Settings' options: its thumbnails, a random frame where none was submitted, and every title tidied (title-format.ts).
 // Each video's branding comes from DeArrow's server, a few at a time in the order asked, and is kept: the latest on the
-// device for a few days, so pages drawn from the device at start (Home) draw with it at once.
+// device for a few days, so pages drawn from the device at start (Home) draw with it at once. An answer that nothing
+// was submitted is believed for half a day only: asked again after that when the video is drawn again, behind the
+// page's back (the page does not wait for it, and shows what comes of it when it is next drawn).
 // A thumbnail is a frame from DeArrow's thumbnail server, which sends the picture on to YouTube's thumbnail when it
 // has no frame ready. Whatever DeArrow lacks or fails at keeps YouTube's own.
 
@@ -24,6 +26,14 @@ var KEPT = 3000;
 var STORE_KEY = 'youtube.dearrow2';
 var STORED = 1000;
 var STORED_DAYS = 3;
+/** How long an answer is believed before the video is asked about again (hours): one with a title or a frame of its
+ * users' as long as it is kept; one with nothing submitted half a day: a new video often gets its title or frame from
+ * DeArrow's users within days of its upload. (Until then such an
+ * answer held for 3 days on the device, and for as long as the app ran: a TV left on never asked again.) Half a
+ * day, so that a video seen one evening is asked again the next. For DeArrow's server one small request more for
+ * a video still being shown half a day later, none for the rest */
+var BELIEVED_HOURS = STORED_DAYS * 24;
+var NOTHING_HOURS = 12;
 /** Written this long after the last arrival (and when the app hides or exits: saveDearrow) */
 var STORE_MS = 30000;
 
@@ -37,8 +47,8 @@ export interface Branding {
     random: number;
     /** The titles its users voted fine as they are, lowercase ('' any title) */
     casual: string[];
-    /** The day it came (kept ones) */
-    day?: number;
+    /** The hour it came (kept ones; hours since 1970) */
+    at?: number;
 }
 
 interface Submission {
@@ -68,6 +78,10 @@ var shownCount = 0;
 var shownAs = '';
 /** Waiting to be asked (with the video's length, for a random frame), and how many are being asked */
 var queue: { id: string; length: number }[] = [];
+/** Videos asked about again (their answer no longer believed: dearrowFetch), after all of queue, two of the requests at
+ * once left free meanwhile: nothing waits for these, and a screen waiting for its titles must not wait behind them (at
+ * this version's first start most of what is kept is asked again) */
+var later: { id: string; length: number }[] = [];
 var queued: { [id: string]: boolean } = {};
 var asking = 0;
 /** Told of each video whose branding arrives */
@@ -103,17 +117,22 @@ export interface Wanted {
     page?: unknown;
 }
 
-/** Stored on the device: [id, title, frame, random, day, casual] each */
+/** Stored on the device: [id, title, frame, random, hour, casual] each (the hour it came; a day in what an earlier
+ * version stored: read as that day's last hour, so that what came today is not all asked again at the first start
+ * of this version: on the TV 886 of the 1000 kept were answers with nothing) */
 type Stored = [string, string, number, number, number, string[]];
+/** Hours since 1970 are above this, days below (an earlier version's stamp) */
+var FIRST_HOUR = 100000;
 
 /** The known branding, the stored part read on first use (days old ones dropped) */
 function knownBranding(): { [id: string]: Branding } {
     if (!known) {
         known = {};
-        var today = day();
+        var now = hour();
         (load<Stored[]>(STORE_KEY) || []).forEach(function (s) {
-            if (today - s[4] < STORED_DAYS) {
-                known![s[0]] = { title: s[1], frame: s[2], random: s[3], casual: s[5] || [], day: s[4] };
+            var at = s[4] < FIRST_HOUR ? s[4] * 24 + 23 : s[4];
+            if (now - at < STORED_DAYS * 24) {
+                known![s[0]] = { title: s[1], frame: s[2], random: s[3], casual: s[5] || [], at: at };
                 order.push(s[0]);
             }
         });
@@ -121,8 +140,13 @@ function knownBranding(): { [id: string]: Branding } {
     return known;
 }
 
-function day(): number {
-    return Math.floor(Date.now() / 86400000);
+function hour(): number {
+    return Math.floor(Date.now() / 3600000);
+}
+
+/** Whether a kept answer is still believed at hour now: else its video is asked about again (dearrowFetch) */
+function believed(b: Branding, now: number): boolean {
+    return now - (b.at || 0) < (b.title || b.frame >= 0 ? BELIEVED_HOURS : NOTHING_HOURS);
 }
 
 /** The branding of a DeArrow reply (a video with nothing submitted comes with only the random frame's time); length: the
@@ -189,22 +213,30 @@ export function dearrowPicture(id: string, youtube: string): string {
 }
 
 /** The videos' branding asked for where not known yet (pages are skipped), ahead of those asked for before if first
- * (a screen waiting for it); the ids still to come */
+ * (a screen waiting for it); the ids still to come. A video whose answer is no longer believed is asked about again
+ * as well, without being among those to come: what is kept of it shows meanwhile, and nothing waits for the new one */
 export function dearrowFetch(videos: Wanted[], first?: boolean): string[] {
     var missing: string[] = [];
     var seen: { [id: string]: boolean } = {};
     var jobs: { id: string; length: number }[] = [];
     var all = knownBranding();
     var now = Date.now();
+    var thisHour = hour();
     videos.forEach(function (v) {
-        if (v.page || v.id in all || seen[v.id] || now - (failed[v.id] || 0) < RETRY_MS) {
+        if (v.page || seen[v.id] || now - (failed[v.id] || 0) < RETRY_MS) {
             return;
         }
-        seen[v.id] = true;
-        missing.push(v.id);
+        var had = all[v.id];
+        if (had && believed(had, thisHour)) {
+            return;
+        }
+        if (!had) {
+            seen[v.id] = true;
+            missing.push(v.id);
+        }
         if (!queued[v.id]) {
             queued[v.id] = true;
-            jobs.push({ id: v.id, length: seconds(v.length || '') });
+            (had ? later : jobs).push({ id: v.id, length: seconds(v.length || '') });
         }
     });
     // First: the new ones, and those already waiting, before the rest (one being asked stays as it is)
@@ -258,6 +290,9 @@ function askNext(): void {
     while (asking < PARALLEL && queue.length) {
         ask(queue.shift()!);
     }
+    while (asking < PARALLEL - 2 && later.length) {
+        ask(later.shift()!);
+    }
 }
 
 function ask(job: { id: string; length: number }): void {
@@ -297,7 +332,14 @@ function ask(job: { id: string; length: number }): void {
 /** Keeps a video's branding, the latest stored a moment after the last arrival */
 function keep(id: string, b: Branding): void {
     var all = knownBranding();
-    b.day = day();
+    b.at = hour();
+    // (asked about again: its place among the kept is its new one, or the old one would take it out when its turn came)
+    if (id in all) {
+        var was = order.indexOf(id);
+        if (was >= 0) {
+            order.splice(was, 1);
+        }
+    }
     all[id] = b;
     delete failed[id];
     order.push(id);
@@ -320,7 +362,7 @@ export function saveDearrow(): void {
     for (var i = order.length - 1; i >= 0 && list.length < STORED; i--) {
         var b = all[order[i]];
         if (b) {
-            list.push([order[i], b.title, b.frame, b.random, b.day || day(), b.casual]);
+            list.push([order[i], b.title, b.frame, b.random, b.at || hour(), b.casual]);
         }
     }
     save(STORE_KEY, list.reverse());

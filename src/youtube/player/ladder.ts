@@ -11,8 +11,9 @@
  * when new URLs in place were tried since it (0: not since), how many tries a lost line alone bought and when one last
  * did (0: never), how many tries anew it has had since its picture last played on a good while (retryWait; the player
  * counts anew then) and since when YouTube alone has been failing it on a line that answers (noted; 0: it is not),
- * whether new URLs are on the way, whether the streams were fetched the other way (SABR or guest), and the codecs
- * tried by the method playing */
+ * whether new URLs are on the way, whether the streams were fetched the other way (SABR or guest), the codecs
+ * tried by the method playing, and those among them that showed no picture by the start's or the decoder's own word
+ * (told once another kind moves: the player's kindFailed, kindMoves) */
 export interface Tries {
     renewedAt: number;
     inPlaceAt: number;
@@ -23,10 +24,11 @@ export interface Tries {
     renewing: boolean;
     switched: boolean;
     kinds: { [kind: string]: boolean };
+    unstarted: { [kind: string]: boolean };
 }
 
 export function noTries(): Tries {
-    return { renewedAt: 0, inPlaceAt: 0, lostRenewals: 0, lostTriedAt: 0, retries: 0, youtubeAt: 0, renewing: false, switched: false, kinds: {} };
+    return { renewedAt: 0, inPlaceAt: 0, lostRenewals: 0, lostTriedAt: 0, retries: 0, youtubeAt: 0, renewing: false, switched: false, kinds: {}, unstarted: {} };
 }
 
 /** Tries a start may take for a lost line alone (within againMs of the last renewal): beyond them a line that keeps

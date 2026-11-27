@@ -118,7 +118,8 @@ export function holdStep(held: number): number {
 
 /** How long the app waits to take what a key picked, the key gap ms after the one before (ms): a press of its own at
  * once (0), one soon after another (a held key's repeats) once the keys rest (HOLD_REST_MS): Settings › Theme's pages
- * over the app (views/colour-page.ts, views/icon-page.ts) and Loading spinner's preview (views/sign-preview.ts) */
+ * over the app (views/colour-page.ts, views/icon-page.ts), its choices over the app (views/settings.ts onApp) and
+ * Loading spinner's preview (views/sign-preview.ts) */
 export function holdRest(gap: number, within?: number): number {
     return gap < (within || HOLD_GAP_MS) ? HOLD_REST_MS : 0;
 }

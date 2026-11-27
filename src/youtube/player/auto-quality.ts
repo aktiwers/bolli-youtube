@@ -41,16 +41,19 @@ export class AutoQuality {
     }
 
     /** The step to take at now: -1 down, 1 up, 0 none. ahead: s buffered ahead of the playhead; bitrate: the playing
-     * format's; up: the next quality up's (0: none) */
-    step(now: number, ahead: number, bitrate: number, up: number): number {
+     * format's; up: the next quality up's (0: none); most: the most the engine loads ahead (s; none: as much as
+     * wanted), which a buffer as full as it gets reaches less a second, and a low one does not half of */
+    step(now: number, ahead: number, bitrate: number, up: number, most?: number): number {
+        var low = most ? Math.min(LOW_S, most / 2) : LOW_S;
+        var high = most ? Math.min(HIGH_S, most - 1) : HIGH_S;
         var from = now - STALLS_MS;
         this.stalls = this.stalls.filter(function (t) { return t > from; });
         var calm = now - this.calmFrom >= CALM_MS;
         var speed = this.speed();
-        if (this.stalls.length >= STALLS || calm && speed > 0 && speed < bitrate * SLOW && ahead < LOW_S) {
+        if (this.stalls.length >= STALLS || calm && speed > 0 && speed < bitrate * SLOW && ahead < low) {
             return -1;
         }
-        return calm && up > 0 && speed >= up * UP && ahead >= HIGH_S ? 1 : 0;
+        return calm && up > 0 && speed >= up * UP && ahead >= high ? 1 : 0;
     }
 
     /** A step was taken at now: the stalls and speeds before it no longer count */

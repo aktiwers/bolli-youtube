@@ -9,6 +9,7 @@ import { tr } from '../core/i18n.js';
 import { Keyboard, KeyboardLabels } from './keyboard.js';
 import { icon } from './icons.js';
 import { composed, erased, GAP, KeyboardLanguage, keyboardLanguage, SYMBOLS } from './keyboard-languages.js';
+import { ownKeyboard } from './tv-field.js';
 
 var DELETE = 'Delete';
 var NUMBERS = '&123';
@@ -98,7 +99,8 @@ export class SearchKeyboard {
 
     /** The rows (the letters, or the numbers and symbols) with the side keys, then Space, Clear and Search */
     private lines(): string[][] {
-        var side = this.symbols ? [DELETE, LETTERS, '', TV] : [DELETE, NUMBERS, LANGUAGE, TV];
+        var tv = ownKeyboard() ? TV : '';
+        var side = this.symbols ? [DELETE, LETTERS, '', tv] : [DELETE, NUMBERS, LANGUAGE, tv];
         var lines = (this.symbols ? SYMBOLS : this.language.rows).map(function (row, i) {
             var keys = row.split('').map(function (c) { return c === GAP ? '' : c; });
             return side[i] ? keys.concat([side[i]]) : keys;

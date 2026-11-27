@@ -103,6 +103,8 @@ export interface TileRowOptions {
     /** Build tiles only once the row is drawn (setImages, setActive, focusAt), not on creation: a page of 18 rows
      * with 3 in view took ~100 ms to build all tiles */
     lazy?: boolean;
+    /** The kind of tiles, for the theme (bd-row--<kind>: 'short', a row of Shorts) */
+    kind?: string;
 }
 
 /** Default spacing (1280x720 units) */
@@ -136,6 +138,8 @@ interface Tile {
     label: HTMLElement | null;
     /** The progress bar's fill (null: none yet) */
     bar: HTMLElement | null;
+    /** A tile without lines: its title, as tall as the room under the picture (null: one with lines) */
+    box: HTMLElement | null;
 }
 
 export class TileRow {
@@ -144,6 +148,8 @@ export class TileRow {
     private made: TileItem[] = [];
     private toMake: (() => TileItem[]) | null = null;
     private strip: HTMLElement;
+    /** The row's name over its tiles (none: a row without one) */
+    private title: HTMLElement | null = null;
     /** The focus ring (made when the row first marks a tile: most rows of a screen never do), and its size,
      * roundness and showing as last set */
     private ring: HTMLElement | null = null;
@@ -190,9 +196,10 @@ export class TileRow {
         this.home = this.usual();
         // Without a heading the row starts higher (bd-row--bare), so it does
         // not clip the top of a focused tile's enlarged frame
-        this.el = h('div', (options.noTitle ? 'bd-row bd-row--bare' : 'bd-row') + (options.wideShape ? ' bd-row--wide' : ''));
+        this.el = h('div', (options.noTitle ? 'bd-row bd-row--bare' : 'bd-row') + (options.wideShape ? ' bd-row--wide' : '') +
+            (options.kind ? ' bd-row--' + options.kind : ''));
         if (!options.noTitle) {
-            var title = h('div', options.subtitle ? 'bd-row-title bd-row-title--sub' : 'bd-row-title', options.title);
+            var title = this.title = h('div', options.subtitle ? 'bd-row-title bd-row-title--sub' : 'bd-row-title', options.title);
             title.style.height = this.layout.head + 'px';
             if (options.icon) {
                 var icon = h('img', 'bd-row-icon') as HTMLImageElement;
@@ -211,7 +218,7 @@ export class TileRow {
         // its row was first focused had its tiles drawn anew then, and those of the rows after it
         translate(this.strip, 0, 0);
 
-        this.strip.style.height = Math.max(options.shape.h, options.wideShape ? options.wideShape.h : 0) + this.layout.under + ROOM_ABOVE + 'px';
+        this.strip.style.height = this.stripHeight() + 'px';
         this.el.appendChild(this.strip);
         var self = this;
         takesPointer(this.el, function (target) {
@@ -329,7 +336,7 @@ export class TileRow {
         toggleClass(this.el, 'bd-row--big', shape !== this.options.shape);
         this.step = shape.w + this.layout.gap;
         this.screen = Math.ceil(LAYOUT_WIDTH / this.step);
-        this.strip.style.height = shape.h + this.layout.under + ROOM_ABOVE + 'px';
+        this.strip.style.height = this.stripHeight() + 'px';
         for (var i = 0; i < this.tiles.length; i++) {
             var tile = this.tiles[i];
             if (tile) {
@@ -340,6 +347,37 @@ export class TileRow {
         this.scroll();
         this.update();
         this.placeRing();
+    }
+
+    /** The room under the tiles for their text another height, and over them for the row's name (head; Settings › Theme
+     * › Text size: views/videos.ts respace), in place: the strip that much taller, the title of a tile without lines with
+     * it, the name's box as tall as the head; nothing else is laid anew */
+    setUnder(under: number, head: number): void {
+        var l = this.layout;
+        // (a row without a name keeps its own head)
+        head = this.title ? head : l.head;
+        if (under === l.under && head === l.head) {
+            return;
+        }
+        this.layout = { pad: l.pad, gap: l.gap, under: under, head: head, rowGap: l.rowGap };
+        if (this.title && head !== l.head) {
+            this.title.style.height = head + 'px';
+        }
+        if (under === l.under) {
+            return;
+        }
+        this.strip.style.height = this.stripHeight() + 'px';
+        for (var i = 0; i < this.tiles.length; i++) {
+            var box = this.tiles[i] ? this.tiles[i]!.box : null;
+            if (box) {
+                box.style.height = box.style.lineHeight = under + 'px';
+            }
+        }
+    }
+
+    /** The strip's height: its tiles (a wide one's, the tallest), the room under them, the room above them */
+    private stripHeight(): number {
+        return Math.max(this.shape.h, this.options.wideShape ? this.options.wideShape.h : 0) + this.layout.under + ROOM_ABOVE;
     }
 
     /** screens: screens of images kept from the margin (0: none, the row is
@@ -704,16 +742,20 @@ function buildTile(item: TileItem, shape: TileShape, textH: number): Tile {
         frame.appendChild(more);
     }
     var title = h('div', 'bd-tile-title', seeAll ? '' : item.title);
+    var box: HTMLElement | null = null;
     if (item.lines) {
         // Title and lines: the theme lays them out in the space under the image
         el.appendChild(title);
         item.lines.forEach(function (line, i) {
             var chips = i === item.lines!.length - 1 ? item.chips : null;
+            // (the lines after the first marked by a class: a sibling selector (+) made Chrome 38 restyle the whole page
+            // as a sheet holding one changed, as Text size's poster rules do: ui/text-sizes.ts posterRules)
+            var cls = i ? 'bd-tile-line bd-tile-line--next' : 'bd-tile-line';
             if (!chips) {
-                el.appendChild(h('div', 'bd-tile-line', line));
+                el.appendChild(h('div', cls, line));
                 return;
             }
-            var lineEl = el.appendChild(h('div', 'bd-tile-line')) as HTMLElement;
+            var lineEl = el.appendChild(h('div', cls)) as HTMLElement;
             chips.forEach(function (chip) {
                 lineEl.appendChild(h('span', chip === item.offerChip ? 'bd-tile-chip bd-tile-chip--offer' : 'bd-tile-chip', chip));
             });
@@ -722,11 +764,12 @@ function buildTile(item: TileItem, shape: TileShape, textH: number): Tile {
     } else {
         title.style.height = title.style.lineHeight = textH + 'px';
         el.appendChild(title);
+        box = title;
     }
     if (item.rank) {
         el.appendChild(h('div', 'bd-tile-rank', item.rank));
     }
-    var tile: Tile = { el: el, frame: frame, img: img, hasImage: false, label: null, bar: null };
+    var tile: Tile = { el: el, frame: frame, img: img, hasImage: false, label: null, bar: null, box: box };
     sizeTile(tile, shape, !!item.round);
     if (item.progress) {
         progressTile(tile, item.progress);

@@ -102,8 +102,23 @@ var drawers: ((file: string, round: boolean) => void)[] = [];
 var drawnId: string | null = null;
 
 /** The logo set: the look's on top, else the account's own */
-function logoId(): string {
+function setId(): string {
     return prefs().lookLogo || prefs().logo;
+}
+
+/** A logo drawn in place of the one set while a look is tried (Settings › Theme › Theme's focus on it: ui/theme.ts
+ * tryWholeLook), not set; null: none */
+var tried: string | null = null;
+
+/** The logo drawn: one tried, else the one set */
+function logoId(): string {
+    return tried !== null ? tried : setId();
+}
+
+/** id to be drawn in place of the logo set without setting it (a logo's value), or the one set again (null): drawn
+ * with the look tried, as ui/theme.ts applyLook shows the logo (showLogo) */
+export function tryLogo(id: string | null): void {
+    tried = id;
 }
 
 /** A logo chosen by hand (Settings › Theme › Logo): the account's own; where a look's is on top, it takes its place
@@ -181,7 +196,7 @@ export function signedIn(): boolean {
  * account's picture only while an account is signed in; a custom one only while it is there; a built-in one only while
  * it is listed; else the first */
 export function shownLogo(): string {
-    var id = logoId();
+    var id = setId();
     return id === NONE || id === ACCOUNT && signedIn() || isCustom(id) && customOf(id) || listed(id) ? id : LOGOS[0].id;
 }
 
@@ -241,8 +256,9 @@ export function applyLogo(): void {
     drawers.forEach(function (draw) { draw(file, round); });
 }
 
-/** The look shown changed (ui/theme.ts applyLook): the logo set drawn anew where drawLogo draws it only when it is not
- * the one drawn there (a look chosen that names another); before anything draws it, the first drawLogo does */
+/** The look shown changed (ui/theme.ts applyLook): the logo shown (a look's tried, else the one set) drawn anew where
+ * drawLogo draws it, only when it is not the one drawn there (a look chosen or tried that names another); before
+ * anything draws it, the first drawLogo does */
 export function showLogo(): void {
     if (drawnId !== null && logoId() !== drawnId) {
         applyLogo();
@@ -265,7 +281,8 @@ export function rowsDrawn(): void {
 
 /** Loads the custom logo drawn by its address if only that is kept (once a run), then draws it */
 function byItsAddress(): void {
-    var c = customOf(logoId());
+    // (the one set: one tried with a look is not fetched for a look over the app)
+    var c = customOf(setId());
     if (!c || c.data || addressAsked[c.id]) {
         return;
     }
@@ -310,7 +327,7 @@ export function setLogoAccount(account: { key: string; url: string } | null): vo
         seen = key;
         save(SEEN_KEY, key);
     }
-    if (logoId() === ACCOUNT || key !== before) {
+    if (setId() === ACCOUNT || key !== before) {
         applyLogo();
     }
     if (rowsIn) {
@@ -336,7 +353,7 @@ function refreshQuietly(): void {
  * fails, the storage does not take it, or a later download overtook this one. */
 function refreshAccountLogo(again: boolean): Promise<void> {
     var account = who;
-    if (logoId() !== ACCOUNT || !account || !account.url) {
+    if (setId() !== ACCOUNT || !account || !account.url) {
         return Promise.resolve();
     }
     accountPicture();

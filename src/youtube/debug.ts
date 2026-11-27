@@ -6,7 +6,7 @@ import { Page, Video } from './api/feed.js';
 import { offThreadStats } from './api/off-thread.js';
 import { tryLook } from './ui/theme.js';
 import { prefs, reloadPrefs, setPref } from './api/prefs.js';
-import { forgetStreams, sabrStreams, streams, takeLiveAsOver } from './api/streams.js';
+import { forgetStreams, onRawFormats, sabrStreams, streams, Streams, takeLiveAsOver, takeSized } from './api/streams.js';
 import { identities, innertube, innertubeAs } from './api/youtube.js';
 import { Cast } from './cast.js';
 import { fakeNet } from './core/fake-net.js';
@@ -41,6 +41,8 @@ export function debugHooks(app: DebugApp): void {
     };
     // liveAsOver(on): live streams asked for from now on play as one that has ended does (api/streams.ts)
     debug.liveAsOver = takeLiveAsOver;
+    // asTv(on): in LG's simulator, this browser's Media Source taken at its word as a TV's (AV1 where it says yes)
+    debug.asTv = takeSized;
     // fakeNet(mode): the player's requests from now on answered as a failing line or YouTube would (core/fake-net.ts):
     // 'offline' (no answer for media, streams and the line's probe), 'youtube' (media and streams HTTP 503, the probe
     // asked for real), '403' (the same with HTTP 403), 'refuse' (the streams refused as for a video only YouTube's
@@ -59,6 +61,34 @@ export function debugHooks(app: DebugApp): void {
         streams(id).then(function (s) {
             debug.reply = { videos: s.videos.map(function (f) { return f.itag + ' ' + f.height + 'p ' + f.mime; }), audios: s.audios.length, start: !!startFormats(s), paid: s.paid || null };
         }, function (e) { debug.reply = { error: e }; });
+    };
+    // formats(id): all that YouTube offers for a video, as a guest and as the account (SABR), before the app leaves any
+    // out: every field of each format but its addresses (only that it has one) and what tells nothing of its kind (its
+    // index's place, its size, length and date), and what the app keeps of them here (two requests)
+    debug.formats = function (id: string): void {
+        debug.reply = null;
+        var out: { [how: string]: unknown } = {};
+        var one = function (f: { [field: string]: unknown }): { [field: string]: unknown } {
+            var o: { [field: string]: unknown } = {};
+            for (var k in f) {
+                if (k === 'url' || k === 'signatureCipher' || k === 'cipher') {
+                    o['has_' + k] = true;
+                } else if (k !== 'initRange' && k !== 'indexRange' && k !== 'lastModified' && k !== 'approxDurationMs' && k !== 'contentLength') {
+                    o[k] = f[k];
+                }
+            }
+            return o;
+        };
+        var ask = function (how: string, asked: () => Promise<Streams>): Promise<void> {
+            onRawFormats(function (formats) { out[how] = formats.map(one); });
+            return asked().then(function (s) {
+                out[how + 'Kept'] = s.videos.map(function (f) { return f.itag; }).concat(s.audios.map(function (t) { return t.format.itag; }));
+            }, function (e) { out[how + 'Error'] = e; }).then(function () { onRawFormats(null); });
+        };
+        forgetStreams(id);
+        ask('guest', function () { return streams(id, true); }).then(function () {
+            return ask('signed', function () { return sabrStreams(id, '', true); });
+        }).then(function () { debug.reply = out; });
     };
     // sabr(id): the formats the signed-in method (SABR) gets for a video and the time it took, or why it failed
     debug.sabr = function (id: string): void {

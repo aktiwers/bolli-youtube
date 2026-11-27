@@ -48,6 +48,24 @@ html, body { background: #0f0f0f; }
 .by-rail-divider { left: 22px; width: 226px; height: 2px; background: #3f3f3f; opacity: 0; -webkit-transition: opacity .15s ease; pointer-events: none; }
 .by-rail--open .by-rail-divider { opacity: 1; }
 .by-rail-drop { left: 100px; top: 30px; }
+/* Edit sidebar (views/rail.ts edit): the screen dimmed behind the open sidebar, its title, every entry in closer rows
+   with an eye at the right, the one carried the focused one moved a little right (its eye the move
+   arrows), hidden ones dimmed, the line's row a short line in its text where an icon would be, the keys' hints in a pill */
+.by-rail-dim { left: 0; top: 0; width: 1280px; height: 720px; background: rgba(0, 0, 0, .6); }
+.by-rail-title { left: 22px; top: 26px; font-size: 22px; font-weight: 500; color: #f1f1f1; }
+/* (the rows' and the shade's width: ui/theme.ts setRailWidth, from metrics rail.editWidth) */
+.by-rail--edit .by-rail-item { height: 44px; }
+.by-rail--edit .by-rail-icon { top: 10px; }
+.by-rail--edit .by-rail-label { line-height: 44px; font-size: 17px; }
+.by-rail--edit .by-rail-logo { visibility: hidden; }
+.by-rail-mark { right: 12px; top: 10px; width: 24px; height: 24px; color: #aaa; visibility: hidden; }
+.by-rail--edit .by-rail-mark { visibility: inherit; }
+.by-rail-item--focused .by-rail-mark { color: #0f0f0f; }
+.by-rail--open .by-rail-item--carried { -webkit-transform: translateX(10px); }
+.by-rail-item--hidden .by-rail-icon, .by-rail-item--hidden .by-rail-label, .by-rail-item--hidden .by-rail-rule { opacity: .4; }
+.by-rail-rule { left: 18px; top: 21px; width: 24px; height: 2px; background-color: currentColor; }
+.by-rail-hint { left: 380px; top: 652px; height: 44px; line-height: 44px; padding: 0 20px; border-radius: 12px; background: #272727;
+                font-size: 17px; color: #f1f1f1; white-space: nowrap; }
 
 /* The clock: top right, in a dim pill; over a video, in the corner Settings › Clock in videos sets */
 .by-clock, .by-video-clock { top: 16px; padding: 4px 8px; border-radius: 8px; font-size: 19px; color: #fff; }
@@ -94,6 +112,8 @@ html, body { background: #0f0f0f; }
 .bd-tile-title { margin-top: 16px; font-size: 24px; font-weight: 700; line-height: 32px; color: #ababab; overflow: hidden;
                  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; max-height: 64px; }
 .bd-tile--focused .bd-tile-title { color: #f3f3f3; }
+/* A Short's tile (bd-row--short): its upright picture narrower, so its title smaller, as on YouTube's Shorts shelves */
+.bd-row--short .bd-tile-title { margin-top: 12px; font-size: 20px; line-height: 26px; max-height: 52px; }
 .bd-tile-line { font-size: 16px; line-height: 24px; color: #aaa; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* YouTube's chips before the views ("4K", "New") */
 .bd-tile-chip { display: inline-block; margin-right: 6px; padding: 0 5px; border-radius: 4px; background: #303030; font-size: 14px;
@@ -127,10 +147,15 @@ html, body { background: #0f0f0f; }
     left: 20px; right: 120px; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bd-row--wide .bd-tile--focused .bd-tile-title { top: 215px; max-height: none; color: #f1f1f1; }
 .bd-row--wide .bd-tile--focused .bd-tile-line { top: 251px; color: #d0d0d0; }
-.bd-row--wide .bd-tile--focused .bd-tile-line + .bd-tile-line { top: 275px; }
+.bd-row--wide .bd-tile--focused .bd-tile-line--next { top: 275px; }
 .bd-row--wide .bd-tile--focused .bd-tile-label { display: block; z-index: 1; }
 .bd-row--wide .bd-tile--focused .bd-tile-frame:after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 55%;
     background-image: -webkit-linear-gradient(top, rgba(0, 0, 0, 0), rgba(0, 0, 0, .75)); }
+
+/* Settings › Theme › Text size (ui/text-sizes.ts): each kind of text at another size is its rules here written again,
+   scaled (tools/text_sizes.mjs makes the table of them: a rule that sizes text belongs to a kind or is kept on purpose).
+   The text under a tile grows the room under it (ui/theme.ts metrics: the rows and grids that much further apart); a
+   poster's words stand from its picture's foot up (ui/text-sizes.ts posterRules) */
 
 /* A grid's lines (no heading) start a little higher, so the focus ring is not cut off */
 .bd-row--bare { margin-top: -8px; padding-top: 8px; }
@@ -268,9 +293,10 @@ html, body { background: #0f0f0f; }
 .bd-keyboard-line { height: 44px; white-space: nowrap; font-size: 0; }
 .bd-key { width: 44px; height: 44px; line-height: 44px; margin: 0; border-radius: 8px; background: transparent;
           font-size: 24px; font-weight: 400; color: #f1f1f1; text-transform: uppercase; vertical-align: top; }
-.bd-key--focused { background: #f1f1f1; color: #0f0f0f; }
 .bd-key--wide2 { width: auto; min-width: 88px; height: 36px; line-height: 36px; margin: 12px 8px 0 0; padding: 0 12px;
                  box-sizing: border-box; background: #303030; font-size: 16px; font-weight: 700; }
+/* (after the wide keys' own background, so a focused Space, Clear or Done shows the focus) */
+.bd-key--focused { background: #f1f1f1; color: #0f0f0f; }
 .bd-keyboard-line:last-child .bd-key:first-child { margin-left: 10px; }
 .bd-key[data-side] { width: 64px; font-size: 18px; font-weight: 500; color: #f1f1f1; }
 .bd-key--focused[data-side] { color: #0f0f0f; }
@@ -446,12 +472,13 @@ html, body { background: #0f0f0f; }
    every change near it, about half of what its keys lost, 2026-11-17: 1257-1548 ms lost a walk with them, 625-649
    without; each its own layer (will-change), put away by by-standby (a transform: nothing drawn anew), not hidden:
    both, 372-448 ms) */
-.by-colours-head { margin-bottom: 12px; white-space: nowrap; font-size: 0; }
+.by-colours-head { margin-bottom: 10px; white-space: nowrap; font-size: 0; }
 .by-colours-title { display: inline-block; vertical-align: middle; margin-right: 18px; font-size: 28px; font-weight: 500; line-height: 40px; }
-/* (six tabs: on two lines, the shades under them a little lower for the room) */
+/* (nine tabs: on three lines in every language (measured in a browser, 2026-11-26: on four in a few at 16 px), the
+   shades under them a little lower and their rows 2 px less tall for the room) */
 .by-colours-tabs { margin-top: 10px; white-space: normal; }
-.by-colours-tab { display: inline-block; margin: 0 8px 8px 0; padding: 0 14px; height: 34px; line-height: 34px; border-radius: 17px;
-                  background: #333; color: #ddd; font-size: 16px; font-weight: 500; }
+.by-colours-tab { display: inline-block; margin: 0 8px 7px 0; padding: 0 12px; height: 30px; line-height: 30px; border-radius: 15px;
+                  background: #333; color: #ddd; font-size: 15px; font-weight: 500; }
 .by-colours-tab--on { background: #f1f1f1; color: #0f0f0f; }
 .by-colours-tile { display: none; vertical-align: middle; width: 56px; height: 56px; margin-top: -8px; border-radius: 10px; }
 .by-colours--tile .by-colours-tile { display: inline-block; }
@@ -471,8 +498,8 @@ html, body { background: #0f0f0f; }
                     background: linear-gradient(to right, #f00 0%, #ff0 16.67%, #0f0 33.33%, #0ff 50%, #00f 66.67%, #f0f 83.33%, #f00 100%); }
 .by-colours-mark { position: absolute; left: -7px; top: -5px; width: 14px; height: 36px; box-sizing: border-box; border: 3px solid #fff;
                    border-radius: 7px; box-shadow: 0 0 0 2px #000; }
-.by-colours-shades { width: 460px; height: 173px; margin-bottom: 12px; font-size: 0; }
-.by-colours-shade { display: inline-block; position: relative; width: 44px; height: 23px; margin: 0 8px 7px 0; border-radius: 7px;
+.by-colours-shades { width: 460px; height: 161px; margin-bottom: 8px; font-size: 0; }
+.by-colours-shade { display: inline-block; position: relative; width: 44px; height: 21px; margin: 0 8px 7px 0; border-radius: 7px;
                     box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .12); }
 .by-colours-shade:nth-child(9n) { margin-right: 0; }
 .by-colours-styles { height: 62px; margin-bottom: 6px; white-space: nowrap; font-size: 0; }
@@ -531,6 +558,112 @@ html, body { background: #0f0f0f; }
 .by-icons-grid { font-size: 0; }
 .by-icons-cell { display: inline-block; width: 34px; height: 34px; margin: 0 22px 22px 0; color: #f1f1f1; }
 .by-icons-cell:nth-child(10n) { margin-right: 0; }
+/* Settings › Theme › Text size (views/text-size-page.ts): Colours' panel (by-colours), a tab for each kind of text; under
+   them what the kind covers, its size between − and + (the focus on it: − and + lit, as a button focused), its default,
+   Reset (Colours' code button); at the foot Save and Reset all to defaults over the keys' hint. The page's own text
+   keeps its size (tools/text_sizes.mjs FIXED) */
+.by-sizes-covers { height: 44px; margin-top: 10px; overflow: hidden; font-size: 16px; line-height: 22px; color: #aaa; }
+.by-sizes-row { margin-top: 18px; white-space: nowrap; font-size: 0; }
+.by-sizes-step { display: inline-block; vertical-align: middle; width: 56px; height: 56px; border-radius: 28px; background: #3a3a3a;
+                 text-align: center; font-size: 30px; line-height: 56px; color: #f1f1f1; }
+.by-sizes-value { display: inline-block; vertical-align: middle; width: 200px; text-align: center; font-size: 44px; font-weight: 500;
+                  line-height: 56px; color: #f1f1f1; }
+.by-sizes-default { margin-top: 8px; font-size: 15px; line-height: 20px; color: #aaa; }
+.by-sizes-buttons { margin-top: 28px; white-space: nowrap; font-size: 0; }
+.by-sizes-buttons .by-colours-code, .by-sizes-foot .by-colours-code { margin-right: 12px; }
+.by-sizes-row.by-colours--focused .by-sizes-step { background: #f1f1f1; color: #0f0f0f; }
+.by-sizes-foot { position: absolute; left: 40px; bottom: 66px; white-space: nowrap; font-size: 0; }
+.by-sizes-hint { position: absolute; left: 40px; right: 40px; bottom: 22px; font-size: 14px; line-height: 20px; color: #aaa; }
+/* Settings & menus: Settings itself in view behind the page, on the page's own colour (ui/theme.ts backgroundRules) */
+.by-settings--sizes .by-settings-title, .by-settings--sizes .by-settings-menu, .by-settings--sizes .by-settings-line,
+.by-settings--sizes .by-settings-middle { visibility: visible; }
+.by-settings--sizes > .by-settings-backdrop { visibility: visible; width: 1280px; z-index: -1; }
+/* The models of the screen (by-sizes-<kind>-...: their text is their kind's, sized as the app's by tools/text_sizes.mjs's
+   table), each a layer of its own put away by by-standby while another shows (no shadow, as the Icons page's window):
+   in a window over the app as the Icons page's, between the closed sidebar and the page; what is over a video or a
+   picture as the player draws it (the Sidebar tab opens the app's own sidebar instead: main.ts onRailOpen) */
+.by-sizes-model { position: absolute; overflow: hidden; color: #f1f1f1; will-change: transform; }
+.by-sizes-player, .by-sizes-headers, .by-sizes-watch, .by-sizes-subs { left: 112px; top: 80px; width: 620px; height: 400px; box-sizing: border-box;
+    border-radius: 18px; background: #181818; }
+.by-sizes-player { display: -webkit-flex; display: flex; -webkit-flex-direction: column; flex-direction: column; -webkit-justify-content: flex-end;
+    justify-content: flex-end; padding: 0 36px 34px; background: linear-gradient(to bottom, #3c5241, #1c2a20 55%, #050806); }
+.by-sizes-player-channel { font-size: 17px; font-weight: 600; color: rgba(255, 255, 255, .6); }
+.by-sizes-player-title { margin-top: 10px; font-size: 34px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.by-sizes-player-time { margin-top: 12px; font-size: 19px; color: rgba(255, 255, 255, .85); }
+.by-sizes-player-bar { margin-top: 12px; height: 5px; border-radius: 3px; background: rgba(255, 255, 255, .25); }
+.by-sizes-player-fill { width: 18%; height: 5px; border-radius: 3px; background: #f00; }
+.by-sizes-headers { padding: 0 36px; }
+.by-sizes-headers-banner { height: 150px; margin: 0 -36px 24px; background: linear-gradient(135deg, #2b4a63, #17222d); }
+.by-sizes-headers-name { font-size: 24px; font-weight: 700; line-height: 30px; }
+.by-sizes-headers-line { font-size: 16px; line-height: 22px; color: #ccc; }
+.by-sizes-headers-about { margin-top: 18px; max-height: 52px; overflow: hidden; font-size: 18px; line-height: 26px; }
+.by-sizes-watch { padding: 28px 36px 0; background: linear-gradient(to bottom, #24343e, #0d1418); }
+.by-sizes-watch-title { max-height: 76px; overflow: hidden; font-size: 28px; font-weight: 700; line-height: 38px; }
+.by-sizes-watch-meta { margin-top: 6px; font-size: 16px; line-height: 22px; }
+.by-sizes-watch-pills { margin-top: 14px; white-space: nowrap; font-size: 0; }
+.by-sizes-watch-pill { display: inline-block; margin-right: 10px; padding: 0 22px; border-radius: 24px; background: #373737; font-size: 16px;
+                       font-weight: 500; line-height: 48px; }
+.by-sizes-watch-comments { margin-top: 18px; padding: 18px; border-radius: 16px; background: #171717; }
+.by-sizes-watch-head { font-size: 24px; font-weight: 700; line-height: 32px; }
+.by-sizes-watch-comment { margin-top: 12px; padding: 14px 16px; border-radius: 12px; background: #363636; }
+.by-sizes-watch-by { font-size: 15px; line-height: 22px; color: #aaa; }
+.by-sizes-watch-text { margin-top: 6px; font-size: 16px; line-height: 23px; }
+.by-sizes-subs { background: linear-gradient(160deg, #6a5a3c, #2e2618 60%, #14100a); }
+.by-sizes-subs-line { position: absolute; left: 24px; right: 24px; bottom: 44px; text-align: center; }
+/* Settings › Theme › Colours' models (views/colour-models.ts): on Progress bar, Loading spinner and Player panels a window
+   over the app between the closed sidebar and the page, as the Icons page's (put away by by-standby, its own layer; no blurred shadow), showing what
+   the app behind does not: the player with its bar and the other bars the colour reaches; the loading sign on the
+   start's black plate; the watch page with its comments. Drawn in YouTube's own colours (the bars red, the panels its
+   greys), which the look's rules made from this sheet colour as they colour the app's (tools/light_theme.mjs PROGRESS,
+   PANELS: by-colours-bar-*, by-colours-comment*, by-colours-panels-*); no picture loaded, a video's picture its colours
+   alone. Kept dark on a light page (by-colours: tools/light_theme.mjs OVER) */
+.by-colours-model { position: absolute; left: 112px; top: 24px; width: 620px; height: 672px; border-radius: 18px; overflow: hidden;
+                    background: #0f0f0f; color: #f1f1f1; will-change: transform; }
+.by-colours-model-box { position: absolute; left: 0; top: 0; width: 620px; height: 672px; }
+.by-colours-picture { position: absolute; left: 0; top: 0; width: 620px; height: 349px; overflow: hidden;
+                      background: linear-gradient(135deg, #2c3e2f, #4f6b3f 55%, #75804a); }
+.by-colours-picture--whole { height: 672px; background: linear-gradient(160deg, #1d2a33, #2f4858 45%, #3d4a3a); }
+.by-colours-fade { position: absolute; left: 0; right: 0; bottom: 0; height: 190px; background: linear-gradient(to top, rgba(0, 0, 0, .85), rgba(0, 0, 0, 0)); }
+.by-colours-picture--whole .by-colours-fade { height: 330px; }
+.by-colours-time { position: absolute; left: 32px; bottom: 46px; font-size: 16px; font-weight: 500; line-height: 22px; color: #f1f1f1; }
+.by-colours-bar { position: absolute; left: 32px; right: 32px; bottom: 28px; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .3); }
+.by-colours-bar-fill { position: absolute; left: 0; top: 0; width: 34%; height: 100%; border-radius: 3px; background: #f00; }
+.by-colours-bar-marker { position: absolute; left: 34%; top: -5px; width: 16px; height: 16px; margin-left: -8px; border-radius: 8px; background: #f00; }
+/* (the other bars the colour reaches, each named under it: the watched part under a tile, Shorts', the watch page's
+   bar and knob) */
+.by-colours-uses { position: absolute; left: 32px; top: 381px; white-space: nowrap; font-size: 0; }
+.by-colours-use { display: inline-block; vertical-align: top; margin-right: 32px; }
+.by-colours-use-name { margin-top: 12px; font-size: 16px; line-height: 22px; color: #aaa; }
+.by-colours-use-tile, .by-colours-use-short { position: relative; width: 200px; height: 113px; border-radius: 12px; overflow: hidden;
+                                              background: linear-gradient(135deg, #5a4a3c, #8a6d4e); }
+.by-colours-use-short { width: 64px; background: linear-gradient(160deg, #4a3f5c, #6d5a86); }
+.by-colours-use-track { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(255, 255, 255, .3); }
+.by-colours-use-short .by-colours-use-track { height: 3px; }
+.by-colours-use-watch { position: relative; width: 200px; height: 113px; }
+.by-colours-use-watch .by-colours-use-track { bottom: 55px; border-radius: 2px; }
+.by-colours-bar-line { height: 100%; background: #f00; }
+.by-colours-bar-knob { position: absolute; left: 50%; top: -6px; width: 16px; height: 16px; margin-left: -8px; border-radius: 8px; background: #f00; }
+/* (the loading sign on the start's black plate in the middle, as Loading spinner's preview shows it: the plate and the
+   sign's own classes; the channel's picture's sign as big as the window, its picture in the plate's middle) */
+.by-colours-model .by-loader { width: 100%; height: 100%; }
+/* (its moving parts paused SHOW_MS after the colour last tried, and while its tab is away: nothing ticks meanwhile) */
+.by-colours-model--still .by-loader-spin > div { -webkit-animation-play-state: paused; }
+.by-colours-sign-name { position: absolute; left: 0; right: 0; top: 476px; text-align: center; font-size: 18px; line-height: 26px; color: #aaa; }
+.by-colours-sign-note { position: absolute; left: 80px; right: 80px; top: 96px; text-align: center; font-size: 18px; line-height: 26px; color: #aaa;
+                        white-space: normal; }
+/* (the watch page: its round buttons over the video, its comments at the right, each a card: lines for its words) */
+.by-colours-panels-buttons { position: absolute; left: 32px; bottom: 40px; font-size: 0; }
+.by-colours-panels-button { display: inline-block; width: 48px; height: 48px; margin-right: 10px; padding: 12px; box-sizing: border-box; border-radius: 24px;
+                            background: #373737; color: #f1f1f1; }
+.by-colours-panels-icon { width: 24px; height: 24px; }
+.by-colours-comments { position: absolute; right: 20px; top: 20px; width: 300px; height: 632px; box-sizing: border-box; padding: 20px; border-radius: 20px;
+                       background: #171717; }
+.by-colours-comments-head { margin-bottom: 16px; font-size: 22px; font-weight: 700; line-height: 30px; color: #f1f1f1; }
+.by-colours-comment { position: relative; margin-bottom: 12px; padding: 14px 14px 16px 60px; border-radius: 12px; background: #363636; color: #f1f1f1; }
+.by-colours-comment-avatar { position: absolute; left: 14px; top: 14px; width: 32px; height: 32px; border-radius: 16px; background: #555; }
+.by-colours-comment-by { width: 90px; height: 10px; margin: 2px 0 12px; border-radius: 5px; background: currentColor; color: #aaa; }
+.by-colours-comment-line { height: 10px; margin-top: 8px; border-radius: 5px; background: currentColor; opacity: .8; }
+.by-colours-comment-line + .by-colours-comment-line { width: 70%; }
 .by-question { padding-top: 122px; box-sizing: border-box; background: #0f0f0f; }
 /* Settings › Shortcuts: Settings' look, its list wider for each entry's button (on the right, small and grey, a colour
    button's dot before it), "Now:" in white under what it does, every button's two places as lines; setting one: as
@@ -585,6 +718,49 @@ html, body { background: #0f0f0f; }
 
 /* Toasts, as YouTube's: a dark box with round corners at the top right, a white icon
    before light text */
+/* The Shorts screen as YouTube's TV app draws it (player/shorts.ts): the look's background under it (the page's, the
+   player see-through), the highlight's ring round the video while it has the focus, the video dimmed while the column has
+   it; the column's rows and round buttons plain on the background, boxes once the column has the focus, white when
+   focused. Comments, the description and Remix's QR code in the column's place; More in the side panel there */
+.by-shorts-corner { background-color: #0f0f0f; }
+.by-shorts-ring--focused { box-shadow: 0 0 0 4px #f1f1f1; }
+.by-shorts-dim { background: rgba(0, 0, 0, .4); }
+.by-shorts-hint { height: 68px; padding: 0 24px 0 18px; border-radius: 12px; background: #212121; font-size: 20px; line-height: 68px; color: #f1f1f1; }
+.by-shorts-hint-icon { width: 24px; height: 24px; margin-right: 20px; }
+.by-shorts-progress { background: rgba(255, 255, 255, .3); }
+.by-shorts-progress-fill { background: #f00; }
+.by-shorts-state { width: 32px; height: 32px; color: #f1f1f1; }
+.by-shorts-item { margin-top: 8px; padding: 12px 16px; border-radius: 12px; font-size: 20px; line-height: 36px; color: #f1f1f1; }
+.by-shorts-title-text { font-size: 22px; font-weight: 700; line-height: 32px; max-height: 96px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+.by-shorts-age { margin-top: 2px; font-size: 16px; line-height: 22px; color: #aaa; }
+.by-shorts-item--focused .by-shorts-age { color: #606060; }
+.by-shorts-item-icon { width: 24px; height: 24px; margin: 0 24px 0 6px; }
+.by-shorts-avatar { width: 36px; height: 36px; margin-right: 12px; border-radius: 50%; background: #3f3f3f; }
+.by-shorts-buttons { margin-top: 8px; padding: 0 0 28px 10px; }
+.by-shorts-button { width: 47px; height: 47px; margin-right: 17px; border-radius: 50%; color: #f1f1f1; }
+.by-shorts-button-icon { width: 24px; height: 24px; margin: 11px 0 0 11px; }
+.by-shorts-count { top: 52px; font-size: 16px; line-height: 22px; color: #f1f1f1; }
+.by-shorts--column .by-shorts-item, .by-shorts--column .by-shorts-button { background: rgba(255, 255, 255, .1); }
+.by-shorts--column .by-shorts-item.by-shorts-item--focused, .by-shorts--column .by-shorts-button.by-shorts-item--focused { background: #f1f1f1; color: #0f0f0f; }
+.by-shorts .by-shorts-button.by-shorts-item--focused .by-shorts-count { color: #f1f1f1; }
+.by-shorts-about { top: 24px; color: #f1f1f1; }
+.by-shorts-about-title { font-size: 22px; font-weight: 700; line-height: 32px; max-height: 96px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical; }
+.by-shorts-facts { margin: 24px 0; white-space: nowrap; }
+.by-shorts-fact-value { font-size: 20px; font-weight: 700; line-height: 28px; }
+.by-shorts-fact-label { font-size: 14px; line-height: 20px; color: #aaa; }
+.by-shorts-about-box { padding: 16px; border-radius: 12px; }
+.by-shorts-about-box.by-shorts-item--focused { background: #f1f1f1; color: #0f0f0f; }
+.by-shorts-about-label { font-size: 16px; font-weight: 700; line-height: 24px; }
+.by-shorts-about-text { margin-top: 6px; font-size: 16px; line-height: 22px; max-height: 66px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical; }
+.by-shorts-remix { top: 140px; text-align: center; color: #f1f1f1; }
+.by-shorts-qr { width: 300px; height: 300px; border-radius: 16px; }
+.by-shorts-remix-title { margin-top: 24px; font-size: 22px; font-weight: 700; line-height: 30px; }
+.by-shorts-remix-under { margin-top: 10px; font-size: 16px; line-height: 22px; color: #aaa; }
+.by-shorts-remix-link { margin-top: 6px; font-size: 20px; line-height: 28px; }
+.by-shorts .by-comments-panel { left: 820px; width: 440px; }
+.by-shorts .by-panel { width: 460px; }
 /* Comments as YouTube's TV player shows them: a floating panel at the right, each comment a card, white when focused */
 .by-comments-dim { background: rgba(0, 0, 0, .55); }
 .by-comments-panel { left: 800px; top: 24px; width: 456px; height: 672px; border-radius: 20px; background: #171717; }
@@ -758,7 +934,11 @@ html, body { background: #0f0f0f; }
 .by-player .osd-fill, .by-player .osd-marker { background: #f00; }
 /* The time, with the segment's or chapter's name, on a line above the bar; the bar the full width */
 .by-player .osd-time-line { height: auto; margin-top: 12px; }
-.by-player .osd-time { display: block; width: auto; margin-bottom: 12px; white-space: nowrap; }
+.by-player .osd-time { display: block; width: auto; margin-bottom: 12px; white-space: nowrap; font-size: 19px; color: rgba(255, 255, 255, .85); }
+/* A light picture behind the bar (player/own-player.ts lightOsd): its fade darker from the title down; a picture not
+   known (a live stream: no storyboard to read): a soft shadow under the text instead */
+.by-player .osd--light { background: linear-gradient(to bottom, rgba(0, 0, 0, 0), rgba(0, 0, 0, .6) 110px, rgba(0, 0, 0, .9)); }
+.by-player .osd--unknown .osd-channel, .by-player .osd--unknown .osd-now, .by-player .osd--unknown .osd-time { text-shadow: 0 1px 4px rgba(0, 0, 0, .8); }
 .by-player .osd-bar { display: block; width: 1168px; }
 
 /* The most replayed graph: a light grey hill, as on YouTube */
@@ -905,12 +1085,21 @@ html, body { background: #0f0f0f; }
 /* (its background, the page's colour: the TV's browser draws a bare picture that is a layer of its own, as while it
    fades or under the banner's video, whole and squeezed into its box, then snaps it to the crop; with a background
    it is drawn as laid out) */
+/* (its box: ui/themes/youtube.ts metrics channel.cover, which views/channel.ts reads it by) */
 /* (scaled by the cheap filter, as the tiles' pictures: the smooth one took the TV ~0.5 s to draw a banner for the first
    time, this one ~0.1 s; no difference to see in a 1280 px picture shown 1.5 times its size) */
 .by-channel-banner { left: 0; top: 0; width: 1280px; height: 573px; object-fit: cover; background-color: #0f0f0f; image-rendering: -webkit-optimize-contrast;
                      -webkit-transition: opacity .3s ease; }
 .by-channel-shade { height: 573px; background-image: -webkit-linear-gradient(left, rgba(0, 0, 0, .35), rgba(0, 0, 0, 0) 720px); }
 .by-channel--rows .by-channel-banner, .by-channel--rows .by-channel-shade { opacity: 0; }
+/* A light cover: a darker fade behind the name and buttons, so the white text stays readable (views/channel.ts reads
+   the cover there); Settings › Screens › Channel banner: Black: a plain dark band in the cover's place (not while the banner's video plays). Both on the
+   shade itself, which stays dark in every look, as the cover and the white text over it do */
+.by-channel-shade--light { background-image: -webkit-linear-gradient(left, rgba(0, 0, 0, .72), rgba(0, 0, 0, .5) 640px, rgba(0, 0, 0, 0) 1000px); }
+.by-channel-shade--plain { background: #0f0f0f; }
+/* (while the header's video plays, the shade lies over it, app.css: the band would hide the video, so it is the fade
+   again) */
+.by-channel--preview .by-channel-shade--plain { background: -webkit-linear-gradient(left, rgba(0, 0, 0, .35), rgba(0, 0, 0, 0) 720px); }
 .by-channel-banner, .by-channel-shade, .by-channel-top { pointer-events: none; }
 .by-channel-top { left: 0; top: 0; width: 1280px; height: 112px; background: #0f0f0f; opacity: 0; -webkit-transition: opacity .3s ease; }
 .by-channel--rows .by-channel-top { opacity: 1; }
@@ -977,7 +1166,8 @@ html, body { background: #0f0f0f; }
 
 /* The loading signs that turn while a video starts (Settings › Theme › Loading spinner; ui/spinner.ts; their place: app.css
    by-loader-spin): each a theme's own art in its own colours, as a logo is (YouTube's white as YouTube's), the same on
-   every look. As their sketches, their sizes times 1.6 (about the channel's picture's 128). While a
+   every look, unless Settings › Theme › Colours › Loading spinner gives it others (rules made from these:
+   tools/light_theme.mjs SIGN_COLOURS, signRules). As their sketches, their sizes times 1.6 (about the channel's picture's 128). While a
    video starts the page draws next to nothing, so a moving part only turns, slides or fades (-webkit-transform,
    opacity: the compositor runs it alone), each a layer of its own from the frame it shows (will-change) painted once;
    a still part a layer of its own too (translateZ), painted once, so that nothing is painted again as the others move.

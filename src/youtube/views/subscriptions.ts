@@ -1,5 +1,6 @@
 // Subscriptions screen. Its videos are YouTube's list as its TV app shows it (views/videos.ts FeedView, Shelf.feed):
-// YouTube's first shelf ("Most relevant") a row, everything after it one grid in YouTube's order. Its channels show
+// YouTube's first shelf ("Most relevant") a row, its row of Shorts under it where they show (api/filters.ts),
+// everything else one grid in YouTube's order. Its channels show
 // where the theme has them or Settings › Screens says (ui/theme.ts subsLayout; another choice takes effect when the
 // screen shows next, with the rows and channels it has: nothing is asked for):
 //  - at the side, as YouTube's TV app: a column (views/channel-column.ts) of "All", YouTube's first-listed channels
@@ -18,12 +19,13 @@
 // themes/<id>.css (by-subs).
 
 import { h, releaseImages, restoreImages, setShown, setSrc, setText, standsBy, toggleClass, translate } from '../core/dom.js';
-import { tr } from '../core/i18n.js';
+import { language, tr } from '../core/i18n.js';
 import { KEY, ownPress } from '../core/keys.js';
 import { takesPointer, toPart } from '../core/pointer.js';
 import { View } from '../core/view.js';
 import { allVideos, keptPage, listNext, OLD_MS, pageKept, Rows, Shelf, SubChannel, Video, withinADay } from '../api/feed.js';
 import { channelKey, forgetLooks, looked, settle } from '../api/looked.js';
+import { FilterScreen } from '../api/filters.js';
 import { prefs } from '../api/prefs.js';
 import { Pills } from '../ui/pills.js';
 import { metrics, subsLayout } from '../ui/theme.js';
@@ -61,7 +63,7 @@ var NEWEST_MS = 60 * 60 * 1000;
 /** The pills and the filter each applies to the rows */
 var PILLS: { label: string; keep: ((v: Video) => boolean) | null }[] = [
     { label: tr('All'), keep: null },
-    { label: tr('Today'), keep: function (v) { return !!v.live || !v.upcoming && withinADay(v.info); } },
+    { label: tr('Today'), keep: function (v) { return !!v.live || !v.upcoming && withinADay(v.info, language()); } },
     { label: tr('Videos'), keep: function (v) { return !v.live; } },
     { label: tr('Live'), keep: function (v) { return !!v.live; } }
 ];
@@ -160,7 +162,7 @@ export class SubscriptionsView extends FeedHost implements View {
     /** load: YouTube's rows (with the channels); open: OK on a tile; openChannel: a channel's page; openAll:
      * every subscribed channel; ahead: the focus rests on a channel of the row at the top; listed: YouTube was asked
      * for a channel's list in Subscriptions (the column's) and gave it, which tells it the channel was looked at */
-    constructor(load: () => Promise<Rows | null>, private texts: FeedTexts, private open: (video: Video) => void, opts: FeedOptions,
+    constructor(load: () => Promise<Rows | null>, private texts: FeedTexts, private open: (video: Video, shorts?: Video[]) => void, opts: FeedOptions,
         private openChannel: (c: SubChannel) => void, private openAll: (channels: SubChannel[]) => void,
         private ahead: (c: SubChannel) => void, private listed: (c: SubChannel) => void) {
         super();
@@ -449,6 +451,11 @@ export class SubscriptionsView extends FeedHost implements View {
         return this.at === 'rows' && this.inSight ? this.inSight.focusedVideo() : null;
     }
 
+    /** The filters of the list in sight (a channel's own: subsChannel) */
+    filteredAs(): FilterScreen | '' {
+        return this.inSight ? this.inSight.filteredAs() : 'subs';
+    }
+
     onKey(code: number): boolean {
         if (this.side) {
             return this.sideKey(code);
@@ -664,7 +671,7 @@ export class SubscriptionsView extends FeedHost implements View {
                 return rows;
             });
         }, texts, this.open, {
-            lines: this.listLines, idle: true, oneChannel: true, onDrawn: function () { self.drawn(view); },
+            lines: this.listLines, idle: true, oneChannel: true, filter: 'subsChannel', onDrawn: function () { self.drawn(view); },
             onPart: function (videos) { ofChannel(videos, name); },
             // The channel's list as it was last seen, else its videos the list above has already: in sight at once,
             // YouTube's list of the channel laid against them when it comes
@@ -758,7 +765,7 @@ export class SubscriptionsView extends FeedHost implements View {
             return null;
         }
         var name = c.title;
-        var videos = allVideos(all.shelves.slice(leadOf(all) ? 1 : 0)).filter(function (v) { return !v.page && v.channel === name; });
+        var videos = allVideos(withoutLead(all)).filter(function (v) { return !v.page && v.channel === name; });
         return videos.length ? listRows(videos) : null;
     }
 
@@ -1103,11 +1110,18 @@ export class SubscriptionsView extends FeedHost implements View {
 }
 
 /** YouTube's first shelf where it is a row of its own over the list ("Most relevant": it has a name, the shelf after
- * it none), else null */
+ * it none), else null; its rows of Shorts are none of these */
 function leadOf(rows: Rows): Shelf | null {
-    var first = rows.shelves[0];
-    var next = rows.shelves[1];
+    var list = rows.shelves.filter(function (s) { return !s.shorts; });
+    var first = list[0];
+    var next = list[1];
     return first && first.title && !first.grid && !(next && next.title) ? first : null;
+}
+
+/** The shelves of rows but YouTube's first row (leadOf) */
+function withoutLead(rows: Rows): Shelf[] {
+    var lead = leadOf(rows);
+    return lead ? rows.shelves.filter(function (s) { return s !== lead; }) : rows.shelves;
 }
 
 /** The videos of rows in the list's order: YouTube's list (every shelf but its first row's), then those only that
@@ -1116,8 +1130,9 @@ function inOrder(rows: Rows): Video[] {
     var lead = leadOf(rows);
     var seen: { [id: string]: boolean } = {};
     var videos: Video[] = [];
-    rows.shelves.slice(lead ? 1 : 0).concat(lead && prefs().subsRelevant ? [lead] : []).forEach(function (s) {
-        s.videos.forEach(function (v) {
+    withoutLead(rows).concat(lead && prefs().subsRelevant ? [lead] : []).forEach(function (s) {
+        // (Shorts are none of the list)
+        (s.shorts ? [] : s.videos).forEach(function (v) {
             if (!seen[v.id]) {
                 seen[v.id] = true;
                 videos.push(v);
@@ -1127,17 +1142,18 @@ function inOrder(rows: Rows): Video[] {
     return videos;
 }
 
-/** rows as the screen shows them (views/videos.ts, Shelf.feed): YouTube's first row, if it sent one, over one grid of
- * everything after it, which continues with the screen's token. Rows without videos (YouTube's message, none) as
- * they are */
+/** rows as the screen shows them (views/videos.ts, Shelf.feed): YouTube's first row, if it sent one, and its row of
+ * Shorts over one grid of everything else, which continues with the screen's token (the filters take the Shorts away
+ * where they do not show). Rows without videos (YouTube's message, none) as they are */
 function asFeed(rows: Rows): Rows {
     if (!rows.shelves.length) {
         return rows;
     }
     var lead = leadOf(rows);
-    var grid: Shelf = { title: '', videos: allVideos(rows.shelves.slice(lead ? 1 : 0)), grid: true, feed: true, next: listNext(rows) };
+    var grid: Shelf = { title: '', videos: allVideos(withoutLead(rows)), grid: true, feed: true, next: listNext(rows) };
+    var shorts = rows.shelves.filter(function (s) { return !!s.shorts; }).slice(0, 1);
     // (the viewer may have that row off: the list alone)
-    return copied(rows, { title: '', next: '', shelves: lead && prefs().subsRelevant ? [lead, grid] : [grid] });
+    return copied(rows, { title: '', next: '', shelves: (lead && prefs().subsRelevant ? [lead] : []).concat(shorts, [grid]) });
 }
 
 /** The named channel's list in Subscriptions (YouTube's reply as rows) as a grid of its videos, each put right

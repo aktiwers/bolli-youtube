@@ -92,6 +92,12 @@ var idleTimer = 0;
 var held = false;
 var kept: { file: string; code: string }[] = load<{ file: string; code: string }[]>(KEPT_KEY) || [];
 
+/** Whether the script is at hand or on its way (asked for and not dropped since): a signed-in request then costs
+ * its own round trip, not the script's 2.5 MB and its worker's start (~0.2 s of the page's thread) as well */
+export function scriptAtHand(): boolean {
+    return !!script;
+}
+
 /** The TV player script's signature timestamp, and its n transform (which waits for the script to run in its worker,
  * so /player can be asked meanwhile). Loaded on demand: again after a failed fetch, FAILED_MS after a script it cannot
  * use (another shape, or it does not run), or after being dropped IDLE_MS after its last use. */

@@ -1,8 +1,9 @@
 // A channel's page, laid out like YouTube's TV app: full screen (no rail),
 // banner and search bar on top, avatar beside name, handle and subscribers,
 // three description lines with "...more" (opens About in a side panel).
-// Buttons: Play mix, Subscribe, then sub pages (Videos, Live, Playlists),
-// each opening as its own page over this one, and Shortcut (a button of the
+// Buttons: Play mix, Subscribe, then sub pages (Videos, Live, Playlists; Shorts
+// where they show on channel pages: api/filters.ts channelPages), each opening
+// as its own page over this one, and Shortcut (a button of the
 // remote for the channel: views/shortcuts.ts). Below, the shelves as rows
 // (FeedView). Down enters the rows and slides the header away; Up walks back
 // to the buttons, "...more" and the search bar. Positions come from
@@ -16,11 +17,15 @@ import { takesPointer, toPart } from '../core/pointer.js';
 import { View } from '../core/view.js';
 import { Channel, channelOpened, keptChannel } from '../api/channel.js';
 import { Page, Rows, Video } from '../api/feed.js';
+import { channelPages, shortsShown } from '../api/filters.js';
+import { prefs } from '../api/prefs.js';
 import { drawSubscribe, pressSubscribe } from '../ui/account.js';
 import { icon } from '../ui/icons.js';
+import { bannerLight } from '../ui/picture-light.js';
 import { Pills } from '../ui/pills.js';
 import { PanelLine, paragraphs, SidePanel } from '../ui/side-panel.js';
-import { metrics, themed } from '../ui/theme.js';
+import { sizeIn } from '../ui/text-sizes.js';
+import { metrics, shownSizes, themed } from '../ui/theme.js';
 import { fadeIn, FeedHost, FeedTexts, FeedView, SearchBar } from './videos.js';
 
 /** A stored page this old is shown, then refreshed in the background */
@@ -46,6 +51,10 @@ export class ChannelView extends FeedHost implements View {
     el: HTMLElement;
     private head: HTMLElement;
     private banner: HTMLImageElement;
+    /** The fade over the banner (darker over a light one; a plain band where there is no cover: Settings › Channel
+     * banner: Black, or the channel has none: plain) */
+    private shade: HTMLElement;
+    private plain = false;
     private avatar: HTMLImageElement;
     private name: HTMLElement;
     private subtitle: HTMLElement;
@@ -62,11 +71,14 @@ export class ChannelView extends FeedHost implements View {
     private channel: Channel | null = null;
     private at: Place = 'buttons';
     private focused = true;
-    /** Sub pages by button index */
+    /** Sub pages by button index, and whether the Shorts tab was offered among them */
     private pageAt: { [at: number]: Page } = {};
-    /** The description shown (fitted: trimmed to three lines after layout) */
+    private shortsTab = false;
+    /** The description shown (fitted: trimmed to three lines after layout), and the size of the page headers' text it was
+     * fitted at (Settings › Theme › Text size: fitted anew as the page shows in another) */
     private said = '';
     private fitted = false;
+    private fittedAt = 0;
     /** Name and avatar shown from `known` before YouTube's reply */
     private early = false;
     /** Its page, and whether it has shown (built ahead it has not yet: api/channel.ts keptChannel's unseen) */
@@ -75,7 +87,7 @@ export class ChannelView extends FeedHost implements View {
 
     /** open: OK on a tile; openPage: opens a sub page over this one; search: OK on the search bar; known: name and
      * avatar to show at once; shortcut: its Shortcut button (none: no button) */
-    constructor(page: Page, texts: FeedTexts, private open: (video: Video) => void, private openPage: (page: Page) => void,
+    constructor(page: Page, texts: FeedTexts, private open: (video: Video, shorts?: Video[]) => void, private openPage: (page: Page) => void,
         search: (voice: boolean) => void, known?: KnownChannel, private shortcut?: (c: Channel) => void) {
         super();
         var self = this;
@@ -83,7 +95,7 @@ export class ChannelView extends FeedHost implements View {
         this.el = h('div', 'by-channel');
         this.banner = h('img', 'by-channel-banner bd-fade') as HTMLImageElement;
         this.el.appendChild(this.banner);
-        this.el.appendChild(h('div', 'by-channel-shade'));
+        this.shade = this.el.appendChild(h('div', 'by-channel-shade')) as HTMLElement;
         this.rowsBox = h('div', 'by-channel-rows');
         this.el.appendChild(this.rowsBox);
         this.head = h('div', 'by-channel-head');
@@ -132,7 +144,7 @@ export class ChannelView extends FeedHost implements View {
                 }
                 return rows;
             });
-        }, texts, open, { pad: metrics().channel.pad, refreshMs: RENEW_MS, freshUnfocused: true });
+        }, texts, open, { pad: metrics().channel.pad, refreshMs: RENEW_MS, freshUnfocused: true, filter: 'channel' });
         this.rowsBox.appendChild(this.feed.el);
         this.panel = new SidePanel(this.el);
         setShown(this.el, false);
@@ -155,8 +167,27 @@ export class ChannelView extends FeedHost implements View {
         restoreImages(this.el);
         setShown(this.el, true);
         this.feed.show();
-        if (this.channel && !this.fitted) {
+        this.offerShorts();
+        if (this.channel && (!this.fitted || this.fittedAt !== sizeIn(shownSizes(), 'headers'))) {
+            setText(this.descriptionText, this.said);
             this.fitDescription();
+        }
+    }
+
+    /** Its rows drawn again through the filters, and its buttons with the Shorts tab where Shorts now show or not */
+    refilter(): void {
+        this.feed.refilter();
+        this.offerShorts();
+    }
+
+    /** The buttons drawn anew where the Shorts tab is to show and does not, or the other way round (Settings › Filters ›
+     * Shorts changed since) */
+    private offerShorts(): void {
+        var c = this.channel;
+        if (c && this.shortsTab !== shortsShown('channel') && c.pages.some(function (p) { return !!p.shorts; })) {
+            this.drawButtons(c);
+            this.setFocused(this.focused);
+            this.place();
         }
     }
 
@@ -228,9 +259,12 @@ export class ChannelView extends FeedHost implements View {
         return p && this.focused && this.at === 'buttons' && this.buttons.at === 0 ? { id: p.id, frame: this.banner, delay: p.delay, sound: p.sound } : null;
     }
 
-    /** The header over the player's preview (its name, buttons and search bar on the video, as YouTube's) */
+    /** The player's preview plays in the banner's place, under the page (PeekLook.under): the banner's picture gives
+     * way to it, and the shade, the name, the buttons and the search bar show on the video, as YouTube's */
     previewing(on: boolean): void {
         toggleClass(this.el, 'by-channel--preview', on);
+        // (a plain band, the cover off or none: the usual fade meanwhile, the band would hide the video)
+        toggleClass(this.shade, 'by-channel-shade--plain', !on && this.plain);
     }
 
     /** The focused tile's video (null while focus is in the header) */
@@ -305,11 +339,27 @@ export class ChannelView extends FeedHost implements View {
     private setChannel(c: Channel): void {
         var self = this;
         this.channel = c;
-        setSrc(this.banner, c.banner);
+        // The cover (Settings › Screens › Channel banner; Black: a plain dark band), and a darker fade behind the
+        // name and buttons where it is light there (the head's part of the banner's box)
+        var cover = prefs().channelBanner !== 'black' ? c.banner : '';
+        this.plain = !cover;
+        toggleClass(this.shade, 'by-channel-shade--plain', !cover);
+        toggleClass(this.shade, 'by-channel-shade--light', false);
+        setSrc(this.banner, cover);
+        if (cover) {
+            bannerLight(cover, metrics().channel.cover, function (light) {
+                if (self.channel === c) {
+                    toggleClass(self.shade, 'by-channel-shade--light', !!light);
+                }
+            });
+        }
         if (!this.early) {
             setSrc(this.avatar, c.avatar);
         }
-        setText(this.name, c.title);
+        // (a reply without a name keeps the tile's, shown early)
+        if (c.title || !this.early) {
+            setText(this.name, c.title);
+        }
         setText(this.subtitle, counts(c.subtitle));
         var said = short(c.description);
         setText(this.descriptionText, said);
@@ -317,6 +367,23 @@ export class ChannelView extends FeedHost implements View {
         setShown(this.more, this.hasMore());
         this.said = said;
         this.fitDescription();
+        this.drawButtons(c);
+        this.setFocused(this.focused);
+        this.place();
+        // Fade in what is new (only the rest if name and avatar were shown early), with the rows
+        if (this.early) {
+            fadeIn(this.subtitle);
+            fadeIn(this.description);
+            fadeIn(this.buttonRow);
+        } else {
+            fadeIn(this.head);
+        }
+        fadeIn(this.rowsBox);
+    }
+
+    /** The buttons: Play mix, Subscribe, the sub pages offered, Shortcut; the focus on the first */
+    private drawButtons(c: Channel): void {
+        var self = this;
         this.buttonRow.innerHTML = '';
         this.buttons.clear();
         this.pageAt = {};
@@ -341,7 +408,8 @@ export class ChannelView extends FeedHost implements View {
             this.subscribeButton.appendChild(icon('bell', 'by-pill-icon by-pill-bell'));
             this.subscribeLabel = this.subscribeButton.appendChild(h('span')) as HTMLElement;
         }
-        c.pages.forEach(function (p) {
+        this.shortsTab = shortsShown('channel');
+        channelPages(c.pages).forEach(function (p) {
             self.pageAt[self.buttons.count] = p.page;
             add(p.title, function () { self.openPage(p.page); });
         });
@@ -350,23 +418,13 @@ export class ChannelView extends FeedHost implements View {
         }
         this.buttons.focus(0);
         this.drawSubscribe();
-        this.setFocused(this.focused);
-        this.place();
-        // Fade in what is new (only the rest if name and avatar were shown early), with the rows
-        if (this.early) {
-            fadeIn(this.subtitle);
-            fadeIn(this.description);
-            fadeIn(this.buttonRow);
-        } else {
-            fadeIn(this.head);
-        }
-        fadeIn(this.rowsBox);
     }
 
     /** Trims the description at a word until it fits three lines with "...more" (wide letters wrap sooner; a fourth
      * line would push the buttons into the rows) */
     private fitDescription(): void {
         var said = this.said;
+        this.fittedAt = sizeIn(shownSizes(), 'headers');
         var line = parseFloat(window.getComputedStyle(this.description).lineHeight);
         var fits = DESCRIPTION_LINES * line + 1;
         var height = this.description.offsetHeight;

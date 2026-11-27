@@ -10,9 +10,11 @@
 // open pages. Back from a video returns to where it was picked; Back in the
 // rail goes to the start page, then exits. Debug hooks live in window.__bolli (debug.ts).
 
-import { fadeInImages, h, isStandingBy, LAYOUT_HEIGHT, LAYOUT_WIDTH, standsBy, toggleClass } from './core/dom.js';
+import { afterFrame, fadeInImages, h, isStandingBy, LAYOUT_HEIGHT, LAYOUT_WIDTH, standsBy, toggleClass } from './core/dom.js';
+import { lunaAsk } from './core/luna.js';
+import { takeScreenHdr } from './api/streams.js';
 import { language, setLanguage, tr } from './core/i18n.js';
-import { ASK_MS, initKeys, isTyping, KEY, keyCame, lastKeyAt, ownPress, setActive, setHoldOk } from './core/keys.js';
+import { ASK_MS, BolliKey, initKeys, isTyping, KEY, keyCame, lastKeyAt, ownPress, setActive, setHoldOk } from './core/keys.js';
 import { initPerf, mark, noteKey } from './core/perf.js';
 import { android, exitApp, ignorePointer } from './core/platform.js';
 import { initPointer, Layer, takesPointer } from './core/pointer.js';
@@ -24,14 +26,14 @@ import { PROBLEM, toast, toastDark } from './ui/toast.js';
 import { screenIsOff, screenKey, screenLayer, screenOff, screenWake } from './ui/screen-off.js';
 import { googleOf, keptProfiles, ownChannel, Profile, profiles, signOut } from './api/accounts.js';
 import { saveAvatars } from './api/avatars.js';
-import { Channel, channelAhead, isChannel, keptChannel } from './api/channel.js';
+import { Channel, channelAhead, isChannel, isShortsTab, keptChannel } from './api/channel.js';
 import { dearrowFetch, dearrowOn, saveDearrow, Wanted } from './api/dearrow.js';
 import { allVideos, first, get, home, keepable, keptPage, listNext, OLD_MS, page, Page, pageAhead as fetchPageAhead, PageButton, PlaylistInfo, Rows, searchAhead as fetchSearchAhead, sized, SubChannel, subscriptions, tabAhead, tapAhead, text, toastOf, Video } from './api/feed.js';
 import { freshGuideNames, guideNames } from './api/guide.js';
 import { forgetLooks, visited } from './api/looked.js';
 import { forgetKept, pruneKept } from './api/kept-pages.js';
 import { prepareNames } from './api/languages.js';
-import { ownerIs, ownKey, prefs, Shortcut, ShortcutTarget } from './api/prefs.js';
+import { ownerIs, ownKey, prefs, setPref, Shortcut, ShortcutTarget } from './api/prefs.js';
 import { forgetRecentSearches } from './api/suggest.js';
 import { checkAgain, checkVersion } from './api/version-check.js';
 import { keyName, PLAYER, SCREENS, shortcutAt } from './api/shortcuts.js';
@@ -39,6 +41,7 @@ import { forgetSaves, run, Subscribe, watchInfo } from './api/watch.js';
 import { forgetRows, keepRows, keptFor, keptRows } from './api/kept-rows.js';
 import { account, guestChosen, Identity, isBrand, lastAccount, NO_TOKEN, onAccountChange, useGuest, useIdentity } from './api/youtube.js';
 import { forgetHistorySettings } from './api/account-settings.js';
+import { channelOf, FilterScreen, hidesChannels, manyChannels, toggleFilters, toggleShorts } from './api/filters.js';
 import { ListQueue } from './player/list-queue.js';
 import { OwnPlayer } from './player/own-player.js';
 import { forgetPages, openPages } from './api/page-store.js';
@@ -48,7 +51,7 @@ import { TvApp } from './player/tv-app.js';
 import { apply, askToClear, flipSubscription } from './ui/account.js';
 import { Question } from './ui/question.js';
 import { SidePanel } from './ui/side-panel.js';
-import { applyTheme, lookOf, metrics, MINE, onTrying, plainLook, prepareSheets, useWhoDark } from './ui/theme.js';
+import { applyTheme, lookOf, metrics, MINE, onTextSize, onTrying, plainLook, prepareSheets, setSpaceKey, sizesTrying, spaceKey, useWhoDark } from './ui/theme.js';
 import { openTileMenu } from './ui/tile-menu.js';
 import { ACCOUNT_PICTURE_PX, setLogoAccount } from './ui/logo.js';
 import './ui/themes/youtube.js';
@@ -91,10 +94,12 @@ var named = guideNames();
 for (var browsed in BROWSE) {
     BROWSE[browsed].label = named[BROWSE[browsed].browseId] || BROWSE[browsed].label;
 }
-// As the TV app's rail: sections, a divider, topics, Settings at the bottom
+// As the TV app's rail: sections, a divider, topics, Settings at the bottom. Shorts opens the Shorts screen (no section),
+// hidden until shown in Settings › Screens › Edit sidebar
 var RAIL: RailItem[] = [
     { id: 'search', label: tr('Search'), icon: 'search' },
     { id: 'home', label: tr('Home'), icon: 'home' },
+    { id: 'shorts', label: named.shorts || tr('Shorts'), icon: 'shorts', later: true, opens: openShorts },
     { id: 'subscriptions', label: tr('Subscriptions'), icon: 'subscriptions' },
     { id: 'library', label: BROWSE.library.label, icon: 'library' },
     { id: 'gaming', label: BROWSE.gaming.label, icon: 'gaming', divider: true },
@@ -106,6 +111,8 @@ var RAIL: RailItem[] = [
 ];
 // A section shown by resting on its entry waits a moment before asking YouTube (the focus may move on); Right or OK: at once
 var menu = new Rail(RAIL, switchSection, leaveMenu, logoEntries, standsReady);
+// (the account's own order and hidden entries: Settings › Screens › Edit sidebar)
+menu.arrange(prefs().railOrder, prefs().railHidden);
 root.appendChild(stage);
 root.appendChild(menu.el);
 // A click on the rail's items moves the keys there (what it is on takes the focus inside: core/pointer.ts); the open
@@ -125,8 +132,10 @@ mark('player');
 var tileMenu = new SidePanel(document.body);
 /** Confirmation dialog over the app (e.g. Sign out) */
 var question = new Question(root);
-/** The rail's screens but Settings: the screens the app can start on, and that shortcuts go to */
-var SCREENS_RAIL = RAIL.filter(function (r) { return !r.bottom; });
+/** The rail's sections (not Shorts: a player), and those but Settings: the screens the app can start on, and that
+ * shortcuts go to */
+var SECTION_RAIL = RAIL.filter(function (r) { return !r.opens; });
+var SCREENS_RAIL = SECTION_RAIL.filter(function (r) { return !r.bottom; });
 /** Sets a shortcut (Settings › Shortcuts, a channel's or a playlist's Shortcut button), made on first use: it gets keys
  * first while shown */
 var promptMade: ShortcutPrompt | null = null;
@@ -223,6 +232,12 @@ interface Screen extends View {
     setProgress?: (id: string, progress: number) => void;
     removeVideo?: (id: string) => void;
     reload?: () => void;
+    /** Fetched anew from YouTube, its rows shown until then (the Refresh shortcut); false: a fetch is under way */
+    refresh?: () => boolean;
+    /** Its rows drawn again through the filters (Settings › Filters, the Filters on/off shortcut) */
+    refilter?: () => void;
+    /** The screen whose filters its rows in sight pass ('' none) */
+    filteredAs?: () => FilterScreen | '';
     focusedVideo?: () => Video | null;
     settled?: boolean;
     retry?(quiet?: boolean): boolean;
@@ -246,15 +261,16 @@ function feedTexts(name: string, empty: string): FeedTexts {
 /** Page options: full screen with a back arrow when the theme wants it, page buttons, fade-in as rows arrive. A page
  * kept longer than OLD_MS (api/feed.ts keeps them an hour) is shown at once and refreshed behind, the fresh rows
  * swapped in once out of view (as a channel's list in Subscriptions) */
-function pageOptions(): FeedOptions {
+function pageOptions(filter?: FilterScreen): FeedOptions {
     return { page: metrics().ways.pagesOverAll ? { back: closePage } : undefined, onButton: pressPageButton, fade: true, onList: preloadFocused,
-        refreshMs: OLD_MS };
+        refreshMs: OLD_MS, filter: filter };
 }
 
-/** The screen the app starts on (Settings: Start page, read at each use: it may change meanwhile); Back in the rail
- * goes here, then exits */
+/** The screen the app starts on (Settings › Screens › Start page, read at each use: it may change meanwhile; one
+ * hidden from the sidebar: its first entry); Back in the rail goes here, then exits */
 function startPage(): string {
-    return prefs().startPage;
+    var page = prefs().startPage;
+    return menu.shows(page) ? page : menu.firstShown;
 }
 
 /** Section options: rows stored across starts, logo on the start page only */
@@ -292,7 +308,7 @@ function openVideos(title: string, p: Page): void {
         return keptPage(p, renew).then(function (rows) {
             return { title: title, next: '', shelves: [{ title: '', videos: allVideos(rows.shelves), grid: true, next: listNext(rows) }] };
         });
-    }, feedTexts(title, tr('No videos from {1} yet.', title)), openTile, pageOptions()));
+    }, feedTexts(title, tr('No videos from {1} yet.', title)), openTile, pageOptions('channel')));
 }
 
 /** Your subscriptions, A-Z (Settings › Shortcuts' "A channel…") */
@@ -337,16 +353,17 @@ function section(id: string): Screen {
         var browse = BROWSE[id];
         sections[id] = id === 'search' ? new SearchView(openTile, leaveSearch, searchAhead) :
             id === 'settings' ? new SettingsView(function () { return cast.linkCode(); }, SCREENS_RAIL, question, restartApp,
-                { prompt: shortcutPrompt, panel: tileMenu, channels: subscribedChannels, playlists: libraryPlaylists }) :
+                { prompt: shortcutPrompt, panel: tileMenu, channels: subscribedChannels, playlists: libraryPlaylists }, function () { editSidebar(true); }) :
             id === 'home' ? feedSection(id, home, tr('Home'), tr('Nothing on Home yet.'), {
                 // As YouTube: a search bar (OK goes to Search), and big tiles in the focused row if chosen
                 onSearch: openSearch,
                 onNudge: pressNudge,
-                big: homeBig()
+                big: homeBig(),
+                filter: 'home'
             }) :
             id === 'subscriptions' ? new SubscriptionsView(yourFeed(id, subscriptions),
                 feedTexts(tr('your subscriptions'), tr('No videos from your subscriptions.')), openTile,
-                feedOptions(id, { refreshMs: SUBSCRIPTIONS_REFRESH_MS }), openSubChannel, openChannels, function (c) {
+                feedOptions(id, { refreshMs: SUBSCRIPTIONS_REFRESH_MS, filter: 'subs' }), openSubChannel, openChannels, function (c) {
                     // Focus rested on a channel: its page fetched ahead, and built once it has rested a little longer
                     // (building one holds the keys ~0.1 s: not while moving along the channels), so OK shows it at once
                     if (c.channel && prefs().preload) {
@@ -375,8 +392,14 @@ function section(id: string): Screen {
             toggleClass(sections[id].el, 'by-section', true);
         }
         stage.appendChild(sections[id].el);
+        laidFor[id] = spaceKey();
         if (id === 'settings') {
             (sections[id] as SettingsView).onPreview = previewBehind;
+            (sections[id] as SettingsView).onRailOpen = function (on) {
+                menu.showOpen(on);
+                toggleClass(root, 'by-app--rail', on || menuFocused);
+            };
+            (sections[id] as SettingsView).onCover = function (on) { menu.cover(on); };
         }
     }
     return sections[id];
@@ -398,15 +421,18 @@ var PREVIEW_FADE_MS = 300;
 var behind: { view: Screen; stood: boolean } | null = null;
 
 /** Settings shows a choice on the app (on), or no longer: Home comes into view under Settings' narrowed choices (standing
- * by: drawn already; else shown in passing, as the rail does), and goes back to how it was after */
-function previewBehind(on: boolean): void {
+ * by: drawn already; else shown in passing, as the rail does), and goes back to how it was after. still: in the place of
+ * one there just now (Home made anew for text sizes set), not faded in */
+function previewBehind(on: boolean, still?: boolean): void {
     if (on) {
-        // (the look's other stylesheet parsed now: a change to it then only switches it on)
+        // (the look's other stylesheet made ready now: ui/theme.ts prepareSheets)
         prepareSheets();
         var home = section('home');
         if (home !== screen()) {
             var stood = isStandingBy(home.el);
             behind = { view: home, stood: stood };
+            // (in view while looks are tried: the other screens are out of the display then, app.css by-app--trying)
+            toggleClass(home.el, 'by-section--behind', true);
             if (stood) {
                 standsBy(home.el, false);
             } else {
@@ -418,9 +444,12 @@ function previewBehind(on: boolean): void {
             }
             // Fading in, so the change of view reads as one (it is so fast that people may not see what
             // happened); an opacity animation, on its own layer
-            fadeIn(home.el);
+            if (!still) {
+                fadeIn(home.el);
+            }
         }
     } else if (behind) {
+        toggleClass(behind.view.el, 'by-section--behind', false);
         if (behind.view.showFocus) {
             behind.view.showFocus(false);
         }
@@ -443,6 +472,63 @@ function homeFresh(): void {
     }
 }
 
+/** The room for the text by tiles each section was laid out for (ui/theme.ts spaceKey, as it was made or spaced anew) */
+var laidFor: { [id: string]: string } = {};
+
+/** Section id goes with its place among those built ahead, to be made anew from its stored rows as it shows (its pages
+ * stay) */
+function dropSection(id: string): void {
+    discard(sections[id]);
+    delete sections[id];
+    delete prepared[id];
+}
+
+/** Settings › Theme › Text size changed the room the text by tiles takes (ui/theme.ts showTextSize; a change of any
+ * other text's size is the stylesheet's alone). Home, in view behind the Text size page or not, is spaced anew in place
+ * (views/videos.ts respace: no rows made anew, ~300 ms of the TV's thread a Home made anew), as each size is tried
+ * (behindOnly) and as they are set. Set: the other screens of tiles laid out for another room go with their pages and
+ * the one built ahead, to be made anew from their stored rows as they show (as a Home of another row size: homeFresh) */
+onTextSize(function (behindOnly) {
+    var key = spaceKey();
+    var home = sections.home as FeedView | undefined;
+    if (home && laidFor.home !== key && home.respace()) {
+        laidFor.home = key;
+    }
+    if (behindOnly) {
+        // (the try over: a screen made while sizes were tried, laid out for them, goes as for sizes set)
+        if (!sizesTrying()) {
+            for (var made in sections) {
+                if (made !== 'home' && made !== 'settings' && laidFor[made] !== key) {
+                    dropPages(made);
+                    dropSection(made);
+                }
+            }
+        }
+        return;
+    }
+    var back = !!behind;
+    dropBuilt();
+    for (var id in sections) {
+        if (id !== 'settings') {
+            dropPages(id);
+            if (laidFor[id] !== key) {
+                // (Home behind Settings is spaced in place; one that could not be is let go from behind it first)
+                if (behind && behind.view === sections[id]) {
+                    previewBehind(false);
+                }
+                dropSection(id);
+            }
+        }
+    }
+    if (current !== 'settings') {
+        section(current);
+        bring(screen());
+    }
+    if (back && !behind) {
+        previewBehind(true, true);
+    }
+});
+
 /** Home's focused row has big tiles: where the theme has them and Settings › Screens says so (off by default: each Up or
  * Down then lays two rows anew, which halves Home's frames on the TV) */
 function homeBig(): boolean {
@@ -454,12 +540,10 @@ function screen(): Screen {
     return pages.length ? pages[pages.length - 1] : sections[current];
 }
 
-/** Shows section id with its open pages; selecting the current section again (Back in the rail) closes its pages;
- * rest: shown in passing while the rail moves through it */
-/** While looks are tried (Settings' Colours and Icons pages), the sections out of view and the player with no video
- * in it are out of the display: each try restyles only what is shown. Taken out at the first try, not at Settings'
- * opening (back in costs layout, paid only after tries that saved more); back in as the section changes or the player
- * shows */
+/** While looks are tried (Settings' Colours and Icons pages; its Theme, Font and Text size choices), the sections out of
+ * view (Home behind them is in view: previewBehind) and the player with no video in it are out of the display: each
+ * try restyles only what is shown. Taken out at the first try, not at Settings' opening (back in costs layout, paid
+ * only after tries that saved more); back in as the section changes or the player shows */
 var trialsOut = false;
 onTrying(function () {
     if (trialsOut || own.shown) {
@@ -477,6 +561,8 @@ function trialsBack(): void {
     }
 }
 
+/** Shows section id with its open pages; selecting the current section again (Back in the rail) closes its pages;
+ * rest: shown in passing while the rail moves through it */
 function switchSection(id: string, rest?: boolean): void {
     trialsBack();
     // Leaving these pages: Back no longer returns to the video they came from; stop the tile preview
@@ -615,8 +701,8 @@ function hasRows(id: string): boolean {
 /** The rail's items beside its focus, the one below first (none while a video shows or the app is out of sight:
  * nothing is drawn then) */
 function neighbours(): RailItem[] {
-    var at = RAIL.map(function (r) { return r.id; }).indexOf(menu.focusedId);
-    return at < 0 || own.busy || tv.busy || document.hidden ? [] : [RAIL[at + 1], RAIL[at - 1]].filter(function (r) { return !!r; });
+    var at = SECTION_RAIL.map(function (r) { return r.id; }).indexOf(menu.focusedId);
+    return at < 0 || own.busy || tv.busy || document.hidden ? [] : [SECTION_RAIL[at + 1], SECTION_RAIL[at - 1]].filter(function (r) { return !!r; });
 }
 
 /** The sections beside the rail's focus stand by (drawing one is no request), so a step to either shows it at once:
@@ -716,7 +802,8 @@ function pageView(p: Page, known?: KnownChannel): Screen {
     return isChannel(p) ? new ChannelView(p, texts, openTile, openPage, openSearch, known, function (c: Channel) {
         // Its videos: its uploads, newest first (YouTube's playlist UU… of channel UC…), whatever its tabs are
         askShortcut('channel', p.browseId, { title: c.title, channel: p, videos: { browseId: 'VLUU' + p.browseId.slice(2) } });
-    }) : new FeedView(function (renew) { return keptPage(p, renew); }, texts, openTile, pageOptions());
+    }) : new FeedView(function (renew) { return keptPage(p, renew); }, texts, openTile,
+        pageOptions(p.browseId === 'VLWL' ? 'later' : /^UC/.test(p.browseId) && isShortsTab(p) ? 'channel' : undefined));
 }
 
 /** The page built ahead of OK on its tile (one at a time): fetched as pageAhead does once the focus has rested there,
@@ -855,13 +942,39 @@ function closePage(): void {
     }
 }
 
-/** OK on a tile: opens a page or plays a video */
-function openTile(video: Video): void {
+/** OK on a tile: opens a page, plays a Short (shorts: those of its row or grid, it among them) or plays a video */
+function openTile(video: Video, shorts?: Video[]): void {
     if (video.page) {
         openPage(video.page, knownOf(video));
+    } else if (video.short) {
+        playShort(video, shorts || [video]);
     } else {
         play(video);
     }
+}
+
+/** A Short opened from its tile, with the Shorts of its row (or grid) it is one of: the Shorts screen at it (Down goes on
+ * through the row's, then YouTube's after it); Back returns to the tile */
+function playShort(video: Video, shorts: Video[]): void {
+    shortsFromRail = false;
+    startShorts(shorts, video);
+}
+
+/** The sidebar's Shorts: the Shorts screen at YouTube's first Short; Back returns to the sidebar */
+function openShorts(): void {
+    shortsFromRail = true;
+    startShorts([], null);
+}
+
+/** The Shorts screen was opened from the sidebar (its Back returns there) */
+var shortsFromRail = false;
+
+/** The Shorts screen in the app's player (it releases YouTube's, as play does; a tile's preview stops: the Short plays
+ * from its start, its own first frame first) */
+function startShorts(list: Video[], video: Video | null): void {
+    tv.shutDown();
+    preview.stop();
+    own.playShorts(list, video);
 }
 
 /** An account feed loader (for a guest YouTube's signed-out rows where guestRows, else null); records the account and
@@ -911,10 +1024,13 @@ var DEARROW_AHEAD = 12;
 tapAhead(function (json) {
     if (dearrowOn()) {
         var ids: Wanted[] = [];
-        var found = /"id":"([\w-]{11})"/g;
+        // (not a Short's: a Short's tile begins with its mark, api/feed.ts shortOf, and is shown only where Shorts show)
+        var found = /("short":true,)?"id":"([\w-]{11})"/g;
         var m: RegExpExecArray | null;
         while ((m = found.exec(json)) && ids.length < DEARROW_AHEAD) {
-            ids.push({ id: m[1] });
+            if (!m[1]) {
+                ids.push({ id: m[2] });
+            }
         }
         dearrowFetch(ids);
     }
@@ -1046,17 +1162,18 @@ function logoAccount(): void {
 
 /** The account signed in now (its key, '' a guest) takes its own settings (api/prefs.ts ownerIs), where they are:
  * its look, its logo, Home's row size, its start page (Subscriptions takes its layout when it shows next); its
- * language or theme, where they differ, by starting the app again (true: it is starting again) */
+ * language, theme or the room its text sizes give the text by tiles, where they differ, by starting the app again (true:
+ * it is starting again; any other text size is drawn by its look: ui/theme.ts applyLook) */
 function ownSettings(account: string): boolean {
-    var before = prefs();
-    var was = { theme: before.theme, startPage: before.startPage };
+    // (the start page as shown: one hidden from the sidebar, its first entry)
+    var was = { theme: prefs().theme, space: setSpaceKey(), startPage: startPage() };
     var theirs = ownerIs(account, language());
     if (!theirs) {
         return false;
     }
     forgetRecentSearches();
     forgetLooks();
-    if (theirs.language !== language() || prefs().theme !== was.theme) {
+    if (theirs.language !== language() || prefs().theme !== was.theme || setSpaceKey() !== was.space) {
         setLanguage(theirs.language);
         restartApp();
         return true;
@@ -1064,6 +1181,7 @@ function ownSettings(account: string): boolean {
     // (the look: the logo with it, drawn anew where theirs is another (ui/logo.ts showLogo); their picture as the logo:
     // logoAccount, once the account is told)
     applyTheme(prefs().theme);
+    menu.arrange(prefs().railOrder, prefs().railHidden);
     homeAnew();
     // (the start page the account switch showed was the one leaving's)
     if (startPage() !== was.startPage && current === was.startPage && !pages.length) {
@@ -1095,8 +1213,8 @@ function restartApp(): void {
     window.location.reload();
 }
 
-/** The logo's list: the account ("Your channel", Sign out), Switch account, Restart app (Settings is at the rail's
- * bottom, as in YouTube) */
+/** The logo's list: the account ("Your channel", Sign out), Switch account, Edit sidebar, Restart app (Settings is at
+ * the rail's bottom, as in YouTube; hidden from it, Settings here too) */
 function logoEntries(): RailEntry[] {
     var p = me;
     var list: RailEntry[] = [];
@@ -1107,8 +1225,31 @@ function logoEntries(): RailEntry[] {
         ] });
     }
     list.push({ label: tr('Switch account'), action: openAccounts });
+    list.push({ label: tr('Edit sidebar'), action: function () { editSidebar(false); } });
+    // (Settings hidden from the sidebar: here, so it is always at hand)
+    if (!menu.shows('settings')) {
+        list.push({ label: tr('Settings'), action: function () { switchSection('settings'); leaveMenu(); } });
+    }
     list.push({ label: tr('Restart app'), action: restartApp });
     return list;
+}
+
+/** The sidebar in edit mode (Settings › Screens › Edit sidebar, or the logo's menu: fromSettings false), the keys in
+ * it; Back stores its order and hidden entries (each account's own) and returns where it came from (Settings: its
+ * row there, the screen focused again) */
+function editSidebar(fromSettings: boolean): void {
+    menuFocused = true;
+    updateMenu();
+    menu.edit(function (order, hidden) {
+        setPref('railOrder', order);
+        setPref('railHidden', hidden);
+        if (fromSettings) {
+            menuFocused = false;
+        }
+        updateMenu();
+    }, function (reset) {
+        question.open({ title: tr('Reset the sidebar?'), subtitle: tr('YouTube\'s order, every entry shown'), picture: '', yes: tr('Reset'), no: tr('Cancel') }, reset);
+    });
 }
 
 /** "Who's watching?" and the sign-in screen (created on first use) */
@@ -1416,7 +1557,7 @@ function play(video: Video): void {
     }
     var ready = tv.ready;
     // Free the TV's decoder held by the app's player
-    own.release();
+    own.release(true);
     if (!tv.play(video.id, updateMenu, t, video.movie)) {
         return;
     }
@@ -1476,21 +1617,24 @@ function followList(queue: ListQueue, playlist: PlaylistInfo): void {
  * (resume); filling the screen (Backdrop), the page and the rail's clock over it while it plays */
 function showOnStage(list: FeedView, id: string, resume?: boolean): void {
     var frame = list.frame;
-    var stage = frame && frame.shown === id ? frame.preview() : null;
-    if (!frame || !stage) {
+    var how = frame && frame.shown === id ? frame.preview() : null;
+    if (!frame || !how) {
         return;
     }
     frame.details();
-    var behind = function (on: boolean): void {
-        list.previewing(on);
-        toggleClass(root, 'by-app--behind', on);
-    };
+    var backdrop = how.backdrop;
     // Release YouTube's app kept for films: the preview needs the decoder
     tv.shutDown();
-    preview.show(id, stage.frame, stage.sound, { square: stage.backdrop, stage: !stage.backdrop, whole: prefs().listAutoplay, resume: resume,
-        done: function () { behind(false); }, ended: function () { stageEnded(list, id); } });
-    // (after show: it stops the preview before, whose done takes the classes off)
-    behind(stage.backdrop);
+    preview.show(id, how.frame, how.sound, { square: backdrop, stage: !backdrop, under: backdrop, whole: prefs().listAutoplay, resume: resume,
+        began: function () { underPage(list, backdrop); }, done: function () { underPage(list, false); }, ended: function () { stageEnded(list, id); } });
+}
+
+/** A preview plays under view's page (a channel's banner, a playlist's backdrop: PeekLook.under), or no longer: the
+ * page's layer over the player meanwhile, and the page told, which leaves the place clear. From when the player
+ * displays the video until it stops */
+function underPage(view: { previewing(on: boolean): void }, on: boolean): void {
+    toggleClass(stage, 'bd-stage--over', on);
+    view.previewing(on);
 }
 
 /** A playlist's frame played video id to its end: with Settings › Autoplay on the playlist page the next one (in its
@@ -1527,14 +1671,16 @@ function preloadFocused(): void {
         if (header) {
             var channel = view as ChannelView;
             var wanted = header;
-            if (p.previews !== 'off' && p.channelVideo && !tv.warming) {
+            if (p.previews !== 'off' && p.channelBanner === 'video' && !tv.warming) {
                 headerTimer = setTimeout(function () {
                     if (own.busy || tv.busy || document.hidden || screen() !== channel || !channel.headerPreview()) {
                         return;
                     }
                     tv.shutDown();
-                    channel.previewing(true);
-                    preview.show(wanted.id, wanted.frame, p.previews === 'sound' && wanted.sound, { square: true, done: function () { channel.previewing(false); } });
+                    // (under the page: its header shows on the video; the banner's picture gives way as the player
+                    // displays the video, its copy of the picture over it, not before)
+                    preview.show(wanted.id, wanted.frame, p.previews === 'sound' && wanted.sound, { square: true, under: true,
+                        began: function () { underPage(channel, true); }, done: function () { underPage(channel, false); } });
                 }, Math.max(0, wanted.delay - PRELOAD_REST_MS)) as unknown as number;
             }
             return;
@@ -1729,6 +1875,36 @@ function allScreens(): Screen[] {
     return views;
 }
 
+/** A tile menu's Hide rows named this: the name joins Settings › Filters › Hidden rows, the row goes from Home at
+ * once */
+function hideRow(name: string): void {
+    var names = prefs().hiddenRows;
+    if (names.indexOf(name) < 0) {
+        setPref('hiddenRows', names.concat([name]));
+    }
+    toast(tr('Rows named "{1}" are hidden on Home (Settings › Filters)', name), 'check');
+    var home = sections.home as FeedView | undefined;
+    if (home) {
+        home.refilter();
+    }
+}
+
+/** A tile menu's Hide videos from: the channel joins Settings › Filters › Hidden channels, its tiles go from the screen
+ * in front at once (where it hides them: on screen) */
+function hideChannel(name: string, on: Screen, screen: FilterScreen | ''): void {
+    var names = prefs().hiddenChannels;
+    if (names.indexOf(name) < 0) {
+        setPref('hiddenChannels', names.concat([name]));
+    }
+    var here = hidesChannels(screen);
+    // (offered where many channels show: not hidden here, it is Subscriptions by its setting)
+    toast(here ? tr('Videos from {1} are hidden (Settings › Filters)', name) :
+        tr('Videos from {1} are hidden, though not in Subscriptions (Settings › Filters)', name), 'check');
+    if (here && on.refilter) {
+        on.refilter();
+    }
+}
+
 function route(code: number): boolean {
     // (OK held on a question's button presses it: the pointer's long press too)
     if (question.onKey(code === KEY.HOLD ? KEY.OK : code)) {
@@ -1745,7 +1921,13 @@ function route(code: number): boolean {
             // A video removed (from History, recommendations, a playlist) goes at once from the screen the menu was
             // opened on (others catch up on their next refresh); YouTube refusing it reloads that screen
             var opened = screen();
-            openTileMenu(tileMenu, video, { play: play, open: openPage, removed: function (v) {
+            // (on Home, a tile in a named row: its rows hidden by that name)
+            var row = opened === sections.home ? (opened as FeedView).focusedRowTitle() : '';
+            // (where many channels' tiles show: its channel hidden)
+            var where = opened.filteredAs ? opened.filteredAs() : '';
+            var from = manyChannels(where) ? channelOf(video) : '';
+            openTileMenu(tileMenu, video, { play: play, open: openPage, hideRow: row ? { name: row, hide: function () { hideRow(row); } } : undefined,
+                hideChannel: from ? { name: from, hide: function () { hideChannel(from, opened, where); } } : undefined, removed: function (v) {
                 if (opened.removeVideo) {
                     opened.removeVideo(v.id);
                 }
@@ -1844,6 +2026,10 @@ function route(code: number): boolean {
  * keeps the key (Search's keyboard its numbers), but the comments' own shortcut over the comments (it closes them);
  * false: none */
 function runShortcut(code: number): boolean {
+    // (none while the sidebar is being edited: its keys are its own)
+    if (menu.editingNow) {
+        return false;
+    }
     var inPlayer = own.busy;
     var view = screen();
     var s = keyName(code) ? shortcutAt(code, inPlayer ? PLAYER : SCREENS) : null;
@@ -1876,6 +2062,12 @@ function goTo(s: Shortcut): void {
         subscribeShortcut();
     } else if (s.action === 'resume') {
         playLast();
+    } else if (s.action === 'refresh') {
+        refreshScreen();
+    } else if (s.action === 'filters') {
+        switchFilters();
+    } else if (s.action === 'shorts') {
+        switchShorts();
     } else if (page) {
         leaveFor(function () { openPage({ browseId: page }); }, s.action);
     } else if (parts[0] === 'section') {
@@ -1896,6 +2088,37 @@ function goTo(s: Shortcut): void {
         } else {
             leaveFor(function () { openVideos(t!.title, videos as Page); }, s.action);
         }
+    }
+}
+
+/** The Refresh shortcut: the screen in front (Home, Subscriptions, Library, a page of videos, a channel) fetched anew
+ * from YouTube, said in a toast (a screen with nothing of YouTube's to fetch, as Settings or Search: said so) */
+function refreshScreen(): void {
+    var view = screen();
+    if (!view.refresh) {
+        toast(tr('Nothing to refresh here'));
+    } else if (view.refresh()) {
+        toast(tr('Refreshing…'));
+    }
+}
+
+/** The Filters on/off shortcut: Settings › Filters all off for the run, or on again, said in a toast; the screen in
+ * front drawn again through them at once (the others as they show next: views/videos.ts) */
+function switchFilters(): void {
+    toast(toggleFilters() ? tr('Filters on') : tr('Filters off until the app starts again'));
+    var view = screen();
+    if (view.refilter) {
+        view.refilter();
+    }
+}
+
+/** The Shorts on/off shortcut: Settings › Filters › Shorts hidden, or shown again as chosen last, said in a toast; the
+ * screen in front drawn again through the filters at once (the others as they show next) */
+function switchShorts(): void {
+    toast(toggleShorts() ? tr('Shorts shown') : tr('Shorts hidden'));
+    var view = screen();
+    if (view.refilter) {
+        view.refilter();
     }
 }
 
@@ -2193,11 +2416,6 @@ function idleSoon(): void {
     }, IDLE_MS) as unknown as number;
 }
 
-/** fn after the next frame is painted */
-function afterFrame(fn: () => void): void {
-    requestAnimationFrame(function () { setTimeout(fn, 0); });
-}
-
 function pressTile(video: Video): void {
     var frame = focusedFrame();
     if (frame && !preview.playing(video.id)) {
@@ -2371,11 +2589,11 @@ function okFirst(code: number, isUp: boolean): boolean {
     }, true);
 });
 // (Android's remote, through keys.ts's bolliKey: initKeys set it above)
-var shell = window as unknown as { bolliKey: (code: number, isUp?: boolean) => void };
+var shell = window as unknown as { bolliKey: BolliKey };
 var shellKey = shell.bolliKey;
-shell.bolliKey = function (code: number, isUp?: boolean) {
+shell.bolliKey = function (code: number, isUp?: boolean, pressed?: boolean) {
     if (!okFirst(code, !!isUp)) {
-        shellKey(code, isUp);
+        shellKey(code, isUp, pressed);
     }
 };
 document.addEventListener('visibilitychange', function () {
@@ -2419,10 +2637,10 @@ cast.launched(launchParams(null));
 document.addEventListener('webOSRelaunch', function (e) {
     cast.launched(launchParams((e as CustomEvent).detail));
 });
-// Keep LG's screensaver away while a video plays, and while the screen is off (Screen off: the sound plays on, or the
-// black is wanted as it is)
+// Keep LG's screensaver away while a video plays (not one that stands: paused, given up on, at its end), and while
+// the screen is off (Screen off: the sound plays on, or the black is wanted as it is)
 initScreenSaver(function () {
-    return tv.busy || own.busy || screenIsOff();
+    return tv.busy || own.running || preview.playsWhole || screenIsOff();
 });
 // While a player covers the app, the app is hidden and its pictures released after a while.
 // With the app's player, YouTube's app shuts down again after playing what the app's player
@@ -2482,11 +2700,20 @@ own.onWatched = function (id, progress, t) {
 var handedOver = '';
 // Near the end, prefetch the next video (Up next or queue): streams, headers and SponsorBlock segments
 own.onAhead = function (video, kept) {
-    preloadVideo(video.id, video.start || 0, video.channel, kept);
+    preloadVideo(video.id, video.start || 0, video.channel, kept, !!video.short);
 };
+// The Shorts screen left by Back or Left: from the sidebar's entry, or by Left, back to the sidebar (the player's close
+// then draws it)
+own.onShortsLeft = function (sidebar) {
+    if (sidebar || shortsFromRail) {
+        menuFocused = true;
+    }
+};
+// (a related Short on the watch page: as a tile's)
+own.onShort = playShort;
 // YouTube's player takes the TV's video decoder, so the app's player releases what it holds
 tv.onStart = function () {
-    own.release();
+    own.release(true);
 };
 // The app's player started a video: the covered screen's old rows are refetched (YouTube's player: when it shows)
 own.onStarted = function (id, channel) {
@@ -2588,8 +2815,13 @@ onAccountChange(accountChanged);
 debugHooks({
     play: play,
     section: function (id) {
-        // (a section the rail has: any other id leaves the app without a screen)
-        if (!RAIL.some(function (item) { return item.id === id; })) {
+        // (a section the rail has, or what its entry opens: any other id leaves the app without a screen)
+        var item = RAIL.filter(function (r) { return r.id === id; })[0];
+        if (!item) {
+            return;
+        }
+        if (item.opens) {
+            item.opens();
             return;
         }
         switchSection(id);
@@ -2611,10 +2843,22 @@ switchSection(startPage());
 // The logo's list names the account; a guest gets "Who's watching?"
 knowAccount();
 updateMenu();
+/** The TV's model configuration (webOS), and its word on whether its screen shows HDR */
+var TV_CONFIG = 'luna://com.webos.service.config/getConfigs';
+var SCREEN_HDR = 'tv.model.supportHDR';
 // Once the first screen is drawn and keys rest: the cast receiver, the pages left open and the sections built ahead.
 // YouTube's app starts only when needed (a film, or a video nothing else plays: readyForFilms, own.onOfferYouTube), since
 // its warm-up video holds the TV's video decoder
 whenScreenRests(function () {
+    // What the TV says of its own screen (a webOS TV's model configuration; a local call, no request): one that shows
+    // no HDR plays no HDR format, whatever its decoder takes (api/streams.ts takeScreenHdr). No answer, or none about
+    // it (another system, an older TV): the Media Source's word stands, as before.
+    lunaAsk(TV_CONFIG, { configNames: [SCREEN_HDR] }, 5000).then(function (reply) {
+        var shows = reply.configs && (reply.configs as { [name: string]: unknown })[SCREEN_HDR];
+        if (typeof shows === 'boolean') {
+            takeScreenHdr(shows);
+        }
+    }, function () { return undefined; });
     // Start the cast receiver once the first screen shows
     cast.start();
     // The player's parts built on first use (the watch page), ahead of the first video
@@ -2632,6 +2876,9 @@ whenScreenRests(function () {
                 BROWSE[id].label = name;
                 menu.setLabel(id, name);
             }
+        }
+        if (names.shorts) {
+            menu.setLabel('shorts', names.shorts);
         }
     }, function () { return undefined; });
     // Whether a newer version is out: asked once a day, half a minute from here, and told at most once a week by a

@@ -12,7 +12,7 @@ registerTheme({
     id: 'youtube',
     name: 'YouTube',
     metrics: {
-        rail: { width: 104, top: 130, step: 52, bottom: 630 },
+        rail: { width: 104, top: 130, step: 52, bottom: 630, editTop: 76, editStep: 46, editWidth: 340 },
         big: { w: 480, h: 270 },
         tile: { w: 352, h: 198 },
         grid: { w: 352, h: 198 },
@@ -24,6 +24,8 @@ registerTheme({
         // Movies posters, and the focused one wide (843x474 at 1920)
         poster: { w: 221, h: 316 },
         posterWide: { w: 562, h: 316 },
+        // Shorts: upright pictures as YouTube's Shorts shelves (270x480 at 1920), the title and views under them
+        short: { w: 180, h: 320 },
         // As YouTube's Gaming shelves: tiles 58 under a row's top, 68 with a line under the title, such a row 14 taller
         lineRows: { plainUp: 10, taller: 14 },
         // YouTube's Library at 1920: rows 654 apart, tiles 81 under a row's top, a row with a line 24 taller; in the
@@ -53,7 +55,7 @@ registerTheme({
             // The focused line mid-screen, as YouTube's (480 of 1080)
             focusTop: 320
         },
-        channel: { rowsTop: 580, rowsTopDown: 120, pad: 64 },
+        channel: { rowsTop: 580, rowsTopDown: 120, pad: 64, cover: { w: 1280, h: 573, x: 40, y: 280, readW: 720, readH: 280 } },
         page: { top: 44, gridTop: 124, right: 48 },
         // Ages as YouTube's watch page writes them: 9 hr, 1 day, 3 wk, 3 mo, 2 yr
         ways: { homeBig: true, pagesOverAll: true, lowerCounts: true, words: { 'CC': 'Subtitles', 'Watch later': 'Watch Later' },

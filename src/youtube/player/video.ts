@@ -32,9 +32,15 @@ export function placeVideo(video: HTMLVideoElement, rect: Rect | null): void {
     s.display = 'block';
 }
 
-/** Stop; removing the source frees the hardware decoder (placement kept) */
-export function unloadVideo(video: HTMLVideoElement): void {
-    video.pause();
+/** Stop; removing the source frees the hardware decoder (placement kept). playing: not paused first, where the video
+ * plays (the load ends it all the same): the 2017 LG TV lets a playing pipeline go in ~0.3 s, 12 times of 14, but
+ * takes a full second for one that was paused (half the time when paused in the same turn, every time once it has
+ * rested paused 0.25 s; that second holds the page's thread). Measured 2026-11-25, tools/tv-bench/lab/
+ * teardown_phase.mjs */
+export function unloadVideo(video: HTMLVideoElement, playing?: boolean): void {
+    if (!playing) {
+        video.pause();
+    }
     video.removeAttribute('src');
     video.load();
 }

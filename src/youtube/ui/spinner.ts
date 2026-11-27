@@ -1,7 +1,8 @@
 // Spinners: the loading signs that turn while a video starts in Bolli's player (Settings › Theme › Loading spinner:
 // LOADING_SIGNS past 'off' and 'channel', the channel's picture filling up, which is ui/fill-loader.ts). Each is a theme's
-// own art in its own colours, as a logo is (YouTube's white as YouTube's), drawn by the stylesheet (themes/youtube.css
-// by-loader-spin-<id>) where the channel's picture would be, in the middle of the screen over the start's picture.
+// own art in its own colours, as a logo is (YouTube's white as YouTube's), unless Settings › Theme › Colours › Loading
+// spinner gives it others (rules made from the stylesheet's: ui/theme.ts signRules), drawn by the stylesheet
+// (themes/youtube.css by-loader-spin-<id>) where the channel's picture would be, in the middle of the screen over the start's picture.
 // While a video starts the TV's browser draws next to no frame of the page (ui/fill-loader.ts), so a spinner moves by
 // the compositor alone: its moving parts only turn, slide or fade, each a layer of its own painted once; its still
 // parts a layer of their own too, so nothing is painted again as the others move; no timer or frame loop of the

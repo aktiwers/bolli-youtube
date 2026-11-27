@@ -44,7 +44,7 @@ export function freshGuideNames(): Promise<{ [browseId: string]: string }> {
     });
 }
 
-/** A guide reply's entries: browse page to name */
+/** A guide reply's entries: browse page to name (the Shorts entry: 'shorts') */
 export function guideNamesOf(reply: unknown): { [browseId: string]: string } {
     var names: { [browseId: string]: string } = {};
     var entries = all(reply, 'guideEntryRenderer');
@@ -53,7 +53,8 @@ export function guideNamesOf(reply: unknown): { [browseId: string]: string } {
         all(entries[i], 'guideEntryRenderer', entries);
     }
     entries.forEach(function (entry: any) {
-        var id = get(entry, 'navigationEndpoint', 'browseEndpoint', 'browseId');
+        // (the Shorts entry opens no page: its name under 'shorts')
+        var id = get(entry, 'navigationEndpoint', 'browseEndpoint', 'browseId') || (get(entry, 'navigationEndpoint', 'reelWatchEndpoint') ? 'shorts' : '');
         var name = text(entry.formattedTitle || entry.title);
         if (id && name) {
             names[id] = name;

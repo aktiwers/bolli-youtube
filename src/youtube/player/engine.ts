@@ -4,7 +4,7 @@
 // Media Source fixes: a hole just ahead of a stalled playhead is hopped over, and
 // a seek that sticks is nudged on.
 
-import { Format } from '../api/streams.js';
+import { Format, Streams } from '../api/streams.js';
 import { note, ranges } from './play-log.js';
 import { OFF_START_S, Pipeline, setLengthSoon } from './pipeline.js';
 
@@ -20,7 +20,13 @@ export interface Engine {
     jump(to: number, from: number, past?: boolean): void;
     /** Where a seek not yet run goes (s; -1: none): SABR moves the playhead only once the media there is in */
     seekTarget?(): number;
-    /** Stops; the pipeline is kept, paused, for the next video (player/pipeline.ts) */
+    /** Set before load for a start in the middle of a video that was playing (another format picked: a pipeline of
+     * its own): it begins on the keyframe nearest where the picture would be by the time it shows (the given time and
+     * SWAP_S on), the one after it too, not always the one before (a keyframe every ~5 s: up to that long seen again).
+     * An engine without it starts at the keyframe before. */
+    near?: boolean;
+    /** Stops; the pipeline is kept, paused, for the next video (player/pipeline.ts keepPipeline), or left playing to
+     * go where the player said so before (leaveFor, leaveSoon) */
     stop(): void;
     /** Takes new URLs for the playing formats (the old ones expired) and continues in place, keeping the buffer;
      * false if the formats differ (or the engine does not support it) */
@@ -29,6 +35,10 @@ export interface Engine {
      * soon: the video as near as the TV allows, the new format's first part fetched before the old one goes; after:
      * the video where what is loaded ends, nothing more of the old format fetched than the segment it is in */
     switchVideo?(f: Format, ahead?: number, soon?: boolean, after?: boolean): void;
+    /** Whether switchVideo can take f in place (none: any of the video's formats): Android's own player takes only
+     * those it was given at its load (a switch in the player's settings that keeps other formats since then starts
+     * anew: own-player.ts switchInPlace) */
+    switches?(f: Format): boolean;
     switchAudio?(f: Format, ahead?: number): void;
     /** The parts the player will skip (an engine may load past them) */
     skips?: () => Skip[];
@@ -40,6 +50,14 @@ export interface Engine {
     /** Quick jumps (Settings): a seek gets a window of its own, as a start has one (an engine without: its seeks as
      * before) */
     quick?: boolean;
+    /** It plays the account's streams (SABR): the player's own SABR engine, or the Android app's video layer's (native.ts) */
+    bySabr?: boolean;
+    /** Android's own player plays it (the app's video layer: native.ts): its video decoder as the device names it
+     * ('' none made yet), for Stats for nerds */
+    decoder?: string;
+    /** At most this much is loaded ahead of the playhead (s; none: more than Auto quality looks for): Auto judges what
+     * is loaded against it */
+    readahead?: number;
     /** The video's real length (s) while the engine tells the TV a shorter one (a seek's window, a start's until its
      * picture has moved) and until the TV has the real one again, else 0: the element's length is the window's end
      * meanwhile */
@@ -51,6 +69,38 @@ export interface Engine {
      * out leaves the browser trying to connect, and the first requests after the line's return queued behind those:
      * 11 s once, on the TV 2026-11-15). Off: asked again from where it is (ask false: not yet, a jump follows) */
     wait?(on: boolean, ask?: boolean): void;
+}
+
+/** An engine playing a live stream, as the player asks it beyond Engine: its own (live-engine.ts), and the Android
+ * app's video layer's where that plays one (which says so by `live`: native.ts). edge and oldest: the stream's head
+ * and its window's start on the playhead's scale (s; 0: not known yet); over: it has ended (and plays as a video
+ * does); atHead: all there is is asked for, what fails then is a segment to come; finish: it ended while it played;
+ * resume: on from where the picture stood for the line (false: nothing to go on with) */
+export interface LivePlays extends Engine {
+    edge: number;
+    oldest: number;
+    over: boolean;
+    atHead(): boolean;
+    finish(): void;
+    resume(): boolean;
+}
+
+/** The Android app's own video layer, where its script named it on the page as BolliNative (src/youtube/android/
+ * native.ts, in the APK alone; webOS has none): its engine for a video the player starts (on the watch screen, a
+ * Short, a preview, one loaded ahead, Up next's alike), or null where the player's own engines play it */
+export interface NativeHook {
+    engine(video: HTMLVideoElement, s: Streams | null, failed: (why: string) => void): Engine | null;
+    /** Whether it would play these streams (a start's parts fetched ahead for the player's own engines are of no use
+     * to it) */
+    plays(s: Streams): boolean;
+    /** Its player lets go of the device's decoders: the web view's own player, or YouTube's own app, is to play (a
+     * device may have one) */
+    free(): void;
+}
+
+/** The Android app's own video layer, where the APK's script named it (none on webOS) */
+export function nativeHook(): NativeHook | undefined {
+    return (window as unknown as { BolliNative?: NativeHook }).BolliNative;
 }
 
 /** A part the player will skip (s) */
@@ -122,6 +172,15 @@ var HOLE_S = 1;
 var HOLE_NEAR_S = 0.1;
 var SEEK_STUCK_MS = 5000;
 var NUDGE_S = 0.1;
+
+/** A video format switched in place (an engine's switchVideo) takes effect no nearer the playhead than this (s): the
+ * TV has taken in the video 4.7-4.9 s ahead of the picture it shows, and replacing what it holds makes the picture
+ * stand for seconds at the switch */
+export var SWITCH_MIN_S = 5.5;
+
+/** What a change of pipeline in the middle of a video takes until its picture moves again (s; ~0.7 on the 2017 TV,
+ * 2026-11-25): a start that may pick its keyframe (Engine.near) aims that far on */
+export var SWAP_S = 0.7;
 
 /** Where a jump from from towards to lands: the start (a keyframe, s) nearest to, beyond a second from from on that
  * side (and nearer to than within s, if given), KEYFRAME_IN into it; to itself without one */

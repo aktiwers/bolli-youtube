@@ -48,6 +48,7 @@ html, body { background: #fff; color: #0f0f0f }
 .by-player-music-title { color: #fff }
 .by-player-music-artist { color: #c8c8c8 }
 .by-player--peek { background: transparent }
+.by-player.by-player--shorts { background: transparent }
 .by-seek-preview-frame { background-color: #000 }
 /* youtube.css's colours on the light page */
 html, body { background: #fff }
@@ -60,6 +61,12 @@ html, body { background: #fff }
 .by-rail-item--focused { background-color: #0f0f0f; color: #fff }
 .by-rail--open .by-rail-item--focused { color: #fff }
 .by-rail-divider { background: rgba(0, 0, 0, 0.104) }
+.by-rail-dim { background: rgba(0, 0, 0, .6) }
+.by-rail-title { color: #0f0f0f }
+.by-rail-mark { color: #606060 }
+.by-rail-item--focused .by-rail-mark { color: #fff }
+.by-rail-rule { background-color: currentColor }
+.by-rail-hint { background: rgba(0, 0, 0, 0.05); color: #0f0f0f }
 .by-video-clock { color: #fff }
 .by-video-clock { background: rgba(0, 0, 0, .6) }
 .bd-row-title { color: #484848 }
@@ -109,15 +116,22 @@ html, body { background: #fff }
 .by-empty-tile { background: -webkit-linear-gradient(top, rgba(0, 0, 0, 0.035), rgba(246, 246, 246, 0)) }
 .by-empty-text { color: #565656 }
 .by-heading { color: #0f0f0f }
+.bd-page--backdrop .by-heading { color: #f1f1f1 }
 .by-page-button { background: rgba(0, 0, 0, 0.071); color: #0f0f0f }
 .by-page-button--focused { background: #0f0f0f; color: #fff }
 .by-page-byline { color: #606060 }
+.bd-page--backdrop .by-page-byline { color: #aaa }
 .bd-page--list .bd-tile-title { color: #0f0f0f }
 .by-list-frame { background: rgba(0, 0, 0, 0.05) }
+.bd-page--backdrop .by-list-frame { background: #272727 }
 .by-list-title { color: #0f0f0f }
+.bd-page--backdrop .by-list-title { color: #f1f1f1 }
 .by-list-line { color: #606060 }
+.bd-page--backdrop .by-list-line { color: #aaa }
 .by-list-votes { color: #0f0f0f }
+.bd-page--backdrop .by-list-votes { color: #f1f1f1 }
 .by-list-about { color: #606060 }
+.bd-page--backdrop .by-list-about { color: #aaa }
 .by-peek-ring.by-peek-ring--stage { box-shadow: 0 0 0 6px #fff }
 .bd-page--list .by-page-button--focused:not(.by-page-button--wide) span { color: #0f0f0f }
 .by-page-button--on:after { background: #065fd4 }
@@ -148,24 +162,24 @@ html, body { background: #fff }
 .by-list-panel--side .by-list-item--focused { background: rgba(241, 241, 241, .14) }
 .by-list-panel--side .by-list-item--focused .by-list-item-pic { box-shadow: 0 0 0 2px #0f0f0f, 0 0 0 5px #f1f1f1 }
 .bd-page--backdrop .by-heading { text-shadow: 0 1px 4px rgba(0, 0, 0, .6) }
-.bd-page--backdrop .by-page-byline { color: #222; text-shadow: 0 1px 3px rgba(0, 0, 0, .6) }
+.bd-page--backdrop .by-page-byline { color: #ddd; text-shadow: 0 1px 3px rgba(0, 0, 0, .6) }
 .bd-page--backdrop .by-page-button { background: rgba(237, 237, 237, 0.85) }
 .bd-page--backdrop .by-page-button--focused { background: #0f0f0f }
-.bd-page--backdrop .by-list-frame { background: #fff }
+.bd-page--backdrop .by-list-frame { background: #0f0f0f }
 .by-list-shade { background: linear-gradient(to bottom, rgba(0, 0, 0, .7), rgba(0, 0, 0, 0) 34%), linear-gradient(to top, rgba(0, 0, 0, .85), rgba(0, 0, 0, 0) 46%), linear-gradient(to right, rgba(0, 0, 0, .6), rgba(0, 0, 0, .15) 50%) }
 .by-list-band { background: linear-gradient(to right, rgba(15, 15, 15, 0), rgba(15, 15, 15, .82) 64px, rgba(15, 15, 15, .9)) }
 .bd-page--backdrop .by-list-info { text-shadow: 0 1px 3px rgba(0, 0, 0, .6) }
-.bd-page--backdrop .by-list-about { color: #2f2f2f }
+.bd-page--backdrop .by-list-about { color: #d0d0d0 }
 .bd-page--backdrop .by-list-title { text-shadow: 0 2px 6px rgba(0, 0, 0, .6) }
-.bd-page--backdrop .by-list-line { color: #2f2f2f }
+.bd-page--backdrop .by-list-line { color: #d0d0d0 }
 .by-page-back, .by-search-back { background: rgba(0, 0, 0, 0.071); color: #0f0f0f }
 .by-page-back--focused, .by-search-back--focused { background: #0f0f0f; color: #fff }
 .bd-search-query { background: rgba(0, 0, 0, 0.071); color: #0f0f0f }
 .bd-search-query--empty { color: #757575 }
 .by-search-top { background: #fff }
 .bd-key { background: transparent; color: #0f0f0f }
-.bd-key--focused { background: #0f0f0f; color: #fff }
 .bd-key--wide2 { background: rgba(0, 0, 0, 0.071) }
+.bd-key--focused { background: #0f0f0f; color: #fff }
 .bd-key[data-side] { color: #0f0f0f }
 .bd-key--focused[data-side] { color: #fff }
 .bd-search-status { color: #606060 }
@@ -245,6 +259,50 @@ html, body { background: #fff }
 .by-icons-note { color: #aaa }
 .by-icons-all { background: #181818; color: #f1f1f1 }
 .by-icons-cell { color: #f1f1f1 }
+.by-sizes-covers { color: #aaa }
+.by-sizes-step { background: #3a3a3a; color: #f1f1f1 }
+.by-sizes-value { color: #f1f1f1 }
+.by-sizes-default { color: #aaa }
+.by-sizes-row.by-colours--focused .by-sizes-step { background: #f1f1f1; color: #0f0f0f }
+.by-sizes-hint { color: #aaa }
+.by-sizes-model { color: #f1f1f1 }
+.by-sizes-player, .by-sizes-headers, .by-sizes-watch, .by-sizes-subs { background: #181818 }
+.by-sizes-player { background: linear-gradient(to bottom, #3c5241, #1c2a20 55%, #050806) }
+.by-sizes-player-channel { color: rgba(255, 255, 255, .6) }
+.by-sizes-player-time { color: rgba(255, 255, 255, .85) }
+.by-sizes-player-bar { background: rgba(255, 255, 255, .25) }
+.by-sizes-player-fill { background: #f00 }
+.by-sizes-headers-banner { background: linear-gradient(135deg, #2b4a63, #17222d) }
+.by-sizes-headers-line { color: #ccc }
+.by-sizes-watch { background: linear-gradient(to bottom, #24343e, #0d1418) }
+.by-sizes-watch-pill { background: #373737 }
+.by-sizes-watch-comments { background: #171717 }
+.by-sizes-watch-comment { background: #363636 }
+.by-sizes-watch-by { color: #aaa }
+.by-sizes-subs { background: linear-gradient(160deg, #6a5a3c, #2e2618 60%, #14100a) }
+.by-colours-model { background: #0f0f0f; color: #f1f1f1 }
+.by-colours-picture { background: linear-gradient(135deg, #2c3e2f, #4f6b3f 55%, #75804a) }
+.by-colours-picture--whole { background: linear-gradient(160deg, #1d2a33, #2f4858 45%, #3d4a3a) }
+.by-colours-fade { background: linear-gradient(to top, rgba(0, 0, 0, .85), rgba(0, 0, 0, 0)) }
+.by-colours-time { color: #f1f1f1 }
+.by-colours-bar { background: rgba(255, 255, 255, .3) }
+.by-colours-bar-fill { background: #f00 }
+.by-colours-bar-marker { background: #f00 }
+.by-colours-use-name { color: #aaa }
+.by-colours-use-tile, .by-colours-use-short { background: linear-gradient(135deg, #5a4a3c, #8a6d4e) }
+.by-colours-use-short { background: linear-gradient(160deg, #4a3f5c, #6d5a86) }
+.by-colours-use-track { background: rgba(255, 255, 255, .3) }
+.by-colours-bar-line { background: #f00 }
+.by-colours-bar-knob { background: #f00 }
+.by-colours-sign-name { color: #aaa }
+.by-colours-sign-note { color: #aaa }
+.by-colours-panels-button { background: #373737; color: #f1f1f1 }
+.by-colours-comments { background: #171717 }
+.by-colours-comments-head { color: #f1f1f1 }
+.by-colours-comment { background: #363636; color: #f1f1f1 }
+.by-colours-comment-avatar { background: #555 }
+.by-colours-comment-by { background: currentColor; color: #aaa }
+.by-colours-comment-line { background: currentColor }
 .by-question { background: #fff }
 .by-shortcuts { background: #fff }
 .by-shortcut-key { color: #606060 }
@@ -266,6 +324,27 @@ html, body { background: #fff }
 .by-signin-small { color: #ccc }
 .by-signin-big { color: #f1f1f1 }
 .by-signin-code { color: #f1f1f1 }
+.by-shorts-corner { background-color: #fff }
+.by-shorts-ring--focused { box-shadow: 0 0 0 4px #0f0f0f }
+.by-shorts-dim { background: rgba(0, 0, 0, .4) }
+.by-shorts-hint { background: rgba(0, 0, 0, 0.039); color: #0f0f0f }
+.by-shorts-progress { background: rgba(255, 255, 255, .3) }
+.by-shorts-progress-fill { background: #f00 }
+.by-shorts-state { color: #f1f1f1 }
+.by-shorts-item { color: #0f0f0f }
+.by-shorts-age { color: #606060 }
+.by-shorts-item--focused .by-shorts-age { color: #9f9f9f }
+.by-shorts-avatar { background: rgba(0, 0, 0, 0.104) }
+.by-shorts-button { color: #0f0f0f }
+.by-shorts-count { color: #0f0f0f }
+.by-shorts--column .by-shorts-item, .by-shorts--column .by-shorts-button { background: rgba(0, 0, 0, 0.05) }
+.by-shorts--column .by-shorts-item.by-shorts-item--focused, .by-shorts--column .by-shorts-button.by-shorts-item--focused { background: #0f0f0f; color: #fff }
+.by-shorts .by-shorts-button.by-shorts-item--focused .by-shorts-count { color: #0f0f0f }
+.by-shorts-about { color: #0f0f0f }
+.by-shorts-fact-label { color: #606060 }
+.by-shorts-about-box.by-shorts-item--focused { background: #0f0f0f; color: #fff }
+.by-shorts-remix { color: #0f0f0f }
+.by-shorts-remix-under { color: #606060 }
 .by-comments-dim { background: rgba(0, 0, 0, .55) }
 .by-comments-panel { background: #171717 }
 .by-comments-head { color: #f1f1f1 }
@@ -336,6 +415,9 @@ html, body { background: #fff }
 .by-nudge-button--focused { background: #0f0f0f; color: #fff }
 .by-nudge-or { color: #606060 }
 .by-player .osd-fill, .by-player .osd-marker { background: #f00 }
+.by-player .osd-time { color: rgba(255, 255, 255, .85) }
+.by-player .osd--light { background: linear-gradient(to bottom, rgba(0, 0, 0, 0), rgba(0, 0, 0, .6) 110px, rgba(0, 0, 0, .9)) }
+.by-player .osd--unknown .osd-channel, .by-player .osd--unknown .osd-now, .by-player .osd--unknown .osd-time { text-shadow: 0 1px 4px rgba(0, 0, 0, .8) }
 .by-replays path { fill: rgba(241, 241, 241, .38) }
 .by-chapter-frame { background: #212121 }
 .by-chapter--selected .by-chapter-frame { box-shadow: 0 0 0 4px #f1f1f1 }
@@ -403,6 +485,9 @@ html, body { background: #fff }
 .by-stats { background: rgba(0, 0, 0, .7); color: #fff }
 .by-channel-banner { background-color: #0f0f0f }
 .by-channel-shade { background-image: -webkit-linear-gradient(left, rgba(0, 0, 0, .35), rgba(0, 0, 0, 0) 720px) }
+.by-channel-shade--light { background-image: -webkit-linear-gradient(left, rgba(0, 0, 0, .72), rgba(0, 0, 0, .5) 640px, rgba(0, 0, 0, 0) 1000px) }
+.by-channel-shade--plain { background: #0f0f0f }
+.by-channel--preview .by-channel-shade--plain { background: -webkit-linear-gradient(left, rgba(0, 0, 0, .35), rgba(0, 0, 0, 0) 720px) }
 .by-channel-top { background: #fff }
 .by-channel-avatar { background: rgba(0, 0, 0, 0.05) }
 .by-channel-head .by-channel-avatar { background: #272727 }
